@@ -205,6 +205,38 @@ class AGuildIsNoPerson(unittest.TestCase):
         self.assertTrue(_GROUP_NAME_RE.search("The Harbour Reeves"))
 
 
+class ALookupNeverMints(unittest.TestCase):
+    """8B run 149, T69: LOC "Edge of the Dark Waters", refused as unshown, was minted by the mark lookup's place check."""
+
+    def test_an_unknown_place_on_the_op_makes_no_place(self):
+        from app import world
+        from app.db import connect
+
+        _world()
+        with connect() as conn:
+            before = int(conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0])
+            world._npcs_shown_in_prose(
+                conn, [{"name": "Kael", "role": "dock worker", "location": "Edge of the Dark Waters"}],
+                "The scarred man sets the mallet down. A gull cries overhead.")
+            after = int(conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0])
+        self.assertEqual(before, after)
+
+
+class ANightSleptEndsAtDawn(unittest.TestCase):
+    """8B run 149, T68: "sleep the night, and at first light walk to the mouth of the Dredges" moved the clock by nothing."""
+
+    def test_sleeping_the_night_waits_for_dawn(self):
+        from app import world
+        from app.db import connect
+
+        _world()
+        with connect() as conn:
+            minutes = world._wait_until_minutes(conn, "I go back to Mira's inn, sleep the night, and at first light walk to the mouth of the Dredges to meet Gideon.")
+            none = world._wait_until_minutes(conn, "I walk to the inn and ask about a room.")
+        self.assertGreater(minutes, 120)
+        self.assertEqual(none, 0)
+
+
 class TheScarredManIsBertram(unittest.TestCase):
     """T69-T70: "the scarred man" minted Garret, then Kael, beside Bertram Northcott, "a burly man with a scar across his brow"."""
 
