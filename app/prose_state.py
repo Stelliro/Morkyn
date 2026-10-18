@@ -655,7 +655,8 @@ _ACT_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("perform", ("sing", "dance", "perform", "recite")),
     # Shoring a hull rolled nothing and left "Secure the wreck" open (8B run
     # 148, T70, T73): lashing, bracing and fastening are work too.
-    ("secure", ("secure", "lash", "shore", "brace", "moor", "fasten", "batten", "wedge", "tether", "rig")),
+    # "shore" stays with the mining trigger ("shore up the old tunnel", 7B run 30).
+    ("secure", ("secure", "lash", "brace", "moor", "fasten", "batten", "wedge", "tether", "rig")),
 )
 
 

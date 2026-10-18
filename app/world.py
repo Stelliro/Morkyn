@@ -1345,6 +1345,14 @@ _WAIT_FOR_TIDE_RE = re.compile(
 )
 
 
+_SLEEP_THE_NIGHT_RE = re.compile(
+    r"\b(?:sleep|sleeps|slept|sleeping|rest|rests|rested|bed\s+down|turn\s+in|stay|stays|spend|spends|pass|passes)\s+"
+    r"(?:[\w'’-]+\s+){0,3}?(?:the\s+night|till\s+(?:morning|dawn|first\s+light)|until\s+(?:morning|dawn|first\s+light)|"
+    r"through\s+the\s+night|for\s+the\s+night|overnight)\b|\bovernight\b",
+    re.I,
+)
+
+
 def _wait_until_minutes(conn, player_line: str) -> int:
     """Minutes from the world clock to the time of day a wait, rest or sleep in the player's line ends at; 0 when none.
 
@@ -1357,6 +1365,11 @@ def _wait_until_minutes(conn, player_line: str) -> int:
     target = None
     if match:
         target = _TIME_OF_DAY_MINUTES.get(re.sub(r"\s+", " ", match.group(1).lower()))
+    # "sleep the night, and at first light walk ..." names no "until": the
+    # clock stayed at four in the afternoon and the prose's morning was
+    # rewritten to afternoon (8B run 149, T68). A night slept ends at dawn.
+    if target is None and _SLEEP_THE_NIGHT_RE.search(text):
+        target = _TIME_OF_DAY_MINUTES.get("dawn") or _TIME_OF_DAY_MINUTES.get("first light") or _TIME_OF_DAY_MINUTES.get("morning")
     if target is None:
         return 360 if _WAIT_FOR_TIDE_RE.search(text) else 0
     now = get_world_time(conn)
@@ -15444,7 +15457,16 @@ def _coin_name_match(name: str) -> bool:
     # "scattered coins", "old coins": a short name headed by a coin word is
     # coin whatever describes it (8B run 149, T48).
     words = re.findall(r"[a-z]+", str(name or "").lower())
-    return 0 < len(words) <= 3 and words[-1] in {"coin", "coins", "gold", "silver", "silvers", "copper", "coppers", "crowns", "crown"}
+    if not (0 < len(words) <= 3) or words[-1] not in {"coin", "coins", "gold", "silver", "silvers", "copper", "coppers", "crowns", "crown"}:
+        return False
+    # A kind of coin is a curio ("worn seagull coin"); a state of coin is coin.
+    return all(w in _COIN_STATE_WORDS for w in words[:-1])
+
+
+_COIN_STATE_WORDS = frozenset({
+    "scattered", "old", "loose", "spilled", "dropped", "fallen", "remaining", "leftover", "few", "some", "several", "many",
+    "more", "extra", "stray", "rusted", "tarnished", "copper", "silver", "gold", "the", "a", "handful", "of", "worn", "dull",
+})
 
 
 def _coins_to_gold(
@@ -15798,8 +15820,6 @@ def _grant_shown_takes(
                 # up the scattered coins ... and hand them to Hugh" (8B run 149, T48).
                 if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "loss"]):
                     continue
-                if _is_coin_item({"name": phrase}):
-                    continue
                 if any(_sentence_mentions_item(o, phrase, tokens) for o in owned) and "another" not in obj.lower():
                     continue
                 # Put back, handed on, or eaten after the take: not kept. A
@@ -15896,8 +15916,6 @@ def _grant_shown_takes(
             # coins ... and hand them to Hugh" put "scattered coins x1" in the
             # pack after the judge had read the hand-over (8B run 149, T48).
             if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "loss"]):
-                continue
-            if _is_coin_item({"name": phrase}):
                 continue
             if any(_sentence_mentions_item(o, phrase, tokens) for o in owned):
                 continue
@@ -16199,6 +16217,15 @@ def _arrives_in_item_sentences(text: str, name_l: str, tokens: list[str]) -> boo
             r"collect|collects|collected|scoop|scoops|scooped|grab|grabs|grabbed|snatch\w*|lift|lifts|lifted|pull|pulls|pulled|"
             r"dig|digs|dug|pry|pries|pried|fish|fishes|fished|haul|hauls|hauled|retrieve|retrieves|retrieved|pluck\w*)\b", low
         ):
+            return True
+    return False
+
+
+def _found_in_item_sentences(text: str, name_l: str, tokens: list[str]) -> bool:
+    """A sentence about the item finds it ("You find a bundle of tarred ropes"): a new one, not the one carried."""
+    for _s, _e, sentence in prose_state_sentence_spans(str(text or "")):
+        low = sentence.lower()
+        if _sentence_mentions_item(low, name_l, tokens) and _DISCOVER_GAIN_RE.search(low):
             return True
     return False
 
@@ -16520,8 +16547,14 @@ def _filter_inventory_changes(
         # guild mark'" put a third key beside the tarnished key just pocketed
         # (8B run 149, T7). Same head noun as a thing owned, and nothing in the
         # prose arrives, is handed over or found: the grant renames, not adds.
+        draft_body = str(draft_narration or "") if str(draft_narration or "").strip() else ""
         if grounded and not existing and tokens and not _arrives_in_item_sentences(final_text, name_l, tokens) and not (
             _prose_item_handed_over(final_text, name_l, tokens, owned=False)
+        ) and not (
+            # The draft showed the hand-over and the final prose keeps only the
+            # holding ("beads clasped in your hands", the Miriam save).
+            draft_body and (_arrives_in_item_sentences(draft_body, name_l, tokens)
+                            or _prose_item_handed_over(draft_body, name_l, tokens, owned=False))
         ):
             head = tokens[-1]
             owned_heads = [
@@ -16546,6 +16579,7 @@ def _filter_inventory_changes(
         if (
             grounded and existing and outcome == "gain" and by_player
             and not _another_of_named(final_text, name_l, tokens)
+            and not _found_in_item_sentences(final_text, name_l, tokens)
             and not _prose_item_handed_over(final_text, name_l, tokens, owned=True)
         ):
             grounded = False
@@ -18803,6 +18837,20 @@ def _named_as_present(text: str, pattern: str, *, flags: int = 0) -> bool:
     return False
 
 
+def _lookup_place_id(conn, name: str) -> int:
+    """The id of a known place by name, under any spelling; 0 when none. Never makes one."""
+    try:
+        row = _match_location_by_name(conn, str(name or ""))
+        if row is not None:
+            return int(row["id"])
+        for cand in conn.execute("SELECT id, name FROM locations").fetchall():
+            if _same_place_name(str(cand["name"] or ""), str(name or "")):
+                return int(cand["id"])
+    except Exception:
+        return 0
+    return 0
+
+
 # Marks a body keeps: the roster's own words for the one who wears them.
 _MARK_RE = re.compile(
     r"\b(scar(?:red|s)?|one-eyed|eye\s*patch|eyepatch|missing\s+(?:an?\s+)?(?:hand|arm|eye|ear|finger|fingers|leg|teeth)|"
@@ -18831,7 +18879,10 @@ def _known_by_mark(conn, text: str, hints: list[str], new_name: str = "", place:
         here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
         places = {int(here[0] or 0)} if here else set()
         if str(place or "").strip():
-            told = _find_location_id(conn, str(place))
+            # A lookup, never a mint: _find_location_id makes the place it cannot
+            # find, and LOC "Edge of the Dark Waters" (refused as unshown) was
+            # minted through this very check (8B run 149, T69).
+            told = _lookup_place_id(conn, str(place))
             if told:
                 places.add(int(told))
         if not places:
@@ -18887,7 +18938,10 @@ def _known_here_in_role(conn, role_words: set[str], text: str, new_name: str = "
         here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
         places = {int(here[0] or 0)} if here else set()
         if str(place or "").strip():
-            told = _find_location_id(conn, str(place))
+            # A lookup, never a mint: _find_location_id makes the place it cannot
+            # find, and LOC "Edge of the Dark Waters" (refused as unshown) was
+            # minted through this very check (8B run 149, T69).
+            told = _lookup_place_id(conn, str(place))
             if told:
                 places.add(int(told))
         marks = ",".join("?" for _ in places)
