@@ -18709,6 +18709,15 @@ def _known_here_in_role(conn, role_words: set[str], text: str, new_name: str = "
     return twins[0] if len(twins) == 1 else None
 
 
+# A name that is a body of people, not one of them.
+_GROUP_NAME_RE = re.compile(
+    r"^\s*(?:the\s+)?(?:[\w'’-]+\s+){0,3}?(?:guild|guilds|reeves|council|watch|crew|company|office|order|brotherhood|"
+    r"sisterhood|family|men|folk|people|authority|authorities|militia|church|temple|court|syndicate|cartel|gang|"
+    r"guards|salvagers|dockhands|fishermen|merchants|elders)\s*$",
+    re.I,
+)
+
+
 def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
     """Keep a new person only if the prose shows them.
 
@@ -18722,6 +18731,16 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
     the prose really shows. People already in the world are always kept.
     """
     text = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(narration or ""))
+    # A body of people is no person: NPC_NEW "The Salvage Guild" ROLE "guild
+    # authority" drew "Bertha" for the guild, and the cloaked figure at the
+    # docks was then bound to her (8B run 149, T2-T3).
+    kept_people = []
+    for npc in npcs or []:
+        if isinstance(npc, dict) and _GROUP_NAME_RE.search(str(npc.get("name") or "")) and not str(npc.get("code") or "").strip():
+            turn_ledger.note("npc", "group_not_a_person", name=str(npc.get("name") or ""), role=str(npc.get("role") or ""))
+            continue
+        kept_people.append(npc)
+    npcs = kept_people
     if not text.strip() or not npcs:
         return npcs
 
