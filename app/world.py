@@ -5036,6 +5036,11 @@ def _sanitize_item_name(name: Any) -> str:
             # If first is a full phrase and rest is another item, keep first only
             if len(first) >= 3:
                 n = first
+    # A description is not a name: GRANT "map with unknown symbols and a
+    # destination marked" (8B run 149, T34). A long name ends at its first
+    # describing clause.
+    if len(n.split()) > 3:
+        n = re.split(r"\s+(?:with|that|which|marked|bearing|showing|covered|etched|inscribed|wrapped|filled)\b", n, maxsplit=1)[0]
     n = re.sub(r"\s+", " ", n).strip(" .,;:|/\\")
     # Refuse pure punctuation / empty after clean
     if len(n) < 2:
@@ -14791,7 +14796,10 @@ _ACQUIRE_PROSE_RE = re.compile(
     # The act pass's list too (playtest #75): "take the opportunity", "take him aside".
     rf"(?:take[sn]?|took|taking)(?!\s+{_TAKE_NOT_ACQUIRE_TAIL}\b)|"
     r"receiv\w+|accept\w*|claim\w*|retriev\w+|"
-    r"hand(?:s|ed|ing)\s+(?:you|over|him|her|them)|"
+    # The bare present too: "You hand over the three silver coins and the iron
+    # token to Lettice" read as no event, and the token stayed with the player
+    # (8B run 149, T21, T32).
+    r"hand(?:s|ed|ing)\s+(?:you|over|him|her|them)|(?:(?<=you )|(?<=we )|(?<=You ))hand\s+(?:over|him|her|them)|"
     # The thing first: "picked up a pie wrapped in cloth, and handed it to you" (8B run 22, T2).
     r"hand(?:s|ed|ing)\s+(?:it|them|one|(?:the|a|an)\s+[\w'’-]+)\s+(?:over\s+)?to\s+you|"
     r"give[sn]?\s+you|gave\s+you|giving\s+you|(?:is|are|was|were)\s+given|"
@@ -14816,7 +14824,9 @@ _ACQUIRE_PROSE_RE = re.compile(
 # them: a NEW thing arrives with a/an/another/a number, while "the" refers to
 # something already in the scene. The item must also be named nearby.
 _DISCOVER_GAIN_RE = re.compile(
-    r"\b(?:find[s]?|found|discover(?:s|ed)?|unearth(?:s|ed)?|uncover(?:s|ed)?|spot(?:s|ted)?)"
+    # "pry open the lid, revealing a single, weathered map inside" is a find
+    # too (8B run 149, T34).
+    r"\b(?:find[s]?|found|discover(?:s|ed)?|unearth(?:s|ed)?|uncover(?:s|ed)?|spot(?:s|ted)?|reveal(?:s|ed|ing)?)"
     r"\s+(?:a|an|another|more|some|several|two|three|four|five|six|seven|eight|nine|ten|\d+)\b"
 )
 _DISCOVER_NAME_WINDOW = 60
@@ -14828,11 +14838,7 @@ def _prose_says_it_arrived(text: str, name_l: str, tokens: list[str]) -> bool:
     if _ACQUIRE_PROSE_RE.search(text):
         return True
     for match in _DISCOVER_GAIN_RE.finditer(text):
-        # The rest of the find's sentence: "you find a collection of old coins,
-        # a broken compass, and a single, unmarked envelope" lost the envelope
-        # past a fixed window (8B run 149, T23).
-        rest = re.split(r"[.!?;]", text[match.end():], maxsplit=1)[0]
-        window = rest if len(rest) > _DISCOVER_NAME_WINDOW else text[match.end() : match.end() + _DISCOVER_NAME_WINDOW]
+        window = text[match.end() : match.end() + _DISCOVER_NAME_WINDOW]
         if (name_l and name_l in window) or any(_tok_in(tok, window) for tok in tokens):
             return True
     return False
@@ -15034,6 +15040,12 @@ def _prose_item_outcome_detail(
             continue
         carry = about
         for _pos, kind, player in _sentence_item_events_detail(sentence, name_l, tokens, owned=owned):
+            # Holding is a state, not an act: "You feel the weight of the two
+            # cases in your hands" after "You hand over the two remaining
+            # wooden cases to Lettice" turned the hand-over back into a gain
+            # (8B run 149, T32). A possession phrase never undoes a loss.
+            if player is None and kind == "gain" and state == "loss":
+                continue
             if player is None:
                 by_player = by_player if state == "gain" else False
             else:
@@ -21509,6 +21521,13 @@ def _void_unbought_spend(
             and prose_state.offer_answer(str(narration or ""), own_acts) != "refused"
         ):
             return False
+        # A bed, a meal or a passage bought is a service, not a thing to arrive:
+        # "That'll be twenty gold ... You handed over the coins" for a meal and
+        # a bed was voided as a purchase of nothing once GRANT "bed" and "meal"
+        # were refused as fixtures (8B run 149, T42).
+        heads = [(_item_name_tokens(str(name or "").lower()) or [str(name or "").lower()])[-1] for name in bought]
+        if heads and all(h in _FIXTURE_HEADS for h in heads):
+            return False
     except Exception:
         pass
     player["gold_delta"] = 0
@@ -22492,7 +22511,16 @@ def _settle_stated_gold(
                 moving.append(s)
         narrated = prose_state.coin_mentions(" ".join(moving))
         backed = raw in narrated or raw in said["received"] or bool(prose_state.coin_handed_to_player(narration))
-        if raw > 0 and raw <= STATED_GAIN_CAP and raw in mentioned and backed:
+        # A band op with the one sum said as the coin changes hands: Lettice
+        # "tosses it to you. 'Forty-five gold,' she says" with GOLD +moderate
+        # paid a rolled 41 (8B run 149, T37). The scene's number is the gain.
+        handed_sum = None
+        if not raw and band and prose_state.coin_handed_to_player(narration):
+            sums = sorted({m for m in mentioned if 0 < m <= STATED_GAIN_CAP})
+            handed_sum = sums[0] if len(sums) == 1 else None
+        if handed_sum:
+            value, source = handed_sum, "stated_gain_handed"
+        elif raw > 0 and raw <= STATED_GAIN_CAP and raw in mentioned and backed:
             value, source = raw, "stated_gain"
         elif raw > 0 and raw in mentioned and not backed and not quest_pays:
             # Only spoken: an offer, not pay (8B run 30, T3).

@@ -376,11 +376,28 @@ def coin_handed_to_player(text: str) -> dict[str, Any] | None:
             continue
         span = (match.group("verb") + " " + rest)[:120]
         return {"span": span, "band": _band_word(rest[: stuff.end() + 1])}
+    # A pouch tossed or handed to the player, its coin named beside it: "tosses
+    # it to you ... You catch the pouch, the coins clinking inside" reached no
+    # purse (8B run 149, T37).
+    for match in _PURSE_TO_YOU_RE.finditer(plain):
+        before = plain[max(0, match.start() - 24):match.start()]
+        if re.search(r"\byou\s+(?:\w+ly\s+)?$", before, re.I):
+            continue
+        around = plain[max(0, match.start() - 120): match.end() + 160]
+        if _COIN_STUFF_RE.search(around):
+            return {"span": match.group(0)[:120], "band": _band_word(around)}
     taken = _COIN_TAKEN_RE.search(plain)
     if taken:
         return {"span": taken.group(0)[:120], "band": _band_word(taken.group(0))}
     return None
 
+
+_PURSE_TO_YOU_RE = re.compile(
+    r"\b(?:toss(?:es|ed)?|throw(?:s|n)?|threw|hand(?:s|ed)?|pass(?:es|ed)?|slid(?:es)?|push(?:es|ed)?|flick(?:s|ed)?)\s+"
+    r"(?:it|them|(?:a|the|his|her|their)\s+(?:small\s+|heavy\s+|leather\s+|worn\s+|fat\s+)?(?:pouch|purse|bag|sack|coin[\s-]?purse))\s+"
+    r"(?:over\s+|across\s+)?to\s+you\b",
+    re.I,
+)
 
 # A purse handed over whose contents the prose never names: "He hands you a
 # small pouch. 'This should cover it.'" (7B run 30, T5). Read only when the

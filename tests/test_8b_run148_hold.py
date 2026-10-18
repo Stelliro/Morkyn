@@ -222,6 +222,54 @@ class BringingUpWhateverIsThere(unittest.TestCase):
         self.assertEqual([c["name"] for c in kept], ["broken compass", "unmarked envelope"], rejected)
 
 
+class HandedOverIsGone(unittest.TestCase):
+    """8B run 149, T21 and T32: things the player handed to Lettice were granted to the player."""
+
+    def test_the_cases_handed_over_are_not_gained(self):
+        _pack()
+        line = "\"Two more boxes, then. Lettice, mark this one against my name before I go.\""
+        prose = ("You hand over the two remaining wooden cases to Lettice Garner [[F]], their surfaces dented and stained with "
+                 "brine. She takes them with a practiced flick of her wrist. \"Marked,\" she says. You feel the weight of the two "
+                 "cases in your hands, a reminder that the work isn’t done yet.")
+        kept, rejected = _filter([{"name": "Wooden Case", "quantity_band": "moderate"}], prose, line)
+        self.assertEqual(kept, [], rejected)
+
+    def test_the_token_handed_over_is_not_gained(self):
+        _pack()
+        line = "\"Three silver I can find. Lettice, will you take the coin and the token from me and write the credit cleared?\""
+        prose = ("You hand over the three silver coins and the iron token to Lettice, who takes them with a practiced nod. "
+                 "She flips the token over in her palm, then tucks it into a leather-bound ledger.")
+        kept, rejected = _filter([{"name": "iron token", "quantity_delta": 1}], prose, line)
+        self.assertEqual(kept, [], rejected)
+
+    def test_a_thing_handed_to_the_player_still_arrives(self):
+        _pack()
+        prose = "Lettice hands you the iron token across the counter. \"Keep it,\" she says."
+        kept, rejected = _filter([{"name": "iron token", "quantity_delta": 1}], prose, "\"What do I owe?\"")
+        self.assertEqual([c["name"] for c in kept], ["iron token"], rejected)
+
+
+class ALidRevealsAFind(unittest.TestCase):
+    """8B run 149, T34: the map the lid revealed was refused, under a description for a name."""
+
+    LINE = "I search the Dredges' wreckage for the second of the guild's boxes."
+    PROSE = ("You kneel among the tangled wreckage, fingers brushing over rusted gears. The light catches on the brass hinges of "
+             "the second of the guild’s locked cases. A faint creak echoes as you pry open the lid, revealing a single, weathered "
+             "map inside—marked with symbols you don’t recognize.")
+
+    def test_the_revealed_map_is_found(self):
+        _pack()
+        kept, rejected = _filter([{"name": "map with unknown symbols and a destination marked", "quantity_band": "moderate"}], self.PROSE, self.LINE)
+        self.assertEqual(len(kept), 1, rejected)
+
+    def test_a_description_is_cut_to_its_name(self):
+        from app.world import _sanitize_item_name
+
+        self.assertEqual(_sanitize_item_name("map with unknown symbols and a destination marked"), "map")
+        self.assertEqual(_sanitize_item_name("mother's brass tide-reckoner"), "mother's brass tide-reckoner")
+        self.assertEqual(_sanitize_item_name("coil of rope"), "coil of rope")
+
+
 class APaperFoundUnderAnotherName(unittest.TestCase):
     def test_the_damp_paper_retrieved_is_the_ledger(self):
         from app.world import _handed_under_another_noun
