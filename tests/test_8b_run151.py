@@ -65,7 +65,6 @@ class AThingHandedInAWrapping(unittest.TestCase):
              "small bundle across the table—damp cloth wrapped around a rusted key. “This opens the lock on the old "
              "warehouse by the docks.”")
 
-    @unittest.expectedFailure  # open: the per-item outcome reader does not yet read "slides a <thing> across the table" as a gain
     def test_the_key_in_the_bundle_arrives(self):
         _pack()
         kept, rejected = _filter([{"name": "rusty key", "quantity_delta": 1}], self.PROSE, self.LINE)
