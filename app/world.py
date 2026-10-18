@@ -14691,7 +14691,7 @@ _ACQUIRE_PROSE_RE = re.compile(
     # "take in the sight", "take note", "take stock", "take a look" are perception.
     # The act pass's list too (playtest #75): "take the opportunity", "take him aside".
     rf"(?:take[sn]?|took|taking)(?!\s+{_TAKE_NOT_ACQUIRE_TAIL}\b)|"
-    r"receiv\w+|accept\w*|claim\w*|"
+    r"receiv\w+|accept\w*|claim\w*|retriev\w+|"
     r"hand(?:s|ed|ing)\s+(?:you|over|him|her|them)|"
     # The thing first: "picked up a pie wrapped in cloth, and handed it to you" (8B run 22, T2).
     r"hand(?:s|ed|ing)\s+(?:it|them|one|(?:the|a|an)\s+[\w'’-]+)\s+(?:over\s+)?to\s+you|"
@@ -14966,6 +14966,20 @@ def _handed_under_another_noun(text: str, name_l: str) -> str:
                 return body[:m.start(1)] + name + body[m.end(1):]
             m = re.search(r"\b(?:hands?|handed|gives?|gave|pass(?:es|ed)?|slides?|slid)\s+you\s+(?:the|a|an|his|her|their)\s+"
                           r"(?:[a-z-]+\s+){0,2}?(" + "|".join(sorted(_DOC_WORDS)) + r")\b", body, re.I)
+            if m and m.group(1).lower() != head:
+                return body[:m.start(1)] + name + body[m.end(1):]
+            # Found, not handed: "a bundle of damp paper catches your eye, and
+            # you kneel to retrieve it" for GRANT "salvage ledger" was refused
+            # as never arriving (8B run 148, T55). One paper found is another.
+            docs = "|".join(sorted(_DOC_WORDS))
+            m = re.search(r"\byou\s+(?:\w+\s+){0,3}?(?:find|found|retrieve|retrieved|pull|pulled|lift|lifted|pick|picked|"
+                          r"dig|dug|draw|drew|uncover|uncovered|fish|fished|free|freed)\b[^.!?]{0,40}?"
+                          r"\b(?:a|an|the|some)\s+(?:[a-z-]+\s+){0,3}?(" + docs + r")\b", body, re.I)
+            if m and m.group(1).lower() != head:
+                return body[:m.start(1)] + name + body[m.end(1):]
+            m = re.search(r"\b(?:a|an|the|some)\s+(?:[a-z-]+\s+){0,3}?(" + docs + r")\b[^.!?]{0,80}?"
+                          r"\byou\s+(?:\w+\s+){0,3}?(?:retrieve|take|lift|pick\s+up|pull|gather|pocket|tuck|free|draw)\b",
+                          body, re.I)
             if m and m.group(1).lower() != head:
                 return body[:m.start(1)] + name + body[m.end(1):]
         return body
@@ -16004,6 +16018,33 @@ _SERVING_RE = re.compile(
 _CARRY_AWAY_RE = re.compile(r"\b(?:take\s+away|for\s+the\s+road|for\s+the\s+journey|to\s+carry|to\s+go|wrap\w*|pack\w*|provisions?|stores|supplies)\b", re.I)
 
 
+def _one_of_a_named_thing(change: dict[str, Any], name_l: str, own_l: str, prose: str) -> dict[str, Any]:
+    """A thing the line or the prose names in the singular is one thing.
+
+    GRANT "a bundle of papers" QTY moderate for "I take the bundle of papers
+    and the ledger" rolled two bundles (8B run 148, T56). A size band on a
+    thing said as "the bundle", "a ledger", "this key" is one of it; a plural
+    ("the arrows", "cod fillets") keeps its band.
+    """
+    band = str(change.get("quantity_band") or "").strip().lower()
+    if not band or band.startswith("-") or change.get("quantity_delta"):
+        return change
+    words = [w for w in re.findall(r"[a-z][\w'’-]*", str(name_l or "").lower()) if w not in {"a", "an", "the", "some"}]
+    if not words:
+        return change
+    first = words[0]
+    if first.endswith("s") and not first.endswith(("ss", "us", "is")):
+        return change
+    text = f"{own_l or ''} {venues.strip_speech(str(prose or ''))}".lower()
+    if re.search(rf"\b(?:a|an|the|this|that|one|my|your|its|his|her|their)\s+(?:[\w'’-]+\s+){{0,2}}?{re.escape(first)}\b", text):
+        out = dict(change)
+        out["quantity_delta"] = 1
+        out.pop("quantity_band", None)
+        turn_ledger.note("inventory", "one_of_a_named_thing", item=str(change.get("name") or ""), band=band)
+        return out
+    return change
+
+
 def _consumed_in_line(player_input: str, tokens: list[str]) -> bool:
     """The player's own line orders, eats or drinks this thing at the table."""
     head = (tokens[-1] if tokens else "").lower()
@@ -16385,6 +16426,7 @@ def _filter_inventory_changes(
                 grounded = False
         # Items cannot become dimensional storage without explicit prose
         if grounded:
+            change = _one_of_a_named_thing(change, name_l, own_l, final_text)
             kept.append(_strip_unearned_dimensional(change))
         elif same_as_owned or shown_for_sale:
             # Nothing refused: the prose shows the player's own thing, or goods
