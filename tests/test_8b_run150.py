@@ -180,6 +180,24 @@ class ASingleGoldPieceIsOne(unittest.TestCase):
         self.assertEqual(coin_mentions("She counts out one gold coin."), [1])
 
 
+class AWordInAnotherScriptGoes(unittest.TestCase):
+    """T79-T80: "You're not the только person who's asked that" leaked and was echoed the next turn."""
+
+    def test_the_token_is_dropped_and_the_sentence_kept(self):
+        from app.prose_state import repair_meta_leaks
+
+        text = "“You’re not the только person who’s asked that,” she says, her voice low."
+        out, fixes = repair_meta_leaks(text)
+        self.assertEqual(out, "“You’re not the person who’s asked that,” she says, her voice low.")
+        self.assertIn("foreign_script", [f["why"] for f in fixes])
+
+    def test_plain_prose_is_untouched(self):
+        from app.prose_state import repair_meta_leaks
+
+        text = "Nell’s brow furrows. “The reeve’s man had it,” she says."
+        self.assertEqual(repair_meta_leaks(text)[0], text)
+
+
 class PraiseOfWorkIsNoJob(unittest.TestCase):
     def test_good_work_is_vetoed(self):
         from app import quest_offers as qo
