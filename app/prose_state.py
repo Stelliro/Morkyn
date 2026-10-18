@@ -669,10 +669,19 @@ _WISH_BEFORE_RE = re.compile(
 )
 
 
+_STARTS_THE_ACT_RE = re.compile(
+    r"\b(?:start|starts|started|starting|begin|begins|began|beginning|make|makes|made|attempt\w*|try|tries|tried|"
+    r"finish\w*|continue\w*|resume\w*)\s+(?:the|a|an|my|another|our|this|that)\s+(?:[\w'-]+\s+)?$",
+    re.I,
+)
+
+
 def _act_word_is_verb(text: str, match: re.Match) -> bool:
     """Whether a family word heads something done, not a name, a noun or a wish."""
     before = text[: match.start()]
-    if _NOUN_BEFORE_RE.search(before):
+    # "start the dive the guild asked for" is the dive begun, not a thing named
+    # (8B run 149, T5: no act was read and the turn rolled persuasion instead).
+    if _NOUN_BEFORE_RE.search(before) and not _STARTS_THE_ACT_RE.search(before):
         return False
     # "Blind Owl Forge": a capital inside a name, not the first word of a clause.
     if match.group(0)[:1].isupper() and re.search(r"\b[A-Z][\w'-]*\s+$", before):
