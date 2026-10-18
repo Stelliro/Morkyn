@@ -11337,6 +11337,11 @@ _CIVIC_BUILDING_WORDS = (
     "town hall", "guildhall", "guild hall", "hall", "harbour office", "harbor office", "reeve's office", "office",
     "customs house", "counting house", "tally house", "tally-house", "tallyhouse", "chapel", "church", "temple", "shrine", "tower", "clock tower", "lighthouse",
     "library", "schoolhouse", "school", "gaol", "jail", "barracks", "watchhouse", "granary", "bathhouse", "mill",
+    # The waterfront's working buildings: "head for the east side of the docks
+    # ... to find the warehouse door" resolved no destination while the prose
+    # went in (8B run 151, T9).
+    "warehouse", "warehouses", "storehouse", "boathouse", "smokehouse", "salt house", "sail loft", "net shed",
+    "chandlery", "cooperage", "ropewalk", "fish market", "market hall",
 )
 
 
@@ -11386,7 +11391,9 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
     pattern = re.compile(
         r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|come|get|cross\w*|"
         r"wander\w*|march\w*|step\w*|climb\w*)\s+(?:(?:back|over|down|up|across|out|along|straight)\s+){0,2}"
-        r"(?:to|toward|towards|into|in\s+to|up\s+to)\s+(?:the\s+)?"
+        # "head for the docks ... to find the warehouse door": "for" walks too,
+        # and the building may sit behind "to find/reach/see" (8B run 151, T9).
+        r"(?:to|toward|towards|into|in\s+to|up\s+to|for)\s+(?:(?:[a-z'’-]+\s+){0,8}?to\s+(?:find|reach|see|check|try|open)\s+)?(?:the\s+)?"
         r"(?P<place>(?:[a-z'’-]+\s+){0,1}?(?:" + "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True)) + r"))\b",
         re.IGNORECASE,
     )
@@ -14933,6 +14940,11 @@ _ACQUIRE_PROSE_RE = re.compile(
     r"hand(?:s|ed|ing)\s+(?:you|over|him|her|them)|(?:(?<=you )|(?<=we )|(?<=You ))hand\s+(?:over|him|her|them)|"
     # The thing first: "picked up a pie wrapped in cloth, and handed it to you" (8B run 22, T2).
     r"hand(?:s|ed|ing)\s+(?:it|them|one|(?:the|a|an)\s+[\w'’-]+)\s+(?:over\s+)?to\s+you|"
+    # Slid across the table or over to the player: "He slides a small bundle
+    # across the table" (8B run 151, T6). Sliding across the floor or deck is
+    # a thing moving, not given.
+    r"slid(?:es|e|ing)?\s+(?:it|them|one|(?:the|a|an|his|her|their)\s+(?:[\w'’-]+\s+){0,3}?[\w'’-]+)\s+"
+    r"(?:(?:across|over)\s+(?:the\s+)?(?:table|counter|desk|bar|board|bench)|(?:over\s+)?to(?:ward|wards)?\s+you)\b|"
     r"give[sn]?\s+you|gave\s+you|giving\s+you|(?:is|are|was|were)\s+given|"
     r"press(?:es|ed|ing)?\s+[\w\s]{0,40}?into\s+your|offer(?:s|ed|ing)?\s+you|"
     r"buy|buys|bought|buying|purchas\w+|barter\w*|trade[sd]?\s+for|"
@@ -15196,6 +15208,10 @@ _HANDED_NOUN_RE = re.compile(
 )
 
 
+# Wrappings a thing is handed over in.
+_WRAP_WORDS = frozenset({"bundle", "parcel", "packet", "pouch", "cloth", "wrapping", "wrap", "sack", "case", "roll", "oilcloth"})
+
+
 def _handed_under_another_noun(text: str, name_l: str) -> str:
     """The prose with a hand-over of the item's other noun read as the item.
 
@@ -15210,6 +15226,21 @@ def _handed_under_another_noun(text: str, name_l: str) -> str:
         return body
     head = name.split()[-1] if name.split() else name
     if name not in body.lower():
+        # A wrapping handed over with the thing named inside it: "He slides a
+        # small bundle across the table—damp cloth wrapped around a rusted key"
+        # refused GRANT "rusty key" as never arriving (8B run 151, T6). The
+        # bundle, parcel or pouch slid, handed or set before the player with
+        # the item's head noun in the same sentence is the item handed over.
+        if re.search(rf"\b{re.escape(head)}", body, re.I):
+            wraps = "|".join(sorted(_WRAP_WORDS))
+            m = re.search(
+                r"\b(?:slides?|slid|hands?|handed|passes|passed|pushes|pushed|sets?|places?|placed|puts?|tosses|tossed|drops?|dropped)\s+"
+                r"(?:you\s+)?(?:a|an|the|his|her|their)\s+(?:[a-z-]+\s+){0,2}?(" + wraps + r")\b"
+                r"(?=[^.!?]*?\b" + re.escape(head) + r")",
+                body, re.I,
+            )
+            if m and m.group(1).lower() != head:
+                return body[:m.start(1)] + name + body[m.end(1):]
         # The item's own words never appear; only the paper family can still
         # say it was handed over ("a folded parchment, handing it to you").
         if head in _DOC_WORDS:
@@ -16698,7 +16729,14 @@ def _filter_inventory_changes(
                 str(r[0]) for r in conn.execute("SELECT name FROM inventory WHERE quantity > 0").fetchall()
                 if (_item_name_tokens(str(r[0]).lower()) or [""])[-1] == head
             ]
-            if owned_heads and not acquire_intent:
+            # Asked for as "the <head>", the thing is the one owned under its
+            # other name: "I pocket the key" with GRANT "iron-key" put a second
+            # key beside "key" (8B run 151, T8).
+            means_the_owned = bool(re.search(
+                rf"\b(?:the|my|this|that)\s+(?:[\w'’-]+\s+){{0,2}}?{re.escape(head)}s?\b",
+                venues.strip_speech(str(player_input or "")).lower(),
+            ))
+            if owned_heads and (not acquire_intent or means_the_owned):
                 grounded = False
                 turn_ledger.note("inventory", "owned_item_not_new", item=name, owned=owned_heads[0], by="head")
             # Held is not gained: "the guild's lockpicking tools clutched in your

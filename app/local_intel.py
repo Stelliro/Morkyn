@@ -1169,7 +1169,11 @@ SIGN_ON_RE = re.compile(
 )
 _PLAIN_ACCEPT_RE = re.compile(
     r"\b(?:(?:i|we)(?:['’]ll|\s+will)\s+(?:take|do)\s+it\b|(?:i|we)\s+accept|(?:i|we)\s+agree\b|count\s+(?:me|us)\s+in|"
-    r"you\s+have\s+a\s+deal|(?:it['’]s|that['’]s)\s+a\s+deal|deal\s*[.!]|(?:i['’]m|we['’]re)\s+in\s*[.!])",
+    r"you\s+have\s+a\s+deal|(?:it['’]s|that['’]s)\s+a\s+deal|deal\s*[.!]|(?:i['’]m|we['’]re)\s+in\s*[.!]|"
+    # '"Forty-five gold. Done."' took the job in every sense but the engine's
+    # (8B run 151, T8): a bare "Done." as the answer, "consider it done",
+    # "you have my word", "I'll see it done".
+    r"(?<![\w'’])done\s*[.!]|consider\s+it\s+done|you\s+have\s+my\s+word|(?:i|we)(?:['’]ll|\s+will)\s+see\s+(?:it|to\s+it)\s+done)",
     re.IGNORECASE,
 )
 _OFFER_STOP = frozenset({"the", "a", "an", "of", "to", "for", "and", "in", "on", "at", "from", "with", "word", "some", "this", "that"})
