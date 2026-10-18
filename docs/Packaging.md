@@ -74,6 +74,20 @@ Morkyn/                     the home (app.paths.ROOT)
   `data/`, `runtime/`, `versions/`; `app.paths.APP_DIR` is the running version's own files
   (`static/`, `content/`, `config/`, `Media/`).
 
+### Slim build verified (2026-10-19)
+
+The Windows app build without llama-cpp-python: 53 MB zip (was 793 MB). The CUDA pack built
+with `packaging/build_packs.py cuda` is 219 MB zipped, 837 MB installed in `runtime/`.
+Installed into the slim build's `runtime/` through `runtime_packs.install`, then from the exe:
+`import llama_cpp` loads from the pack and finds the RTX 4070 Ti (GPU offload true), and
+`Morkyn.exe --run-module llama_cpp.server --help` runs the managed server from the pack.
+Two classes found and fixed on the way, both in the spec: the app build ships the whole
+standard library (a pack's `import pickletools` failed), and the packages the app shares
+with packs ship whole (`fastapi.middleware.cors` was missing for the server).
+The version handover was verified the same way: with `data/active_version.json` naming an
+installed `versions/0.10.0-dev.15/`, the home exe started that build, which served its own
+`static/` while writing to the home's `data/`.
+
 ## Building
 
 - Windows: `powershell -ExecutionPolicy Bypass -File packaging\build.ps1` (add `-Console` for a

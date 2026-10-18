@@ -29,6 +29,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 if getattr(sys, "frozen", False):
     ROOT = Path(sys.executable).resolve().parent  # data/ lives beside the exe, not in its temp unpack
+APP_DIR = ROOT  # this build's own files (static/boot.html, Media/)
+if os.getenv("MORKYN_HOME", "").strip():
+    # A version the home build handed over to (app/versions.py): data/, runtime/
+    # and versions/ are the home's, so the working directory is the home too.
+    ROOT = Path(os.environ["MORKYN_HOME"]).expanduser().resolve()
 os.chdir(ROOT)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -152,7 +157,7 @@ def prepare_assets() -> tuple[str, str | None]:
     WEBVIEW_DIR.mkdir(parents=True, exist_ok=True)
     thumb = WEBVIEW_DIR / "boot-logo.png"
     ico = WEBVIEW_DIR / "morkyn-mark.ico"
-    source = ROOT / "Media" / "morkyn-logo.png"
+    source = APP_DIR / "Media" / "morkyn-logo.png"
     try:
         if source.is_file() and (not thumb.is_file() or thumb.stat().st_mtime < source.stat().st_mtime):
             from PIL import Image
@@ -191,7 +196,7 @@ def draw_mark() -> Any:
 
 
 def boot_html(logo: str) -> str:
-    return (ROOT / "static" / "boot.html").read_text(encoding="utf-8").replace("__LOGO__", logo)
+    return (APP_DIR / "static" / "boot.html").read_text(encoding="utf-8").replace("__LOGO__", logo)
 
 
 def open_folder(path: Path) -> None:
