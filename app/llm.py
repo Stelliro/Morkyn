@@ -13747,7 +13747,9 @@ _PLAYER_FOLLOW_RE = re.compile(
     rf"^{_ACT_ADVERBS}(?P<v>follow(?:s|ed)?|make\s+your\s+way|made\s+your\s+way|"
     r"head(?:s|ed)?\s+(?:to|toward|towards|for|back|out|off|into|inside|down|up|over)|"
     r"walk(?:s|ed)?\s+(?:to|toward|towards|into|out|over|back|away|off|inside|through)|"
-    r"step(?:s|ped)?\s+(?:into|out|inside|outside|back\s+into|through)|"
+    # "You step toward the storage room" after Griselda's directions walked
+    # the player on and met the guildmaster for them (8B run 148, T60).
+    r"step(?:s|ped)?\s+(?:into|out|inside|outside|back\s+into|through|toward|towards|to|closer\s+to|up\s+to|over\s+to|across)|"
     r"leave|leaves|left\s+(?:the|for)|set(?:s)?\s+off|push(?:es|ed)?\s+(?:on|forward|onward|ahead)|"
     # "As you turn to leave, Hubert adds ..." (8B run 13, T2).
     r"(?:turn(?:s|ed)?|start(?:s|ed)?|begin|began)\s+to\s+(?:leave|go)|make\s+to\s+(?:leave|go)|made\s+to\s+(?:leave|go)|"
