@@ -43,22 +43,24 @@ hiddenimports = [
     "app.model_limits",
 ]
 hiddenimports += collect_submodules("app")
-hiddenimports += collect_submodules("llama_cpp")
-try:
-    hiddenimports += collect_submodules("webview")
-except Exception:
-    pass
 
 datas = [
     (str(ROOT / "app" / "comfy_workflows"), "app/comfy_workflows"),
 ]
-datas += collect_data_files("llama_cpp")
-try:
-    datas += collect_data_files("webview")
-except Exception:
-    pass
-
-binaries = collect_dynamic_libs("llama_cpp")
+binaries = []
+# llama-cpp-python and pywebview are optional at build time: a Linux build
+# without a wheel for its libc (musl) still packages the game with cloud APIs
+# and the browser; the in-app downloader and the llama.cpp engine need the wheel.
+for optional in ("llama_cpp", "webview"):
+    try:
+        __import__(optional)
+    except Exception:
+        print(f"morkyn.spec: {optional} not installed; building without it")
+        hiddenimports = [h for h in hiddenimports if not h.startswith(optional)]
+        continue
+    hiddenimports += collect_submodules(optional)
+    datas += collect_data_files(optional)
+    binaries += collect_dynamic_libs(optional)
 
 icon = None
 try:
