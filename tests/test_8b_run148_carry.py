@@ -247,6 +247,21 @@ class TalkedToButShownElsewhere(unittest.TestCase):
         self.assertEqual(now, town)
 
 
+class OutOfHidingIsNoExit(unittest.TestCase):
+    """8B run 149, T88: "I step out from behind the crates with my hands open" walked the player out of the Dredges to the town square."""
+
+    def test_stepping_out_from_behind_the_crates_leaves_nothing(self):
+        from app.world import venue_move_intent
+
+        self.assertEqual(venue_move_intent("I step out from behind the crates with my hands open."), "")
+        self.assertEqual(venue_move_intent("I step out of the shadows with my hands open."), "")
+
+    def test_stepping_out_of_the_inn_still_leaves(self):
+        from app.world import venue_move_intent
+
+        self.assertEqual(venue_move_intent("I step out of the inn."), "exit")
+
+
 class TheOfficeUnderAnotherSpelling(unittest.TestCase):
     """T66: "go into the Reeves' Office" made a third office beside "The Reeve's Office" and "Reeves’ Office"."""
 
