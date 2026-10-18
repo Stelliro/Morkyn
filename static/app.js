@@ -23630,6 +23630,23 @@ function renderUpdatesPanel(status, check) {
   const c = check || {};
   const events = Array.isArray(s.recent_events) ? s.recent_events : [];
   const lkg = s.last_known_good || null;
+  if (s.packaged) {
+    // A packaged build (the exe) has no checkout to pull: say where the next build is.
+    const releases = s.release_url || "https://github.com/Stelliro/Morkyn/releases";
+    return `
+      <div class="updatesPanel">
+        <p class="empty">${escapeHtml(s.note || "This is a packaged build.")}</p>
+        ${c.message ? `<p class="${c.update_available ? "good" : "empty"}">${escapeHtml(c.message)}</p>` : ""}
+        ${c.latest_release?.tag ? `<p class="empty">Latest GitHub release: <strong>${escapeHtml(c.latest_release.tag)}</strong> ${c.latest_release.url ? `<a href="${escapeHtml(c.latest_release.url)}" target="_blank" rel="noopener">open</a>` : ""}</p>` : ""}
+        <div class="modelButtonRow">
+          <button type="button" class="secondaryButton" data-update-check>Check the latest release</button>
+          <a class="secondaryButton" href="${escapeHtml(releases)}" target="_blank" rel="noopener">Releases page</a>
+        </div>
+        <p class="empty">Your saves, settings and voices are in the <code>data/</code> folder beside the program. Copy it into the next build and your games come with it.</p>
+        <div data-update-log class="updateLog"></div>
+      </div>
+    `;
+  }
   return `
     <div class="updatesPanel">
       <p class="empty">Mørkyn does not phone home for analytics. Update check/apply only talks to <strong>GitHub</strong> when you press a button below.</p>

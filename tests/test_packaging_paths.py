@@ -48,6 +48,22 @@ class ThePackagedUpdater(unittest.TestCase):
         self.assertIn("releases", status.get("release_url", ""))
         self.assertIn("packaged build", status.get("note", ""))
 
+    def test_a_frozen_check_compares_the_running_version_to_the_newest_tag(self):
+        from app import updates
+
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(updates, "_latest_release", return_value={"tag": "v9.9.9", "url": "https://x/r"}), \
+                mock.patch.object(updates, "_running_version", return_value="0.10.0-dev.14"), \
+                mock.patch.object(updates, "_record_event"):
+            result = updates.check_for_updates()
+        self.assertTrue(result.get("update_available"))
+        self.assertIn("9.9.9", result.get("message", ""))
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(updates, "_latest_release", return_value={"tag": "v0.10.0-dev.14"}), \
+                mock.patch.object(updates, "_running_version", return_value="0.10.0-dev.14"), \
+                mock.patch.object(updates, "_record_event"):
+            self.assertFalse(updates.check_for_updates().get("update_available"))
+
 
 class LauncherCommands(unittest.TestCase):
     def test_a_checkout_uses_the_interpreter(self):

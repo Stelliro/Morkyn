@@ -125,9 +125,60 @@ def _github_repo_from_remote(remote_url: str) -> str:
     return os.getenv("AI_RPG_GITHUB_REPO", DEFAULT_GITHUB_REPO)
 
 
+def _latest_release(repo: str) -> dict[str, Any] | None:
+    """The newest GitHub release of ``repo`` ({tag, name, url, published_at}), or {error} when the lookup fails."""
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "Morkyn-Updater"},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        if isinstance(payload, dict) and payload.get("tag_name"):
+            return {
+                "tag": payload.get("tag_name"),
+                "name": payload.get("name"),
+                "url": payload.get("html_url"),
+                "published_at": payload.get("published_at"),
+            }
+        return None
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
+        return {"error": f"GitHub releases lookup skipped or failed: {exc}"}
+
+
+def _running_version() -> str:
+    try:
+        from app.main import APP_VERSION
+
+        return str(APP_VERSION or "").lstrip("Vv")
+    except Exception:
+        return ""
+
+
 def check_for_updates() -> dict[str, Any]:
     """User-initiated: git fetch + optional GitHub latest release lookup."""
     status = current_status()
+    if status.get("packaged"):
+        # A packaged build: only the releases page can say whether there is a
+        # newer build; the running version is compared to the newest tag.
+        release = _latest_release(DEFAULT_GITHUB_REPO)
+        running = _running_version()
+        tag = str((release or {}).get("tag") or "").lstrip("Vv")
+        newer = bool(tag and running and tag != running)
+        _record_event("check", {"packaged": True, "running": running, "latest": tag})
+        return {
+            **status,
+            "phone_home": True,
+            "running_version": running,
+            "latest_release": release,
+            "update_available": newer,
+            "message": (
+                f"A newer build is on the releases page: {tag} (you are running {running})." if newer
+                else f"You are running the latest build ({running})." if tag
+                else "Could not reach the releases page."
+            ),
+        }
     if not status.get("ok"):
         return status
 
@@ -148,25 +199,7 @@ def check_for_updates() -> dict[str, Any]:
         if len(parts) == 2:
             ahead, behind = int(parts[0]), int(parts[1])
 
-    release: dict[str, Any] | None = None
-    repo = _github_repo_from_remote(str(status.get("remote_url") or ""))
-    try:
-        req = urllib.request.Request(
-            f"https://api.github.com/repos/{repo}/releases/latest",
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "Morkyn-Updater"},
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        if isinstance(payload, dict) and payload.get("tag_name"):
-            release = {
-                "tag": payload.get("tag_name"),
-                "name": payload.get("name"),
-                "url": payload.get("html_url"),
-                "published_at": payload.get("published_at"),
-            }
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
-        release = {"error": f"GitHub releases lookup skipped or failed: {exc}"}
+    release = _latest_release(_github_repo_from_remote(str(status.get("remote_url") or "")))
 
     result = {
         **status,
