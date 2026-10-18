@@ -249,6 +249,21 @@ class AnAttributionTailIsNoAsk(unittest.TestCase):
         self.assertNotIn("persuasion", json.dumps(check))
 
 
+class AStrikeInSpeechIsNoBlow(unittest.TestCase):
+    """8B run 150, T21-T22: '"Strike it, Mabel, and write the crab as my proof"' resolved combat, unarmed vs Mabel."""
+
+    def test_a_ledger_entry_struck_in_speech_is_no_fight(self):
+        from app.world import _turn_intent
+
+        self.assertNotEqual(_turn_intent("\"Strike it, Mabel, and write the crab as my proof from the Coral Wreck.\"")[0], "combat")
+        self.assertNotEqual(_turn_intent("\"I meant strike the entry from the book, Mabel, not strike you.\"")[0], "combat")
+
+    def test_a_narrated_blow_still_fights(self):
+        from app.world import _turn_intent
+
+        self.assertEqual(_turn_intent("I strike the guard across the jaw with my fist.")[0], "combat")
+
+
 class TheScarredManIsBertram(unittest.TestCase):
     """T69-T70: "the scarred man" minted Garret, then Kael, beside Bertram Northcott, "a burly man with a scar across his brow"."""
 

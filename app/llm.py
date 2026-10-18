@@ -13795,7 +13795,7 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"pick(?:s|ed|ing)?\s+up|pick(?:s|ed|ing)?\s+(?:\w+\s+){1,3}up|"
     r"take|takes|taking|taken|took|steal|steals|stealing|stole|stolen|"
     r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
-    r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)(?<![“\x22])(?<!of\s)(?<!some\s)(?<!any\s)(?<!no\s)salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
+    r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?:catch(?:es|ing)?|caught)\s+(?:the|a|an|it|them|that|this)\b(?!\s+(?:eye|eyes|glimpse|sight|look|whiff|scent|smell|hint|word|words|sound|drift|gist|name|breath|wind|tide|current|light|sun|edge|tail|end|mood|tone|attention|meaning|thread)\b)|(?<!the\s)(?<!['’]s\s)(?<![“\x22])(?<!of\s)(?<!some\s)(?<!any\s)(?<!no\s)salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
     # Keeping a duty or a state is no take: "I keep the lookout" let a GRANT
     # through as asked for (8B run 145, T41).
     r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b"

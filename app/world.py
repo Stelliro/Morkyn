@@ -6653,10 +6653,15 @@ def _turn_intent(player_input: str) -> tuple[str, list[str]]:
 
     tokens = _intent_tokens(_THING_STRIKES_RE.sub(" ", _MOTION_NOT_COMBAT_RE.sub(" ", player_input)))
     travel_tokens = _intent_tokens(_travel_scoring_text(player_input))
+    # A blow is a narrated act, never a word inside the player's quotes:
+    # '"Strike it, Mabel, and write the crab as my proof"' (a ledger entry)
+    # resolved deterministic combat, unarmed vs Mabel (8B run 150, T21-T22).
+    combat_tokens = _intent_tokens(_THING_STRIKES_RE.sub(" ", _MOTION_NOT_COMBAT_RE.sub(" ", venues.strip_speech(player_input))))
     scores: list[tuple[str, int]] = []
     lowered = str(player_input or "").lower()
     for intent, keywords in TURN_INTENT_KEYWORDS.items():
-        score = len((travel_tokens if intent == "travel" else tokens) & keywords)
+        pool = travel_tokens if intent == "travel" else (combat_tokens if intent == "combat" else tokens)
+        score = len(pool & keywords)
         if intent == "claim_check" and any(phrase in lowered for phrase in ("said i could", "told me i could", "gave me permission", "said we could")):
             score += 3
         if score:
@@ -14863,6 +14868,12 @@ from app.llm import _TAKE_NOT_ACQUIRE_TAIL, _TAKE_PERCEPTION_RE  # noqa: E402
 # over" contains "hand ... over". Inflection is now required on `hand`. The same
 # narration also matched a bare `pocket` in "warm from your pocket", so that too
 # needs an inflection or an explicit "you pocket".
+# Catching an eye, a glimpse or one's breath takes nothing.
+_CATCH_NOT_TAKE = (
+    r"eye|eyes|glimpse|sight|look|whiff|scent|smell|hint|word|words|sound|drift|gist|name|"
+    r"breath|wind|tide|current|light|sun|edge|tail|end|mood|tone|attention|meaning|thread"
+)
+
 _ACQUIRE_PROSE_RE = re.compile(
     r"\b("
     r"pick(?:s|ed)?\s+up|picking\s+up|pick(?:s|ed|ing)?\s+(?:it|them|one)\s+up|"
@@ -14888,6 +14899,10 @@ _ACQUIRE_PROSE_RE = re.compile(
     r"snatch(?:es|ed|ing)?\s+(?:it|them)\s+(?:back\s+)?up|stow(?:s|ed|ing)?|tuck(?:s|ed|ing)?\s+[\w\s]{0,40}?into|"
     r"slip(?:s|ped)?\s+[\w\s]{0,40}?into|"
     r"loot(?:s|ed|ing)?|steal|steals|stole|"
+    # Catching a loose thing is taking it: "catching it before it can escape
+    # into the water ... its shell warm against your palm" was held_not_gained
+    # for the crab the player asked to catch (8B run 150, T28).
+    rf"(?:catch(?:es|ing)?|caught)\s+(?:it|them|one|the|a|an)\b(?!\s+(?:{_CATCH_NOT_TAKE})\b)|"
     r"add(?:s|ed)?\s+(?:it|them|\w+)?\s*to\s+your\s+(?:pack|bag|inventory|satchel|pouch)|"
     r"now\s+(?:carry|carries|have|has|hold[s]?)"
     r")\b"
