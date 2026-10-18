@@ -151,7 +151,11 @@ def _names_pay(text: str) -> bool:
 
 _SUGGESTION_RE = re.compile(
     r"\b(?:let['’]s|let\s+us|we\s+could|we\s+might|you\s+might|you\s+could|maybe|perhaps|why\s+don['’]t\s+(?:we|you)|"
-    r"shall\s+we|how\s+about)\b",
+    r"shall\s+we|how\s+about|"
+    # "You should speak to the guildmaster. He'll know the details" filed a
+    # job "Clear Credit with Guild" on the player's own question (8B run 148,
+    # T59): advice on whom to see is no assignment.
+    r"you\s+should|you['’]d\s+(?:best|better|do\s+well\s+to)|you\s+ought\s+to|your\s+best\s+bet)\b",
     re.I,
 )
 

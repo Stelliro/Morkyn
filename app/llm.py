@@ -13831,7 +13831,14 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"(?!(?:myself|yourself|himself|herself|themselves|ourselves)\b)(?:[\w']+\s+){1,5}?(?:loose|free)\b|"
     r"(?:dig|digs|digging|dug|search\w*|rummag\w*|root(?:s|ing)?\s+(?:around|about|through)|sift\w*|"
     r"prob(?:e|es|ed|ing)|pok(?:e|es|ed|ing)|scour\w*|"
-    r"forag\w*|comb(?:s|ing)?\s+through)\b[^.!?\n]{0,60}?\bfor\s+(?:anything|something|whatever|any)\b)",
+    r"forag\w*|comb(?:s|ing)?\s+through)\b[^.!?\n]{0,60}?\bfor\s+(?:anything|something|whatever|any)\b|"
+    # A search of a place asks for what it holds: "crawl into the hull ... and
+    # search the hold the salvagers left alone" found a bundle of papers under a
+    # beam, refused as taken unasked and cut from the prose (8B run 148, T54).
+    r"(?:search|searches|searched|searching|sift|sifts|sifted|sifting|rummag\w*|scour\w*|comb(?:s|ed|ing)?\s+through|"
+    r"dig|digs|digging|dug|ransack\w*|turn(?:s|ed|ing)?\s+(?:over|out))\s+"
+    r"(?:through\s+|in\s+|under\s+|behind\s+|around\s+|about\s+|into\s+)?(?:the|this|that|each|every|its|their|his|her)\s+"
+    r"(?!(?:crowd|faces|horizon|sky|skyline|street|streets|room\s+for)\b)[a-z][\w'’-]*\b)",
     re.I,
 )
 # Not asking to buy: "a sunken cargo needs a crew I can't pay for" (7B run 7,
