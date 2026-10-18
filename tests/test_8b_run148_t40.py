@@ -172,6 +172,30 @@ class TheClerkAtTheOpsPlace(unittest.TestCase):
         self.assertFalse(_figure_gone("The cloaked man steps closer, his hand out.", "The cloaked man"))
 
 
+class AGuildIsNoPerson(unittest.TestCase):
+    """8B run 149, T2: NPC_NEW "The Salvage Guild" ROLE "guild authority" drew a person named Bertha for the guild."""
+
+    PROSE = ("“Thirty gold,” he says. “You answer to the guild. They’ll be waiting for you at the docks.” His gaze flicks to "
+             "the open ledger on his desk.")
+
+    def test_the_guild_is_dropped(self):
+        from app import world
+        from app.db import connect
+
+        _world()
+        with connect() as conn:
+            out = world._npcs_shown_in_prose(
+                conn, [{"name": "The Salvage Guild", "role": "guild authority", "location": "docks"}], self.PROSE)
+        self.assertEqual(out, [])
+
+    def test_a_guild_clerk_is_a_person(self):
+        from app.world import _GROUP_NAME_RE
+
+        self.assertFalse(_GROUP_NAME_RE.search("Griselda Kemp"))
+        self.assertFalse(_GROUP_NAME_RE.search("the guild clerk"))
+        self.assertTrue(_GROUP_NAME_RE.search("The Harbour Reeves"))
+
+
 class TheScarredManIsBertram(unittest.TestCase):
     """T69-T70: "the scarred man" minted Garret, then Kael, beside Bertram Northcott, "a burly man with a scar across his brow"."""
 
