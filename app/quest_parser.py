@@ -1162,22 +1162,39 @@ _EMPLOYER_WORDS = frozenset({
 })
 
 
-def _same_job_subject(title: str, other: str) -> bool:
+# A job named by what it is for, not by a thing: "Work Against My Debt", "Prove
+# Your Worth". The first concrete job from that giver is this job told properly.
+_ABSTRACT_JOB_WORDS = frozenset({
+    "debt", "debts", "credit", "dues", "worth", "trust", "favour", "favor", "help", "hand", "hands", "living",
+    "keep", "coin", "pay", "wage", "wages", "start", "chance", "luck", "name", "standing", "reputation", "mission",
+    "winter", "winters", "ledger", "book", "books", "answers", "report", "word",
+})
+
+
+def _same_job_subject(title: str, other: str, giver_name: str = "") -> bool:
     """Two job titles about the same thing.
 
     "Fetch the Crab from the Reeve" and "Fetch a Scroll from the Reeve's Office"
     are two jobs: the verb and the employer are shared, the thing fetched is not
-    (8B run 150, T37). A title with no subject word of its own ("Salvage Job")
-    decides nothing and counts as the same.
+    (8B run 150, T37). A title with no subject word of its own ("Salvage Job",
+    "Report to Oswin Bellamy" under Oswin) or an abstract one ("Work Against
+    My Debt") decides nothing and counts as the same.
     """
+    giver = {_stem(w) for w in re.findall(r"[a-z]+", str(giver_name or "").lower())}
+    function_words = {_stem(w) for w in (
+        "against", "toward", "towards", "with", "without", "into", "onto", "from", "over", "under", "upon",
+        "off", "out", "back", "for", "the", "and", "my", "your", "our", "his", "her", "their",
+    )}
 
     def subject(text: str) -> set[str]:
         stems = _stems(re.sub(r"['’]s\b", "", str(text or "")))
         lead = _stem(_lead_verb(text))
-        return {s for s in stems if s != lead and s not in _EMPLOYER_WORDS}
+        return {s for s in stems if s != lead and s not in _EMPLOYER_WORDS and s not in giver and s not in function_words}
 
     mine, theirs = subject(title), subject(other)
     if not mine or not theirs:
+        return True
+    if mine <= _ABSTRACT_JOB_WORDS or theirs <= _ABSTRACT_JOB_WORDS:
         return True
     return bool(mine & theirs)
 
@@ -1547,7 +1564,9 @@ def validate_quest_changes(
             # A job about another thing is another job: Rafe's scroll from the
             # reeve's desk was filed under his crab job, and his Coral Wreck
             # salvage under his crate loading (8B run 150, T37, T42).
-            if len(open_from_giver) == 1 and _same_job_subject(title, str(open_from_giver[0].get("title") or "")):
+            if len(open_from_giver) == 1 and _same_job_subject(
+                title, str(open_from_giver[0].get("title") or ""), giver_name=str(giver.get("name") or "")
+            ):
                 dup = open_from_giver[0]
         if dup is not None and same_offer is None:
             ref = dup.get("code") or dup.get("id")

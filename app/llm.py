@@ -12596,6 +12596,34 @@ def _verdict_string_list(value: Any, limit: int = 8) -> list[str]:
     return out
 
 
+def _patch_prose_too_short(text: str, draft: dict[str, Any]) -> bool:
+    """A patch that shrinks the scene to a fragment is no revision.
+
+    A verifier's "revise" replaced a 709-character scene with "the hidden
+    passage behind the tallest stacks, containing a rusted key" (70 chars), and
+    the depth retry's expansion was then refused for adding the worker back, so
+    the fragment shipped (8B run 150, T85). Under 300 characters and under
+    two fifths of the draft's prose, the draft stays and the drop is noted.
+    """
+    draft_text = _narration_value_text(draft.get("narration")) or _narration_value_text(draft.get("narration_segments"))
+    if not draft_text:
+        return False
+    # A draft that repeats itself is long in characters only: a short rewrite
+    # of it is the revision, not a fragment.
+    sentences = [s.strip().lower() for s in re.split(r"(?<=[.!?])\s+", draft_text) if s.strip()]
+    if len(sentences) >= 4 and len(set(sentences)) * 2 <= len(sentences):
+        return False
+    short = len(text.strip()) < 300 and len(text.strip()) < 0.4 * len(draft_text.strip())
+    if short:
+        try:
+            from app import turn_ledger
+
+            turn_ledger.note("verify", "patch_prose_too_short_not_taken", patch_chars=len(text.strip()), draft_chars=len(draft_text.strip()))
+        except Exception:
+            pass
+    return short
+
+
 def _merge_verifier_verdict(
     verdict_object: dict[str, Any],
     draft: dict[str, Any],
@@ -12646,12 +12674,18 @@ def _merge_verifier_verdict(
             if not text:
                 ignored.append(key)
                 continue
+            if _patch_prose_too_short(text, draft):
+                ignored.append(key)
+                continue
             merged["narration"] = text
             merged["narration_segments"] = [{"label": "scene", "text": text}]
             narration_replaced = True
         elif key == "narration_segments":
             segments = _coerce_segments(value)
             if not segments or not _narration_value_text(segments):
+                ignored.append(key)
+                continue
+            if _patch_prose_too_short(_narration_value_text(segments), draft):
                 ignored.append(key)
                 continue
             merged["narration_segments"] = segments

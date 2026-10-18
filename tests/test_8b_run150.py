@@ -160,6 +160,17 @@ class TheTakeIsOfTheThingNamedInItsClause(unittest.TestCase):
         self.assertFalse(_take_clause_names_item(self.LINE, "ledger", ["ledger"]))
 
 
+class AKeyInALockIsNoPicking(unittest.TestCase):
+    """T87: "I try the rusted key in the box's lock and open the lid" rolled lockpicking."""
+
+    def test_no_lockpicking_with_a_key(self):
+        from app.skill_checks import infer_check_from_action
+
+        for line in ("I try the rusted key in the box's lock and open the lid.", "I unlock the chest with the brass key."):
+            check = infer_check_from_action(line)
+            self.assertFalse(check and check.get("skill_code") == "lockpicking", (line, check))
+
+
 class AStrikeOnALedgerIsNoBlow(unittest.TestCase):
     """T53: "ask Rafe to strike the three gold from Mabel's ledger" rolled melee."""
 
@@ -196,6 +207,99 @@ class AWordInAnotherScriptGoes(unittest.TestCase):
 
         text = "Nell’s brow furrows. “The reeve’s man had it,” she says."
         self.assertEqual(repair_meta_leaks(text)[0], text)
+
+
+class ADroppedSentenceTakesItsQuoteAlong(unittest.TestCase):
+    """T87: the sentence opening a quote was cut and 'Find it before the tide comes in.”' stayed as an orphan."""
+
+    def test_the_rest_of_the_quote_goes_too(self):
+        from app.prose_state import drop_sentences
+
+        text = ("A name catches your eye. You unfold it, revealing a single line: “The reeve’s ledger is missing. "
+                "Find it before the tide comes in.” The weight of the note feels heavier than the box itself, and you turn back.")
+        out, dropped = drop_sentences(text, lambda s: "unfold" in s, floor=10)
+        self.assertEqual(out, "A name catches your eye. The weight of the note feels heavier than the box itself, and you turn back.")
+        self.assertEqual(len(dropped), 2)
+
+
+class AVerifierPatchMayNotShrinkTheScene(unittest.TestCase):
+    """T85: a "revise" replaced a 709-character scene with a 70-character summary and the fragment shipped."""
+
+    DRAFT = ("The Hold is a place of quiet industry, its wooden beams groaning under the weight of salvaged crates. You move past "
+             "the worker and head toward the far corner, where the tallest stacks loom. Behind the tallest stack, you spot a "
+             "narrow passage, half-concealed by a tarp. You push through the dust, and in the dim light you spot a key dangling "
+             "from a broken chain, half-buried in rust.")
+
+    def test_the_draft_prose_stays(self):
+        from app.llm import _merge_verifier_verdict
+
+        merged = _merge_verifier_verdict(
+            {"verdict": "revise", "issues": ["narration must be a single paragraph"],
+             "patch": {"narration": "The hidden passage behind the tallest stacks, containing a rusted key."}},
+            {"narration": self.DRAFT}, None,
+        )
+        self.assertEqual(merged.get("narration"), self.DRAFT)
+
+    def test_a_real_rewrite_is_taken(self):
+        from app.llm import _merge_verifier_verdict
+
+        rewrite = self.DRAFT.replace("a key dangling", "a rusted key dangling")
+        merged = _merge_verifier_verdict({"verdict": "revise", "patch": {"narration": rewrite}}, {"narration": self.DRAFT}, None)
+        self.assertEqual(merged.get("narration"), rewrite)
+
+
+class AnAnswerOpeningOnTheQuoteIsThePlayers(unittest.TestCase):
+    """T91: after Nell's question, a paragraph opening on a bare "I found a few things ..." stood as the scene's."""
+
+    LINE = ("I go inside and set the rusted box on Nell's desk. \"The guild's missing goods, from a hidden passage under the "
+            "Hold. Thirty gold, as agreed.\"")
+    PROSE = ("You go inside and set the rusted crate on Nell's desk. \"The guild's missing goods, from a hidden passage under "
+             "the Hold. Thirty gold, as agreed,\" you say. The guildmaster's eyes narrow as she opens the crate.\n\n"
+             "Nell's gaze flicks to you. \"You've brought it back,\" she says. \"But I need to know—did you find anything "
+             "else? The passage was sealed tight.\"\n\n"
+             "\"I found a few things. A map, some old tools, and... a name carved into the wall.\" You pause, the weight of the "
+             "words settling on your tongue. \"It wasn't the guild's name. It was something else.\"\n\n"
+             "Nell's brow furrows. \"A name?\" she repeats. \"Some things are better left buried.\"")
+
+    def test_the_invented_answer_is_dropped_and_the_scene_cut(self):
+        import re
+
+        from app.llm import _scene_cut_point
+        from app.narration_pipeline import drop_invented_player_speech
+
+        _kept, spoken = drop_invented_player_speech(re.split(r"\n\s*\n", self.PROSE), self.LINE)
+        self.assertTrue(any("I found a few things" in s for s in spoken), spoken)
+        point = _scene_cut_point(self.PROSE, self.LINE)
+        self.assertIsNotNone(point)
+        self.assertIn("sealed tight", point["npc_line"])
+
+    def test_the_other_persons_bare_line_with_a_player_beat_stays(self):
+        import re
+
+        from app.narration_pipeline import drop_invented_player_speech
+
+        prose = ("You set the crate down. Nell looks up.\n\n\"Three gold?\" You hold her stare.\n\n"
+                 "\"You've brought it back,\" she says.")
+        _kept, spoken = drop_invented_player_speech(re.split(r"\n\s*\n", prose), "I set the crate down and wait.")
+        self.assertEqual(spoken, [])
+
+
+class ARepeatedPieceTakesItsTagAlong(unittest.TestCase):
+    """T98: the repeated piece went and 'you repeat, the weight of the unspoken debt ...' stayed."""
+
+    LINE = "\"Reeve. Mabel's three gold is struck. I'd hear from you what I'm owed.\" I wait."
+    DRAFT = ("“Reeve. Mabel's three gold is struck. I'd hear from you what I'm owed,” you say. Raven's gaze lingers. "
+             "“You mention Mabel's three gold,” he says.\n\n"
+             "You cut him off with a raised hand. “I'd hear from you what I'm owed,” you repeat, the weight of the "
+             "unspoken debt pressing against your ribs. Raven's jaw tightens.")
+
+    def test_no_dangling_tag(self):
+        from app.narration_pipeline import keep_player_words
+
+        out, changes = keep_player_words(self.DRAFT, self.LINE)
+        self.assertNotIn("you repeat", out)
+        self.assertIn("Raven's jaw tightens.", out)
+        self.assertIn("repeated_piece_of_line_dropped", [c.get("action") for c in changes])
 
 
 class PraiseOfWorkIsNoJob(unittest.TestCase):
