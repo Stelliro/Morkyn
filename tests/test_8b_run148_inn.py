@@ -72,6 +72,37 @@ class AnOfferSaidBack(unittest.TestCase):
         self.assertEqual(result["player"].get("gold_delta"), -5, note)
 
 
+class CoinSetDownForWords(unittest.TestCase):
+    """T51: three gold put on the bar for Eldric's story were voided as a purchase of a refused GRANT "clue"."""
+
+    LINE = "I put three gold on the bar for Eldric and swear to keep it to myself. \"Now, the cargo. What was it?\""
+    PROSE = ("You put three gold on the bar for Eldric and swear to keep it to yourself. \"Now, the cargo. What was it?\" "
+             "you ask. The old barkeep’s face tightens. \"The Stormbreaker’s cargo was never meant to be found,\" he says. "
+             "\"It was a ship full of relics—old, cursed things.\"")
+
+    def test_the_players_own_payment_stands(self):
+        from app.world import _void_unbought_spend
+
+        result = {"player": {"gold_delta": -3}, "_dsl": {"grants": ["clue about the Stormbreaker's cargo"]}}
+        voided = _void_unbought_spend(result, ["clue about the Stormbreaker's cargo"], [], None, self.LINE, self.PROSE)
+        self.assertFalse(voided)
+        self.assertEqual(result["player"]["gold_delta"], -3)
+
+    def test_coin_refused_stays_in_the_purse(self):
+        from app.world import _void_unbought_spend
+
+        prose = "You put three gold on the bar. Eldric pushes the coins back across the wood. \"Keep your gold,\" he says."
+        result = {"player": {"gold_delta": -3}, "_dsl": {"grants": ["clue"]}}
+        self.assertTrue(_void_unbought_spend(result, ["clue"], [], None, "I put three gold on the bar for the story.", prose))
+
+    def test_a_purchase_of_nothing_is_still_voided(self):
+        from app.world import _void_unbought_spend
+
+        prose = "The stall is bare. Nothing changes hands."
+        result = {"player": {"gold_delta": -12}, "_dsl": {"grants": ["coal", "cloth"]}}
+        self.assertTrue(_void_unbought_spend(result, ["coal", "cloth"], [], None, "I buy coal and cloth.", prose))
+
+
 class AQualityOfAMan(unittest.TestCase):
     PROSE = ("You finish the meal and ask Eldric for a room for the night. Eldric leans back in his chair, the worn "
              "leather creaking beneath him, and eyes you with the weight of a man who has seen too many travelers come "
