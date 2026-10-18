@@ -431,6 +431,43 @@ prose (F99), a self-named figure never stored (F101), a known name given to anot
 (F103), a place asked for by its role (F108), a mark worn by two known people (F26). Run 149
 starts on this code.
 
+### Run 149 (2026-10-18): the first 100-turn run on the run-148 fixes
+
+Run 149 reached T100 (same setup, 8B, 16k context, 11-66 s a turn) on the code as of commit
+4369693 (the run-148 fixes), with every fault from T1 to T99 fixed by class on main as the run
+went, or logged. Commits 7f004d5 through 7396584, all tested; the full suite on 2e434a3 showed
+six regressions from the new item rules, all mended in c12f2bf (coin kinds, "shore" stays with
+the mining trigger, a find is a new thing, coin takes kept as asked, a draft's hand-over
+counts). Not a clean run: about one state fault every two turns in T1-T60, fewer after.
+
+Fixed by class this run:
+
+- Items: one or many of a thing is one row; held is not gained (a thing shown only in the
+  player's hands came from nowhere); a thing in hand under a new name is the thing held; taking
+  back one's own thing is no new one, and a thing owned grows only on a take, find or hand-over
+  in its own sentences; what the player hands over is gone (the bare "hand over", and a holding
+  phrase never undoes a loss); coin given away is not kept as asked; the container a thing came
+  out of is not taken; a lid that reveals a thing finds it; a find lists everything in its
+  sentence; a description is cut to its name; bringing up whatever is there asks for what comes
+  up; a short name headed by a coin word is coin, a kind of coin is a curio.
+- Coin: the sum said as the coin changes hands is the gain (a pouch tossed to the player with
+  its coin named beside it); a bed and a meal bought are a spend, not a purchase of nothing.
+- People: a body of people (the guild) is no person; a figure wearing a known person's mark
+  binds to them town-wide when one wears it; a remembered figure is no one here; a person shown
+  at another place stays there; a lookup never mints a place (the role and mark lookups had
+  made "The Edge Of The Dark Waters").
+- Places and moves: a venue seen on the way is not entered; out of hiding is not out of the
+  building; an invitation to come along is the player going; a night slept ends at dawn.
+- Acts: an act begun ("start the dive") is the act.
+
+Logged only (docs/showcase/run-fault-log-2026-10-18.md, F2 cont. 7 to F137): the stale check
+opponent on a move turn, a self-named figure never stored, the skill picked by a decorative
+noun, a doorway line moving to a place named in passing, the position phrase stored as a place,
+two spellings minted in one turn, a role stored as a name and a misspelt role drawn again, a
+find on a failed roll, a declared take with no op, the inn refused as closed on a sleeping
+line, "I'm going to" said aloud, the clock's digits and the act-outcome text in the prose.
+Run 150 starts on this code.
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
