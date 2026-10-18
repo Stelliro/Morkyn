@@ -6877,6 +6877,17 @@ def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute:
         return {"ok": True, "reason": ""}
     if venue_id and int(player_location_id or 0) == venue_id:
         return {"ok": True, "reason": ""}
+    # Open ground under a place has no door: the walk to The Stormbreaker's
+    # Wreck, filed under the harbour, "is entered from The Harbour; the
+    # journey ends there" and left the player on the quay while the prose
+    # hauled at the chest (8B run 148, T79). A child with no kind, no keeper
+    # and no building word in its name is reached by the walk itself.
+    name = str(venues._field(venue_row, "name", "") or "")
+    if (
+        not kind and parent_id and not int(venues._field(venue_row, "keeper_npc_id", 0) or 0)
+        and not str(venues._field(venue_row, "plot_id", "") or "") and name and not _BUILDING_HEAD_RE.search(name)
+    ):
+        return {"ok": True, "reason": ""}
     plot_ref = str(venues._field(venue_row, "plot_id", "") or "")
     if plot_ref:
         # A plot's door is a tile, not a parent row (docs/TownGrid.md 5.1): the
