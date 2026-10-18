@@ -44,9 +44,45 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules("app")
 
+# Packages the app shares with runtime packs ship whole: packaging/build_packs.py
+# leaves them out of a pack, and the llama.cpp server needs parts the game never
+# imports ("fastapi.middleware.cors", 2026-10-19). Keep this list in step with
+# build_packs.SHIPPED.
+_shared_datas = []
+for _shared in ("fastapi", "starlette", "uvicorn", "pydantic", "pydantic_core", "anyio", "sniffio", "idna", "h11",
+                "click", "annotated_types", "typing_inspection", "numpy", "PIL"):
+    try:
+        hiddenimports += collect_submodules(_shared, filter=lambda name: ".tests" not in name and ".testing" not in name)
+    except Exception as exc:
+        print(f"morkyn.spec: could not collect {_shared}: {exc}")
+    try:
+        _shared_datas += collect_data_files(_shared)
+    except Exception:
+        pass
+
+# The whole standard library: runtime packs (llama-cpp-python and its
+# dependencies) are imported after the build and need modules the game never
+# imports itself ("import pickletools" in diskcache failed in the first slim
+# build, 2026-10-19). GUI, test and demo packages stay out.
+_STDLIB_SKIP = {"tkinter", "turtle", "turtledemo", "idlelib", "test", "lib2to3", "ensurepip", "venv", "pydoc_data",
+                "__phello__", "_tkinter", "antigravity", "this"}
+for _name in sorted(getattr(sys, "stdlib_module_names", ())):
+    if _name in _STDLIB_SKIP or _name.startswith("_test"):
+        continue
+    try:
+        __import__(_name)
+    except Exception:
+        continue
+    hiddenimports.append(_name)
+    try:
+        hiddenimports += [m for m in collect_submodules(_name) if not any(part in _STDLIB_SKIP for part in m.split("."))]
+    except Exception:
+        pass
+
 datas = [
     (str(ROOT / "app" / "comfy_workflows"), "app/comfy_workflows"),
 ]
+datas += _shared_datas
 binaries = []
 # The app build does not ship llama-cpp-python: it is a runtime pack (CUDA, CPU,
 # Metal, Vulkan) the app downloads for the player's hardware, see
