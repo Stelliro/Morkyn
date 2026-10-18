@@ -110,5 +110,25 @@ class TheClerkStaysBehind(unittest.TestCase):
         self.assertFalse(_stays_behind("Aldous falls in beside you on the path.", "Aldous"))
 
 
+class TheOfficeUnderAnotherSpelling(unittest.TestCase):
+    """T66: "go into the Reeves' Office" made a third office beside "The Reeve's Office" and "Reeves’ Office"."""
+
+    def test_the_known_office_is_the_one_entered(self):
+        from app import world
+        from app.db import connect
+
+        _world("The Reeve's Office")
+        line = "I turn from Griselda and go into the Reeves' Office to find Ulric at his desk."
+        prose = ("You turn from Griselda and slip through the doors of the Reeves’ Office, the wood creaking under your weight. "
+                 "At the far end, behind a heavy oak table, sits Ulric.")
+        with connect() as conn:
+            harbour = int(conn.execute("SELECT id FROM locations WHERE code = 'L90'").fetchone()[0])
+            before = int(conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0])
+            name = world._civic_building_requested(conn, harbour, line, prose)
+            after = int(conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0])
+        self.assertEqual(name, "The Reeve's Office")
+        self.assertEqual(before, after)
+
+
 if __name__ == "__main__":
     unittest.main()

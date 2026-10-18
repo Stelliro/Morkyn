@@ -11153,7 +11153,7 @@ def _named_building_requested(conn, parent_id: int, wanted: str, narration: str)
     for row in rows:
         if _venue_name_in_text(str(row["name"] or ""), f"the {proper}".lower()) or str(row["name"] or "").lower() in {
             proper.lower(), f"the {proper}".lower()
-        }:
+        } or _same_place_name(str(row["name"] or ""), proper):
             return str(row["name"] or "")
     parent = _location_row(conn, parent_id)
     if parent is not None and str(parent["name"] or "").lower() in {proper.lower(), f"the {proper}".lower()}:
@@ -11297,7 +11297,12 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
     rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
     for row in rows:
         stored = humanize_place_name(str(row["name"] or "")).lower()
-        if stored.endswith(place.lower()) or stored == f"the {place.lower()}":
+        # Under any spelling of the owner: "go into the Reeves' Office" made a
+        # third office beside "The Reeve's Office" and "Reeves’ Office" (8B
+        # run 148, T66).
+        if stored.endswith(place.lower()) or stored == f"the {place.lower()}" or _same_place_name(
+            str(row["name"] or ""), f"The {place}"
+        ):
             return str(row["name"] or "")
     unspoken = _unspoken(narration).lower()
     if head not in unspoken or _prose_stops_walk(head, narration):
