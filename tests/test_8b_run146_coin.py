@@ -145,7 +145,24 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
                  "bowl a reminder of your dwindling funds. You are given a small bed.")
         result = {"narration": prose, "player": {"gold_delta": 30}}
         note = _settle_stated_gold(result, "I am dead on my feet; I go to the Stag and Heron, pay for a bed, and sleep until morning.")
-        self.assertLess(result["player"].get("gold_delta", 0), 0, note)
+        # No price named anywhere: the spend is a rolled small amount, not the model's thirty.
+        self.assertEqual(result["player"].get("gold_band"), "-small", note)
+        self.assertNotIn("gold_delta", result["player"])
+
+    def test_paying_a_person_for_a_meal_with_a_gain_op_is_a_small_spend(self):
+        # 8B run 148, T45: "pay Eldric for them" with GOLD 30 grew the purse by a rolled 39.
+        prose = ("You order the fish and a mug of ale, pay Eldric for them, and let the matter of the stranger drop for now. "
+                 "The ale is warm and the fish is fresh, though the bread is stale. You sit by the fire.")
+        result = {"narration": prose, "player": {"gold_delta": 30}}
+        note = _settle_stated_gold(result, "I order the fish and a mug of ale, pay Eldric for them, and let the matter of the stranger drop for now.")
+        self.assertEqual((note or {}).get("source"), "purchase_gain_flipped", note)
+        self.assertEqual(result["player"].get("gold_band"), "-small", note)
+
+    def test_a_named_price_on_a_purchase_is_the_spend(self):
+        prose = ("\"Two gold for the bed,\" the innkeeper says. You pay for the bed and climb the stairs.")
+        result = {"narration": prose, "player": {"gold_delta": 30}}
+        _settle_stated_gold(result, "I pay for a bed and go up.")
+        self.assertEqual(result["player"].get("gold_delta"), -2)
 
     def test_looking_at_goods_for_sale_costs_nothing(self):
         prose = "The stall holds lanterns and coils of rope. You look them over and move on."

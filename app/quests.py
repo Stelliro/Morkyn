@@ -545,6 +545,23 @@ def _overlap(player_words: list[set[str]], forms: set[str]) -> list[str]:
     return [sorted(w)[0] for w in player_words if w & forms]
 
 
+def _act_clause(own: str, verb_forms: set[str]) -> str:
+    """The clause of the line that holds the act's verb: what the act is done to is said there.
+
+    "I climb back onto the planks ..., then walk to the Salvage Guild's Tally
+    House to report that the wreck has been picked clean" finished "Salvage
+    the wreck" on "salvage" and "wreck" from the walk, with "climb" as the act
+    (8B run 148, T40). A later clause's words are no object of the act.
+    """
+    clauses = [c for c in re.split(r"\s*[,;:]\s*(?:(?:and\s+)?then\s+)?|\s+(?:and\s+)?then\s+", str(own or "")) if c.strip()]
+    if len(clauses) <= 1:
+        return str(own or "")
+    for clause in clauses:
+        if any(w in verb_forms for w in re.findall(r"[a-z']+", clause.lower())):
+            return clause
+    return str(own or "")
+
+
 # Act families done at a place, not to a thing: the line's object is the site.
 _SITE_ACT_FAMILIES = frozenset({"swim"})
 
@@ -622,7 +639,7 @@ def match_quest_step(
             # review: with Finnian out, the same polish finished Q2 instead).
             continue
         drop = {giver_first} if giver_first else set()
-        words = _content_words(own, drop=drop)
+        words = _content_words(_act_clause(own, all_verb_forms), drop=drop)
         text_forms: set[str] = set()
         for forms in _content_words(f"{step_text} {quest.get('title') or ''}", drop=drop):
             text_forms |= forms
