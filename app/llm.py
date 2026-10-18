@@ -13840,7 +13840,13 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"(?:search|searches|searched|searching|sift|sifts|sifted|sifting|rummag\w*|scour\w*|comb(?:s|ed|ing)?\s+through|"
     r"dig|digs|digging|dug|ransack\w*|turn(?:s|ed|ing)?\s+(?:over|out))\s+"
     r"(?:through\s+|in\s+|under\s+|behind\s+|around\s+|about\s+|into\s+)?(?:the|this|that|each|every|its|their|his|her)\s+"
-    r"(?!(?:crowd|faces|horizon|sky|skyline|street|streets|room\s+for)\b)[a-z][\w'’-]*\b)",
+    r"(?!(?:crowd|faces|horizon|sky|skyline|street|streets|room\s+for)\b)[a-z][\w'’-]*\b|"
+    # Bringing up or back whatever is there asks for what comes up: "bring up
+    # whatever the guild's token was meant to open" found a box of coins, a
+    # compass and an envelope, refused as taken unasked and cut from the prose
+    # (8B run 149, T23).
+    r"(?:bring|brings|bringing|brought|haul\w*|carry|carries|carrying|fetch\w*|retriev\w*|recover\w*|salvag\w*|raise|raises|raising)\s+"
+    r"(?:up|out|back|ashore|to\s+the\s+surface)\s+(?:whatever|what|anything|something|any|all|everything)\b)",
     re.I,
 )
 # Not asking to buy: "a sunken cargo needs a crew I can't pay for" (7B run 7,

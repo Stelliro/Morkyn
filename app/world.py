@@ -14828,7 +14828,11 @@ def _prose_says_it_arrived(text: str, name_l: str, tokens: list[str]) -> bool:
     if _ACQUIRE_PROSE_RE.search(text):
         return True
     for match in _DISCOVER_GAIN_RE.finditer(text):
-        window = text[match.end() : match.end() + _DISCOVER_NAME_WINDOW]
+        # The rest of the find's sentence: "you find a collection of old coins,
+        # a broken compass, and a single, unmarked envelope" lost the envelope
+        # past a fixed window (8B run 149, T23).
+        rest = re.split(r"[.!?;]", text[match.end():], maxsplit=1)[0]
+        window = rest if len(rest) > _DISCOVER_NAME_WINDOW else text[match.end() : match.end() + _DISCOVER_NAME_WINDOW]
         if (name_l and name_l in window) or any(_tok_in(tok, window) for tok in tokens):
             return True
     return False
@@ -14984,7 +14988,10 @@ def _sentence_item_events_detail(
         if player:
             events.append((m.start(), "gain", not text_l.startswith("receiv")))
     for m in _DISCOVER_GAIN_RE.finditer(lower):
-        window = lower[m.end(): m.end() + _DISCOVER_NAME_WINDOW]
+        # The rest of the find's sentence, so a list of finds counts each one
+        # ("old coins, a broken compass, and a single, unmarked envelope", 8B run 149, T23).
+        rest = re.split(r"[.!?;]", lower[m.end():], maxsplit=1)[0]
+        window = rest if len(rest) > _DISCOVER_NAME_WINDOW else lower[m.end(): m.end() + _DISCOVER_NAME_WINDOW]
         if ((name_l and name_l in window) or any(_tok_in(tok, window) for tok in tokens)) and _subject_is_player(sentence, m.start(), m.group(0)):
             events.append((m.start(), "gain", True))
     if not owned:
@@ -16151,6 +16158,21 @@ _ANOTHER_ONE_RE = re.compile(
 )
 
 
+def _arrives_in_item_sentences(text: str, name_l: str, tokens: list[str]) -> bool:
+    """A sentence about the item shows it taken, found or received (not only held)."""
+    for _s, _e, sentence in prose_state_sentence_spans(str(text or "")):
+        low = sentence.lower()
+        if not _sentence_mentions_item(low, name_l, tokens):
+            continue
+        if _ACQUIRE_PROSE_RE.search(low) or _DISCOVER_GAIN_RE.search(low) or re.search(
+            r"\byou\s+(?:\w+ly\s+)?(?:pocket|pockets|pocketed|tuck|tucks|tucked|stow|stows|stowed|gather|gathers|gathered|"
+            r"collect|collects|collected|scoop|scoops|scooped|grab|grabs|grabbed|snatch\w*|lift|lifts|lifted|pull|pulls|pulled|"
+            r"dig|digs|dug|pry|pries|pried|fish|fishes|fished|haul|hauls|hauled|retrieve|retrieves|retrieved|pluck\w*)\b", low
+        ):
+            return True
+    return False
+
+
 def _another_of_named(text: str, name_l: str, tokens: list[str]) -> bool:
     """A sentence about the item says it is another one ("another key", "a second coil")."""
     for _s, _e, sentence in prose_state_sentence_spans(str(text or "")):
@@ -16436,7 +16458,7 @@ def _filter_inventory_changes(
         # guild mark'" put a third key beside the tarnished key just pocketed
         # (8B run 149, T7). Same head noun as a thing owned, and nothing in the
         # prose arrives, is handed over or found: the grant renames, not adds.
-        if grounded and not existing and tokens and not _prose_says_it_arrived(final_text, name_l, tokens) and not (
+        if grounded and not existing and tokens and not _arrives_in_item_sentences(final_text, name_l, tokens) and not (
             _prose_item_handed_over(final_text, name_l, tokens, owned=False)
         ):
             head = tokens[-1]
@@ -18750,6 +18772,11 @@ def _known_by_mark(conn, text: str, hints: list[str], new_name: str = "", place:
             return None
         marks_q = ",".join("?" for _ in places)
         rows = conn.execute(f"SELECT * FROM npcs WHERE location_id IN ({marks_q})", tuple(places)).fetchall()
+        # A rare mark worn by exactly one known person anywhere is theirs too:
+        # "a wiry man with a scar running from his temple to his jaw" stepping
+        # out of the salvage yard's shadows at the Dredges minted Gareth beside
+        # Garrick, the scarred man filed at the yard (8B run 149, T29).
+        everyone = conn.execute("SELECT * FROM npcs").fetchall()
     except Exception:
         return None
     for hint in hints or []:
@@ -18758,18 +18785,25 @@ def _known_by_mark(conn, text: str, hints: list[str], new_name: str = "", place:
         if not marks:
             continue
         for mark in sorted(marks):
-            wearers = []
-            for row in rows:
-                name = str(row["name"] or "").strip()
-                if not name or name.lower() == str(new_name or "").strip().lower():
-                    continue
-                if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", text, re.I):
-                    continue  # named apart in the same prose: the figure is someone else beside them
-                if mark in _mark_keys(f"{row['summary'] or ''} {row['known_facts'] or ''}"):
-                    wearers.append(row)
-            if len(wearers) == 1:
-                return wearers[0], hint, mark
+            for pool in (rows, everyone):
+                found = _one_wearer(pool, mark, text, new_name)
+                if found is not None:
+                    return found, hint, mark
     return None
+
+
+def _one_wearer(rows, mark: str, text: str, new_name: str = ""):
+    """The one person in ``rows`` whose record carries ``mark`` and who is not named apart in the prose."""
+    wearers = []
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        if not name or name.lower() == str(new_name or "").strip().lower():
+            continue
+        if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", text, re.I):
+            continue
+        if mark in _mark_keys(f"{row['summary'] or ''} {row['known_facts'] or ''}"):
+            wearers.append(row)
+    return wearers[0] if len(wearers) == 1 else None
 
 
 def _known_here_in_role(conn, role_words: set[str], text: str, new_name: str = "", place: Any = None) -> Any:
