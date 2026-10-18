@@ -14485,6 +14485,12 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
                           unspoken[max(0, m.start() - 40):m.start()], re.I)
             for m in re.finditer((name + r"\s*" if name else "") + re.escape(tag), unspoken)
         )
+        # Said to be absent is not shown: "Rafe [[B]], the harbour reeve, is
+        # not here" moved Rafe to the dock (8B run 150, T24).
+        if shown_here and str(row["name"] or "") and not _named_as_present(
+            unspoken, r"(?<!\w)" + re.escape(str(row["name"] or "")) + r"(?!\w)", flags=re.I
+        ):
+            shown_here = False
         if not shown_here:
             continue
         # Shown somewhere else by the same sentence: "Hugh Fairweather [[G]]

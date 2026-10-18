@@ -237,6 +237,18 @@ class ANightSleptEndsAtDawn(unittest.TestCase):
         self.assertEqual(none, 0)
 
 
+class AnAttributionTailIsNoAsk(unittest.TestCase):
+    """8B run 150, T14: "search the wreck's hold for anything alive, as Mabel asked" rolled persuasion against Mabel."""
+
+    def test_as_mabel_asked_rolls_no_persuasion(self):
+        import json
+
+        from app.skill_checks import infer_check_from_action
+
+        check = infer_check_from_action("I search the wreck's hold for anything alive, as Mabel asked.", {}) or {}
+        self.assertNotIn("persuasion", json.dumps(check))
+
+
 class TheScarredManIsBertram(unittest.TestCase):
     """T69-T70: "the scarred man" minted Garret, then Kael, beside Bertram Northcott, "a burly man with a scar across his brow"."""
 
