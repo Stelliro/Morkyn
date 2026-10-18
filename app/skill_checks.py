@@ -1357,6 +1357,11 @@ def resolve_check(
         degree = "bad_nothing"
         outcome = "failure"
 
+    # Routine talk fails at worst: a natural 1 on a plain question is an
+    # awkward answer, not a brutal miss (8B run 150, T84: "ask the worker
+    # about the missing chest" wrote "something breaks, bleeds, or betrays you").
+    if fumble and routine and str(skill.get("category") or "") == "social":
+        degree, outcome, fumble = "bad_nothing", "failure", False
     mishap = False
     injury: dict[str, Any] | None = None
     blunder: dict[str, Any] | None = None
@@ -1368,11 +1373,15 @@ def resolve_check(
     # against DC 18 "fumbled" on any roll of 14 or less: 28 of 49 asks in
     # playtest #88. Only the natural 1 is critical now; the rest stays a
     # failure that went badly.
+    # A plain question is routine talk: a natural 1 on "ask the worker about
+    # the missing chest" wrote "A brutal miss: something breaks, bleeds, or
+    # betrays you" (8B run 150, T84). Routine talk fails at worst.
     if (
         cfg.get("unskilled_mishaps")
         and unskilled
         and outcome in {"failure", "critical_failure"}
         and (fumble or (not routine and degree == "bad_nothing"))
+        and not (routine and social)
     ):
         mishap = True
         degree = "critical_failure" if fumble else "unskilled_mishap"
