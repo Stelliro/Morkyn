@@ -236,7 +236,7 @@ def main() -> int:
 
         db_turn = int((state.get("turn") or 0))
         metrics = _prompt_metrics(_trace_for_turn(trace_dir, db_turn))
-        with connect() as conn:
+        with connect().closing() as conn:
             row_total = _db_rows(conn)
 
         rows.append(

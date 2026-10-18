@@ -220,7 +220,7 @@ def player_snapshot(conn=None) -> dict[str, Any]:
     if conn is None:
         from app.db import connect
 
-        with connect() as owned:
+        with connect().closing() as owned:
             return player_snapshot(owned)
 
     snapshot: dict[str, Any] = {

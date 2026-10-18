@@ -327,7 +327,7 @@ def _normalize_tts_config(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def _read_stored_row() -> dict[str, Any]:
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = ?", (TTS_CONFIG_KEY,)).fetchone()
     except Exception:
         return {}
@@ -386,7 +386,7 @@ def update_tts_config(payload: dict[str, Any]) -> dict[str, Any]:
             if key not in payload or payload.get(key) is None:
                 next_cfg[key] = blank
     clean = _normalize_tts_config(next_cfg)
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (TTS_CONFIG_KEY, json.dumps(clean, ensure_ascii=True)),

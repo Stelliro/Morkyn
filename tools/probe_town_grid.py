@@ -110,7 +110,7 @@ def main() -> None:
     print(f"skeleton(centre {centre['side']}): {(time.perf_counter() - start) * 1000:.1f} ms")
 
     cells_by_xy = {(int(c["x"]), int(c["y"])): c for city in cities for c in city["cells"]}
-    with connect() as conn:
+    with connect().closing() as conn:
         map_id = str(chart["id"])
         # Warm the imports (app.world, venues, local_intel, pools) so the first
         # timed cell measures generation, not module loading.

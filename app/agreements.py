@@ -28,7 +28,7 @@ Wiring (not done):
   app/world.py:get_state() -> beside state["open_quest_offers"]:
       state["agreements"] = agreements.state_view(conn, world_time=state["world_time"], cset=currency.active_set(conn))["agreements"].
   app/world.py:build_prompt_context() -> beside the open_leads block, in its shape (try/except, a short-lived connection):
-      with connect() as c_agr: block = agreements.prompt_block(agreements.open_agreements(c_agr), state["world_time"], currency.active_set(c_agr))
+      with connect().closing() as c_agr: block = agreements.prompt_block(agreements.open_agreements(c_agr), state["world_time"], currency.active_set(c_agr))
       stored as prompt_context["agreements_block"] when it is not ""; the prompt builder prints it where it prints open_leads.
   app/main.py:_answer_offer() -> the same shape for GET /api/agreements (open_agreements + state_view) and
       POST /api/agreements/{id}/cancel through agreements.cancel(conn, id, world_time=..., turn=turn, by="player"), 409 when None.

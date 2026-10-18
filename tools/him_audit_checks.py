@@ -24,7 +24,7 @@ def main() -> int:
 
     init_db()
 
-    with connect() as c:
+    with connect().closing() as c:
         kept = _filter_inventory_changes(
             c,
             [{"name": "God Sword", "quantity_delta": 1, "justified": True, "source": "loot"}],
@@ -56,7 +56,7 @@ def main() -> int:
         assert kept4 == [], kept4
         print("inventory filter hardened: ok")
 
-    with connect() as c:
+    with connect().closing() as c:
         c.execute(
             "UPDATE gm_events SET status='cancelled' WHERE status IN ('pending','active','seeded','')"
         )
@@ -92,7 +92,7 @@ def main() -> int:
     print("ambient: ok")
 
     ev = queue_quest_stage_event("him_force_check", force=True, summary="Portal")
-    with connect() as c:
+    with connect().closing() as c:
         row = c.execute("SELECT payload FROM gm_events WHERE id=?", (ev["id"],)).fetchone()
         pl = json.loads(row["payload"] or "{}")
         assert pl.get("replace_turn") is True and pl.get("immutable") is True, pl
@@ -101,7 +101,7 @@ def main() -> int:
     # Pass 2: new NPC shells + no apex spawn + capacity dimensional reject
     from app.world import _upsert_npc, _apply_inventory_capacity_modifiers, _apply_skills
 
-    with connect() as c:
+    with connect().closing() as c:
         # Ensure location
         row = c.execute("SELECT id FROM locations LIMIT 1").fetchone()
         if not row:

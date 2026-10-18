@@ -34,7 +34,7 @@ Wiring (not done):
   app/world.py:build_prompt_context() -> one or two world facts beside the location facts, read from the
       state dict (the function holds no connection and no sid, day or meta locals):
       meta = state.get("settlement_meta"); day = int((state.get("world_time") or {}).get("day") or 1);
-      when meta carries an id: with connect() as c: lines = economy.market_lines(
+      when meta carries an id: with connect().closing() as c: lines = economy.market_lines(
       economy.market_snapshot(c, str(meta["id"]), day=day)["multipliers"], economy.settlement_profile(meta))
   app/trade.py:settlement_price() -> economy.settlement_multiplier(conn, settlement_id, category, day=day)
       (trade is a new module of this same pass; this is the one in-cluster consumer and the only call that

@@ -250,7 +250,7 @@ def campaign_seed(conn: sqlite3.Connection | None = None) -> int:
     if key in _SEED_CACHE:
         return _SEED_CACHE[key]
     if conn is None:
-        with connect() as owned:
+        with connect().closing() as owned:
             return campaign_seed(owned)
     row = conn.execute("SELECT value FROM settings WHERE key = 'campaign_rng_seed'").fetchone()
     if row:
@@ -769,7 +769,7 @@ def record_rolls(
 def recent_rolls(limit: int = 40, turn: int | None = None) -> list[dict[str, Any]]:
     """Audit feed for the UI / debug pane."""
     limit = max(1, min(500, int(limit)))
-    with connect() as conn:
+    with connect().closing() as conn:
         if turn is None:
             rows = conn.execute(
                 "SELECT * FROM dice_rolls ORDER BY id DESC LIMIT ?", (limit,)

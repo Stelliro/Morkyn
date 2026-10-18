@@ -492,7 +492,7 @@ def _load_store() -> dict[str, Any]:
     try:
         from app.db import connect
 
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = ?", (SETTINGS_KEY,)).fetchone()
     except Exception:
         return {}
@@ -511,7 +511,7 @@ def _load_store() -> dict[str, Any]:
 def _save_store(data: dict[str, Any]) -> None:
     from app.db import connect
 
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (SETTINGS_KEY, json.dumps(data, ensure_ascii=True)),

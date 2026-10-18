@@ -129,7 +129,7 @@ def main() -> int:
     )
 
     def locations() -> list[dict]:
-        with connect() as conn:
+        with connect().closing() as conn:
             rows = [
                 dict(r)
                 for r in conn.execute(

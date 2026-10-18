@@ -266,7 +266,7 @@ def mint_name(subject: str, *, seed_parts: tuple[Any, ...] = ()) -> str:
             from app.db import connect
             from app.world import unique_person_name
 
-            with connect() as conn:
+            with connect().closing() as conn:
                 return unique_person_name(conn, seed)
         except Exception:
             return invent_person_name(seed=seed)

@@ -248,7 +248,7 @@ def main() -> int:
         (run.db_out / f"{label}.md").write_text(markdown(data, label), encoding="utf-8")
 
     def snapshot() -> dict[str, Any]:
-        with connect() as conn:
+        with connect().closing() as conn:
             p = conn.execute("SELECT name, level, xp, gold, health, max_health, energy, current_location_id FROM player").fetchone()
             loc = conn.execute("SELECT name FROM locations WHERE id = ?", (p["current_location_id"],)).fetchone() if p else None
             return {
@@ -261,7 +261,7 @@ def main() -> int:
 
     def turn_record(n: int, line: str, result: Any, before: dict[str, Any], seconds: float) -> dict[str, Any]:
         after = snapshot()
-        with connect() as conn:
+        with connect().closing() as conn:
             journal = [dict(r) for r in conn.execute("SELECT turn, kind, content FROM journal WHERE id > ?", (before["max_journal"],))]
             dice = [dict(r) for r in conn.execute(
                 "SELECT tag, kind, band, notation, value, source FROM dice_rolls WHERE id > ?", (before["max_dice"],))]

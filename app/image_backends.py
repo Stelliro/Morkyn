@@ -208,7 +208,7 @@ def _normalize_provider(raw: Any) -> str:
 def get_image_config() -> dict[str, Any]:
     base = default_image_config()
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute(
                 "SELECT value FROM settings WHERE key = ?",
                 (IMAGE_CONFIG_KEY,),
@@ -480,7 +480,7 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
             save_image_presets(presets)
     except Exception:
         pass
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (IMAGE_CONFIG_KEY, json.dumps(next_cfg, ensure_ascii=True)),
@@ -8408,7 +8408,7 @@ def build_character_prompt(
 
 
 def _store_setting_json(key: str, value: dict[str, Any]) -> None:
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
             (key, json.dumps(value, ensure_ascii=True)),
@@ -8861,7 +8861,7 @@ def generate_character_set(
 
     def _stored_player_url(setting_key: str) -> str:
         try:
-            with connect() as conn:
+            with connect().closing() as conn:
                 row = conn.execute(
                     "SELECT value FROM settings WHERE key = ?",
                     (setting_key,),

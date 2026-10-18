@@ -71,6 +71,16 @@ class AThingHandedInAWrapping(unittest.TestCase):
         self.assertEqual([c["name"] for c in kept], ["rusty key"], rejected)
 
 
+class FixingANameInMemoryIsNoWork(unittest.TestCase):
+    """T13: "read the name aloud to fix it in my memory" rolled a craft check and cost energy."""
+
+    def test_no_act(self):
+        from app.prose_state import act_rules
+
+        self.assertIsNone(act_rules("I pocket the coin and read the name in the last entry aloud to fix it in my memory."))
+        self.assertIsNotNone(act_rules("I fix the broken latch on the chest."))
+
+
 class _One(random.Random):
     def randint(self, a, b):  # noqa: D401 - a die that always shows 1
         return a

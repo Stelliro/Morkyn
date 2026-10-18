@@ -146,6 +146,11 @@ belong to, with the date).
 
 ## Environment rules that have bitten before
 
+- **Database blocks are `with connect().closing() as conn:`** (2026-10-18). sqlite3's own
+  context manager only commits; a bare `with connect() as conn:` leaked every connection and the
+  live harness grew ~70 handles and 25 MB a turn until the machine ran dry. A held connection
+  (`self.conn = connect()`, `with self.conn:` to commit) is untouched; never use `conn` after its
+  `.closing()` block. tests/test_db_connections_close.py keeps bare blocks out of app/.
 - **Never touch the live `data/`** from tests, probes or servers. There is no single data-dir
   setting; use `tools/playtest_setup_presets.isolated_data_env(dir)` with absolute paths.
 - **Line endings are mixed.** CHANGELOG.md, README.md, docs/PLAYTEST_ISSUES.md, docs/TODO_NEXT.md,

@@ -21,10 +21,35 @@ def db_path() -> Path:
     return Path(os.getenv("AI_RPG_DB", "data/world.db"))
 
 
+class _Connection(sqlite3.Connection):
+    """A connection that can close itself when its ``with`` block ends.
+
+    sqlite3's own context manager only commits or rolls back; the connection
+    stays open until garbage collection. The engine opens one per block,
+    dozens a turn, and the live harness grew about 70 handles and 25 MB every
+    turn (8B run 150, T18-T30: 837 to 1478 handles) until the machine ran dry.
+    ``with connect().closing() as conn:`` closes on exit; a held connection
+    (``self.conn = connect()`` with ``with self.conn:`` to commit) is untouched.
+    """
+
+    _close_on_exit = False
+
+    def closing(self) -> "_Connection":
+        self._close_on_exit = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            if self._close_on_exit:
+                self.close()
+
+
 def connect() -> sqlite3.Connection:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, factory=_Connection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     # Every write during an open turn is recorded in that turn's trace.
@@ -47,8 +72,9 @@ def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
 def init_db() -> None:
     conn = connect()
     try:
-        with conn:
-            conn.executescript(
+        # executescript commits on its own; a ``with conn:`` here would close
+        # the connection before the inserts below (see _Connection).
+        conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS locations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -478,7 +478,7 @@ def _stored_config(conn) -> dict[str, Any]:
 def get_config(conn=None) -> dict[str, Any]:
     """The stored row over the defaults, env overrides applied, every key present."""
     if conn is None:
-        with connect() as owned:
+        with connect().closing() as owned:
             return get_config(owned)
     return normalize_config(_apply_env(_stored_config(conn)))
 

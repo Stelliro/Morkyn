@@ -823,7 +823,7 @@ def install_pack(
     checksum = _checksum(pack)
     blob = json.dumps(pack, ensure_ascii=True, separators=(",", ":"))
 
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             """
             INSERT INTO content_packs
@@ -898,7 +898,7 @@ def remove_pack(pack_id: str, *, delete_file: bool = True) -> dict[str, Any]:
     never leave the game with no skill catalog at all.
     """
     pack_id = _codeify(pack_id)
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT * FROM content_packs WHERE id = ?", (pack_id,)).fetchone()
         if not row:
             return {"removed": False, "reason": "not_installed", "pack_id": pack_id}
@@ -934,7 +934,7 @@ def remove_pack(pack_id: str, *, delete_file: bool = True) -> dict[str, Any]:
 
 def set_pack_enabled(pack_id: str, enabled: bool) -> dict[str, Any]:
     pack_id = _codeify(pack_id)
-    with connect() as conn:
+    with connect().closing() as conn:
         cur = conn.execute(
             "UPDATE content_packs SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (1 if enabled else 0, pack_id),
@@ -946,7 +946,7 @@ def set_pack_enabled(pack_id: str, enabled: bool) -> dict[str, Any]:
 
 
 def list_packs(*, include_payload: bool = False) -> list[dict[str, Any]]:
-    with connect() as conn:
+    with connect().closing() as conn:
         rows = conn.execute(
             "SELECT * FROM content_packs ORDER BY builtin DESC, id"
         ).fetchall()
@@ -977,7 +977,7 @@ def list_packs(*, include_payload: bool = False) -> list[dict[str, Any]]:
 def export_pack(pack_id: str) -> dict[str, Any] | None:
     """Get a pack back out as authored JSON — for editing or sharing."""
     pack_id = _codeify(pack_id)
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT payload FROM content_packs WHERE id = ?", (pack_id,)).fetchone()
     if not row:
         return None
@@ -1027,7 +1027,7 @@ def _enabled_payloads() -> list[dict[str, Any]]:
     if cached is not None:
         return cached
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             rows = conn.execute(
                 "SELECT payload FROM content_packs WHERE enabled = 1 ORDER BY builtin DESC, id"
             ).fetchall()
@@ -1140,7 +1140,7 @@ def disabled_skill_codes() -> set[str]:
 def pack_entry_owner(section: str, code: str) -> str:
     """Which pack contributed this entry (empty when it is a built-in)."""
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute(
                 "SELECT pack_id FROM content_pack_entries WHERE section = ? AND entry_code = ? LIMIT 1",
                 (str(section), str(code)),
@@ -1355,7 +1355,7 @@ def existing_codes() -> dict[str, Any]:
     out["powers"] = sorted(active_powers())
     out["items"] = sorted(active_items())
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             out["live_abilities"] = [
                 {"code": r["code"], "name": r["name"]}
                 for r in conn.execute("SELECT code, name FROM abilities ORDER BY id LIMIT 200").fetchall()

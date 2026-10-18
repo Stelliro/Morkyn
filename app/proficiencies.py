@@ -1164,7 +1164,7 @@ def settle_from_model(options: dict[str, Any]) -> dict[str, Any]:
     text = _clean(options.get("custom_skills"))
     if not text:
         return {"called": False, "reason": "no custom proficiency text"}
-    with connect() as conn:
+    with connect().closing() as conn:
         ensure_proficiency_table(conn)
         existing = [str(row["name"]) for row in conn.execute("SELECT name FROM player_skills ORDER BY id").fetchall()]
         idea = idea_text(options, conn)
@@ -1188,7 +1188,7 @@ def settle_from_model(options: dict[str, Any]) -> dict[str, Any]:
     def rename(items: list[dict[str, Any]]) -> dict[int, str]:
         return rename_with_model(items, options, exclude=existing)
 
-    with connect() as conn:
+    with connect().closing() as conn:
         return apply_settlement(conn, content, options, rename=rename)
 
 
