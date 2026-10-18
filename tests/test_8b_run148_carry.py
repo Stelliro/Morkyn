@@ -143,6 +143,24 @@ class ReportingAtAnotherPlaceGoesThere(unittest.TestCase):
         self.assertTrue(result["player"].get("move_to_location") or result["player"].get("move_to_location_code"), report)
 
 
+class OpenGroundHasNoDoor(unittest.TestCase):
+    """T79: the walk to the wreck under the harbour ended on the quay ("entered from The Harbour; the journey ends there")."""
+
+    def test_the_wreck_is_reached_by_the_walk(self):
+        from app import world
+        from app.db import connect
+
+        town = _world("The Reeve's Office")
+        with connect() as conn:
+            harbour = int(conn.execute("SELECT id FROM locations WHERE code = 'L90'").fetchone()[0])
+            conn.execute("INSERT INTO locations (code, name, summary, parent_id) VALUES ('L92', \"The Stormbreaker's Wreck\", '', ?)", (harbour,))
+            wreck = world._location_row(conn, int(conn.execute("SELECT id FROM locations WHERE code = 'L92'").fetchone()[0]))
+            office = world._location_row(conn, int(conn.execute("SELECT id FROM locations WHERE code = 'L91'").fetchone()[0]))
+            self.assertTrue(world.venue_entry_check(conn, town, wreck)["ok"])
+            # A building under the harbour still has its door.
+            self.assertEqual(world.venue_entry_check(conn, town, office).get("reason"), "unreachable")
+
+
 class TheOfficeUnderAnotherSpelling(unittest.TestCase):
     """T66: "go into the Reeves' Office" made a third office beside "The Reeve's Office" and "Reeves’ Office"."""
 
