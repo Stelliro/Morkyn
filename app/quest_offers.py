@@ -137,7 +137,23 @@ def _code_veto(line: str, *, asked_for_work: bool) -> str:
     # "let's" or "you might" is handing out work unless they also name pay.
     if _SUGGESTION_RE.search(cleaned) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned) and not _names_pay(cleaned):
         return "suggestion_not_task"
+    # A debt read out of a ledger is a fact, not a task: "The guild owes the
+    # reeve a sum of thirty gold for the work done on the wreck" filed "Record
+    # the Guild's Debt" with invented steps (8B run 148, T75). Only an errand
+    # on that debt (collect it, bring it, deliver it) is work.
+    if _DEBT_STATEMENT_RE.search(cleaned) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned) and not _ERRAND_VERB_RE.search(cleaned):
+        return "debt_statement"
     return ""
+
+
+_DEBT_STATEMENT_RE = re.compile(
+    r"\b(?:owes?|owed|is\s+owed|are\s+owed|in\s+debt\s+to|the\s+debt\s+(?:stands|is|comes)\s+(?:at|to))\b", re.I
+)
+_ERRAND_VERB_RE = re.compile(
+    r"\b(?:bring|fetch|collect|deliver|find|take|carry|haul|go|get|recover|settle|pay\s+(?:it|him|her|them)|"
+    r"call\s+(?:it|the\s+debt)\s+in|see\s+(?:it|that)\s+(?:paid|settled))\b",
+    re.I,
+)
 
 
 def _names_pay(text: str) -> bool:

@@ -772,6 +772,7 @@ TRADE_ALIASES: dict[str, str] = {
     "brewing": "cooking",
     "labour": "athletics",
     "labor": "athletics",
+    "secure": "craft",
 }
 
 # A neighbouring trade gives half its rank and spares the untrained penalty
