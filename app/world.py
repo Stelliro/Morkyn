@@ -14068,6 +14068,24 @@ def _stand_new_people_at_arrival(conn, result: dict[str, Any], here_before: int)
             turn_ledger.note("npc", "placed_at_arrival", name=name, via="place_made_this_turn")
 
 
+_STAYS_BEHIND_RE = re.compile(
+    r"\b(?:watch(?:es|ed|ing)?\s+(?:you\s+(?:go|leave|walk|head)|from\s+(?:the|a|her|his|their)\s+(?:doorway|door|window|steps?|"
+    r"threshold|desk|counter|porch|gate))|from\s+the\s+doorway\s+of|behind\s+you\b|stays?\s+(?:behind|where|at|by|put)|"
+    r"remains?\s+(?:behind|where|at|by)|(?:does|did)\s*n['’]?t\s+follow|waves?\s+you\s+(?:off|on|away)|calls?\s+after\s+you|"
+    r"(?:turns?|returns?|goes|went)\s+back\s+to\s+(?:her|his|their)\s+(?:ledger|desk|work|counter|books))\b",
+    re.I,
+)
+
+
+def _stays_behind(text: str, name: str, code: str = "") -> bool:
+    """The sentence showing this person says they stay where the player left them."""
+    for sentence in re.split(r"(?<=[.!?])\s+", str(text or "")):
+        if (code and f"[[{code}]]" in sentence) or re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", sentence, re.I):
+            if _STAYS_BEHIND_RE.search(sentence):
+                return True
+    return False
+
+
 def _place_new_people_at_arrival(
     conn, npcs: list[dict[str, Any]], result: dict[str, Any], player_input: str, narration: str = ""
 ) -> None:
@@ -14086,9 +14104,13 @@ def _place_new_people_at_arrival(
         return
     npcs = npcs or []
     rows = conn.execute("SELECT id, code, name FROM locations").fetchall()
+    # The same place under another spelling is that place: MOVE "The Reeves'
+    # Office" against the stored "Reeves’ Office" read as a place made this
+    # turn, and the clerk watching from the tally house doorway was carried
+    # to the harbour with the player (8B run 148, T64).
     dest = next((r for r in rows if dest_code and str(r["code"] or "").upper() == dest_code.upper()), None) or next(
         (r for r in rows if dest_name and str(r["name"] or "").lower() == dest_name.lower()), None
-    )
+    ) or next((r for r in rows if dest_name and _same_place_name(str(r["name"] or ""), dest_name)), None)
     here = conn.execute(
         "SELECT l.id, l.code, l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
     ).fetchone()
@@ -14117,6 +14139,12 @@ def _place_new_people_at_arrival(
             for row in conn.execute("SELECT code, name FROM npcs WHERE location_id = ?", (int(here["id"]),)).fetchall():
                 code, name = str(row["code"] or "").upper(), str(row["name"] or "")
                 if name and ((code and f"[[{code}]]" in after) or re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", after)):
+                    # Shown staying where the player left them, they do not
+                    # come: "Griselda Kemp watches from the doorway of the
+                    # Tally House" (8B run 148, T64).
+                    if _stays_behind(after, name, code):
+                        turn_ledger.note("npc", "stays_behind", name=name)
+                        continue
                     result["_arrive_with_player"].append(name)
         return
     if dest is None or here is None or int(dest["id"]) == int(here["id"]):
