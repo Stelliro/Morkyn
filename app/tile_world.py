@@ -20,7 +20,7 @@ from typing import Any
 
 from app.db import connect, row_to_dict, rows_to_dicts
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 TILE_ART_DIR = ROOT / "data" / "tile_art"
 
 

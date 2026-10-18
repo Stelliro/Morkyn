@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 SHIPPED_DIR = ROOT / "config" / "idea_bank"
 def user_dir() -> Path:
     """Resolved per call so AI_RPG_IDEA_BANK is honoured whatever the import order."""

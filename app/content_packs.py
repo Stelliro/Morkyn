@@ -42,7 +42,7 @@ from app.rng import (
 )
 
 PACK_FORMAT = "morkyn-content-pack-v1"
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 BUILTIN_PACK_DIR = ROOT / "content" / "packs"
 
 SECTIONS = ("skills", "powers", "items", "encounter_tables", "magnitude_tables")

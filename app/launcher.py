@@ -41,7 +41,7 @@ from app.launcher_prefs import (
     save_prefs,
 )
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 LOG_DIR = ROOT / "data" / "logs"
 RESTART_EXIT_CODE = 75
 LLM_HOST = os.getenv("AI_RPG_LLM_HOST", "127.0.0.1")
@@ -313,6 +313,20 @@ def server_command(host: str, port: int) -> list[str]:
     return [sys.executable, "-m", "uvicorn", "app.main:app", "--host", host, "--port", str(port)]
 
 
+def module_command(module: str, *args: str) -> list[str]:
+    """``python -m module args``, or the packaged exe running that module (morkyn_app --run-module)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--run-module", module, *args]
+    return [sys.executable, "-m", module, *args]
+
+
+def snippet_command(code: str) -> list[str]:
+    """``python -c code``, or the packaged exe running it (morkyn_app --run-code)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--run-code", code]
+    return [sys.executable, "-c", code]
+
+
 class Supervisor:
     """States: idle -> starting -> ready | failed; ready -> restarting -> starting ..."""
 
@@ -538,7 +552,7 @@ class Supervisor:
             out_path = temp / f"llama-{time.strftime('%Y%m%d-%H%M%S')}.log"
         self.log(f"llama.cpp log: {out_path}")
         args = [
-            sys.executable, "-m", "llama_cpp.server",
+            *module_command("llama_cpp.server"),
             "--model", model_path,
             "--model_alias", "ai-rpg-local",
             "--host", LLM_HOST,
@@ -569,7 +583,7 @@ class Supervisor:
 
     def _auto_context(self, model_path: str) -> int:
         try:
-            out = subprocess.run([sys.executable, "-m", "app.model_limits", "--context", model_path], cwd=str(ROOT),
+            out = subprocess.run(module_command("app.model_limits", "--context", model_path), cwd=str(ROOT),
                                  capture_output=True, text=True, timeout=60, creationflags=_no_window_flags())
             number = int((out.stdout or "").strip().splitlines()[-1])
             if number > 0:
@@ -581,7 +595,7 @@ class Supervisor:
     def _llama_has_gpu(self) -> bool:
         try:
             out = subprocess.run(
-                [sys.executable, "-c", "from llama_cpp import llama_cpp as lc; print(lc.llama_supports_gpu_offload())"],
+                snippet_command("from llama_cpp import llama_cpp as lc; print(lc.llama_supports_gpu_offload())"),
                 cwd=str(ROOT), capture_output=True, text=True, timeout=60, creationflags=_no_window_flags())
             return (out.stdout or "").strip().splitlines()[-1:] == ["True"]
         except Exception:

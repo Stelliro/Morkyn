@@ -41,7 +41,7 @@ from app.db import connect
 from app.gpu_gate import gate_status, gpu_session
 from app.turn_dsl import OPCODES
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 TTS_CONFIG_KEY = "tts_config"
 # The only thing pip ever installs from here; never taken from a request.
 PIPER_PACKAGE = "piper-tts==1.8.0"

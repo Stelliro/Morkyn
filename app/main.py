@@ -172,7 +172,7 @@ from app.world import (
 )
 
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 STATIC_DIR = ROOT / "static"
 MEDIA_DIR = ROOT / "Media"
 APP_VERSION = "V0.10.0-dev.14"

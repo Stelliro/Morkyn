@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 HISTORY_PATH = ROOT / "data" / "update_history.json"
 DEFAULT_REMOTE = "origin"
 DEFAULT_GITHUB_REPO = "Stelliro/Morkyn"

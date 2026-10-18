@@ -60,7 +60,9 @@ class MleNotReady(RuntimeError):
 
 def models_dir() -> Path:
     """Directory of local GGUF weights. data/ is gitignored."""
-    return Path(__file__).resolve().parent.parent / "data" / "mle-models"
+    from app.paths import ROOT
+
+    return ROOT / "data" / "mle-models"
 
 
 def piece_should_hide(
