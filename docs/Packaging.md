@@ -62,10 +62,29 @@ window needs PyGObject and WebKit2GTK from the distribution).
 - macOS: pywebview's cocoa backend; the `.app` bundle is produced by the spec's `BUNDLE`. Code
   signing and notarisation are not set up; Gatekeeper will ask to allow the app on first open.
 
+## First Windows build (2026-10-18)
+
+`packaging/build.ps1 -Console` on Python 3.14 / PyInstaller 6.22: 1.6 GB folder, 793 MB zip,
+of which `_internal/llama_cpp` is 784 MB (the CUDA 12.4 wheel and its cuBLAS libraries); the
+rest of the app is about 60 MB. Smoke test, all from `dist\Morkyn\Morkyn.exe`:
+
+- `--run-code` and `--run-module app.model_limits --context` answer (the frozen launcher's
+  module and snippet commands work).
+- `--serve 127.0.0.1 8765`: the page, `/static/app.js`, `/api/model-status` and `/api/state`
+  answer 200; `data/world.db` and `data/campaign_slots` appear beside the exe, not in the repo.
+- `--console` with `window_mode none`: the supervisor starts the `--serve` child and
+  `/api/launcher/status` reports it supervised.
+- The window (pywebview, WebView2) with `MORKYN_REMOTE_DEBUG_PORT`: the boot page hands over to
+  the real main menu (Start new game, Continue, Load, Settings, Where / Engine / Pipeline).
+
+Size is the open question: a CPU-only llama-cpp wheel would make the zip about 70 MB, but the
+8B model needs the GPU. Options: ship the CUDA build as is; two Windows builds (cpu / cuda);
+or download the llama-cpp wheel on first use into `data/`. Stell's call.
+
 ## Still to do
 
-- First local Windows build smoke test: start, open the window, new game on a cloud API and on a
-  local GGUF, pop-outs, `--browser`, `--console`, `lan`.
+- Smoke test the rest from the exe: new game on a cloud API and on a local GGUF, pop-outs,
+  `--browser`, `lan`.
 - Run `packaging/build.sh` on Alpine WSL (musl) and on a glibc distribution; macOS only via CI.
 - The in-game updater (`app/updates.py`) is a git checkout feature; the packaged build should
   show "download the next build" instead of offering an update.

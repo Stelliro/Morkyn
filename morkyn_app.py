@@ -524,6 +524,14 @@ def run_code(code: str) -> int:
 
 
 def main(argv: list[str]) -> int:
+    # A console build writes "Mørkyn" to a cp1252 console as "M�rkyn"; the
+    # streams take UTF-8 with replacement instead of raising or mangling.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     if len(argv) >= 3 and argv[0] == "--serve":
         return serve(argv[1], argv[2])
     if len(argv) >= 2 and argv[0] == "--run-module":
