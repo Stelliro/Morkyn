@@ -179,6 +179,26 @@ class HeldIsNotGained(unittest.TestCase):
         self.assertEqual([c["name"] for c in kept], ["brass lockpick"], rejected)
 
 
+class TakingBackOnesOwnThing(unittest.TestCase):
+    """8B run 149, T18: "You pick up the guild key from the counter" grew the guild key the player already held."""
+
+    LINE = "I pick up the guild key from the counter and wait for Lettice to answer."
+    PROSE = ("You pick up the guild key from the counter, its cold metal humming in your palm. Lettice Garner [[F]] emerges "
+             "from the shadows. \"That’s not for you,\" she says. You hold the key steady, the weight of it a reminder of the "
+             "debt you owe.")
+
+    def test_the_key_picked_up_again_is_the_same_key(self):
+        _pack(("guild key", 1))
+        kept, rejected = _filter([{"name": "guild key", "quantity_band": "small"}], self.PROSE, self.LINE)
+        self.assertEqual(kept, [], rejected)
+
+    def test_another_key_is_a_second_key(self):
+        _pack(("guild key", 1))
+        prose = "You pick up another guild key from the shelf, this one newer, and pocket it beside the first."
+        kept, rejected = _filter([{"name": "guild key", "quantity_delta": 1}], prose, "I pick up the other guild key from the shelf.")
+        self.assertEqual([c["name"] for c in kept], ["guild key"], rejected)
+
+
 class APaperFoundUnderAnotherName(unittest.TestCase):
     def test_the_damp_paper_retrieved_is_the_ledger(self):
         from app.world import _handed_under_another_noun

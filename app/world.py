@@ -7300,18 +7300,35 @@ def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
     # Isk in the bakery (8B run 70, T1).
     prose = re.sub(r"\b(?:pass(?:es|ed|ing)?|past|beyond|beside|by)\s+(?:the\s+)?[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,3}",
                    " ", str(narration or "")[-600:])
-    text = f"{player_input or ''} {prose}".lower()
+    # The player's own line names where they go; the prose alone names a venue
+    # only when it takes "you" inside it. "open the far door and step through"
+    # in the sump passage moved the player to the Velvet Ferret Mill because
+    # the prose led "toward the mill's shadow" (8B run 149, T14).
+    line_text = str(player_input or "").lower()
+    prose_text = prose.lower()
+    try:
+        shown = venues.entry_in_prose(str(narration or "")) or None
+    except Exception:
+        shown = None
+
+    def _prose_enters(row) -> bool:
+        return bool(shown) and _prose_enters_row(shown, row, str(narration or ""))
+
     for row in rows:
-        if _venue_name_in_text(str(row["name"] or ""), text):
+        name = str(row["name"] or "")
+        if _venue_name_in_text(name, line_text):
+            return row
+        if _venue_name_in_text(name, prose_text) and _prose_enters(row):
             return row
     for row in rows:
         kind = str(row["kind"] or "")
         if not kind:
             continue
+        labels = [l for l in list(venues.kind_family_labels(kind) or []) + [kind.replace("_", " ")] if l]
         # An inn is the tavern the player asks for (7B run 5 #136).
-        if any(re.search(rf"\b{re.escape(label)}\b", text) for label in venues.kind_family_labels(kind)):
+        if any(re.search(rf"\b{re.escape(label)}\b", line_text) for label in labels):
             return row
-        if kind.replace("_", " ") in text:
+        if any(re.search(rf"\b{re.escape(label)}\b", prose_text) for label in labels) and _prose_enters(row):
             return row
     return None
 
@@ -14397,6 +14414,18 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
         )
         if not shown_here:
             continue
+        # Shown somewhere else by the same sentence: "Hugh Fairweather [[G]]
+        # stands at the edge of the Velvet Ferret Mill [[L2]]" moved Hugh to
+        # the tally house the player spoke from (8B run 149, T17).
+        here_code = str(here["code"] or "").upper()
+        elsewhere = False
+        for sentence in re.split(r"(?<=[.!?])\s+", unspoken):
+            if tag in sentence and any(c.upper() != here_code for c in re.findall(r"\[\[(L\d+)\]\]", sentence)):
+                elsewhere = True
+                break
+        if elsewhere:
+            turn_ledger.note("npc", "talked_to_but_shown_elsewhere", name=str(row["name"] or ""))
+            continue
         conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(here_row["id"]), int(row["id"])))
         turn_ledger.note("npc", "talked_to_and_shown_here", name=str(row["name"] or ""), place=str(here["code"] or ""))
 
@@ -16115,6 +16144,22 @@ def _one_of_a_named_thing(change: dict[str, Any], name_l: str, own_l: str, prose
     return change
 
 
+_ANOTHER_ONE_RE = re.compile(
+    r"\b(?:another|a\s+second|second|spare|extra|more|fresh|new|other|two|three|four|five|several|a\s+pair\s+of|"
+    r"a\s+set\s+of|a\s+few)\b",
+    re.I,
+)
+
+
+def _another_of_named(text: str, name_l: str, tokens: list[str]) -> bool:
+    """A sentence about the item says it is another one ("another key", "a second coil")."""
+    for _s, _e, sentence in prose_state_sentence_spans(str(text or "")):
+        low = sentence.lower()
+        if _sentence_mentions_item(low, name_l, tokens) and _ANOTHER_ONE_RE.search(low):
+            return True
+    return False
+
+
 def _consumed_in_line(player_input: str, tokens: list[str]) -> bool:
     """The player's own line orders, eats or drinks this thing at the table."""
     head = (tokens[-1] if tokens else "").lower()
@@ -16410,6 +16455,17 @@ def _filter_inventory_changes(
             elif not owned_heads and not (narrated_take and line_names_it):
                 grounded = False
                 turn_ledger.note("inventory", "held_not_gained", item=name)
+        # Taking back one's own thing is no new one: "You pick up the guild key
+        # from the counter" grew the guild key to x4 over two turns (8B run 149,
+        # T17-T18). A thing owned, taken by the player, with no other one named
+        # and nobody handing one over, is the same thing picked up again.
+        if (
+            grounded and existing and outcome == "gain" and by_player
+            and not _another_of_named(final_text, name_l, tokens)
+            and not _prose_item_handed_over(final_text, name_l, tokens, owned=True)
+        ):
+            grounded = False
+            turn_ledger.note("inventory", "owned_item_not_new", item=name, owned=str(existing["name"] or name), by="retaken")
         # Cargo hauled to a cart, a wharf or a hold for the work is not the
         # player's: "shoulder the first bundle of fish ... carry it down the
         # gangplank to the wharf" put "cod fillets x1" in the pack (8B run 148,
