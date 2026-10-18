@@ -1246,7 +1246,7 @@ def relevant_facts_for_state(state: dict[str, Any], player_input: str) -> dict[s
         for quest in state.get("active_quests") or []
         if isinstance(quest, dict)
     )
-    with connect() as conn:
+    with connect().closing() as conn:
         ensure_seeded(conn)
         if not player.get("race"):
             # A world started before the player had a race column: store
@@ -1336,7 +1336,7 @@ def run_post_start_passes() -> dict[str, Any]:
     from app.db import connect
 
     report: dict[str, Any] = {"model_allowed": post_start_model_allowed(), "passes": {}}
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()
     try:
         options = json.loads(str(row["value"] or "{}")) if row else {}
@@ -1364,7 +1364,7 @@ def run_post_start_passes() -> dict[str, Any]:
         except Exception as exc:  # a pass never blocks the opening turn
             result = {"called": True, "error": str(exc)[:200]}
         report["passes"][name] = result
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES ('world_facts_pass', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1474,7 +1474,7 @@ def refine_from_model(options: dict[str, Any]) -> dict[str, Any]:
     from app.db import connect
     from app.llm import _chat_content
 
-    with connect() as conn:
+    with connect().closing() as conn:
         ensure_seeded(conn)
         if not conn.execute("SELECT 1 FROM world_races LIMIT 1").fetchone():
             return {"called": False, "reason": "no races"}
@@ -1486,7 +1486,7 @@ def refine_from_model(options: dict[str, Any]) -> dict[str, Any]:
     # The first call after start may load the local model cold; 60s timed out
     # on Qwen3 8B with the reply two-thirds written.
     content = _chat_content(_REFINE_SYSTEM, user, timeout=180, temperature=0.4, max_tokens=1300, response_format="text")
-    with connect() as conn:
+    with connect().closing() as conn:
         report = apply_refinement(conn, content, fixed_magic=plan["fixed_magic"])
     report["asked"] = plan["asked"]
     return report

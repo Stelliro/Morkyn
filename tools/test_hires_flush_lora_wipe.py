@@ -180,7 +180,7 @@ def apply_server_patch(seed_cfg: dict, client_patch: dict) -> dict:
     def _get():
         return dict(base)
 
-    # connect() is used as `with connect() as conn`
+    # connect() is used as `with connect().closing() as conn`
     def _connect():
         class _Conn:
             def execute(self, *a, **k):

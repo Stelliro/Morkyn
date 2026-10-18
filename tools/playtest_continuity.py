@@ -250,7 +250,7 @@ def main() -> int:
         db_turn = int(state.get("turn") or 0)
         ops = _ops_emitted(_trace_for_turn(trace_dir, db_turn))
 
-        with connect() as conn:
+        with connect().closing() as conn:
             loc_count = int(conn.execute("SELECT COUNT(*) AS n FROM locations").fetchone()["n"] or 0)
             here = conn.execute(
                 "SELECT l.code, l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
@@ -331,7 +331,7 @@ def main() -> int:
     mismatch = [r for r in ok if r.get("prose_mismatch")]
     print(f"destination never named in prose: {len(mismatch)}   "
           f"{[ (r['turn'], r['prose_mismatch']) for r in mismatch ]}")
-    with connect() as conn:
+    with connect().closing() as conn:
         locs = conn.execute("SELECT code, name, visit_count FROM locations ORDER BY id").fetchall()
     print(f"locations in world              : {len(locs)}")
     for loc in locs:
@@ -355,7 +355,7 @@ def main() -> int:
     print("\n" + "=" * 70)
     print("NPC NAMES  (baseline: one NPC literally named 'Woman')")
     print("=" * 70)
-    with connect() as conn:
+    with connect().closing() as conn:
         npcs = conn.execute("SELECT code, name, role FROM npcs ORDER BY id").fetchall()
     generic = [n for n in npcs if GENERIC_NAME_RE.match(str(n["name"] or "").strip())]
     roles = Counter(str(n["role"] or "").strip().lower() for n in npcs)

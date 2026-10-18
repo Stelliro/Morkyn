@@ -1162,6 +1162,12 @@ _EMPLOYER_WORDS = frozenset({
 })
 
 
+# The player asking what the job is, or for its terms.
+_ASKS_WHAT_THE_JOB_IS_RE = re.compile(
+    r"\b(?:what|which)\b[^.?!]{0,40}\b(?:job|work|task|errand|contract)\b|\b(?:the|this|that)\s+(?:job|work|task|errand)\b[^.?!]{0,30}\?",
+    re.I,
+)
+
 # A job named by what it is for, not by a thing: "Work Against My Debt", "Prove
 # Your Worth". The first concrete job from that giver is this job told properly.
 _ABSTRACT_JOB_WORDS = frozenset({
@@ -1563,10 +1569,14 @@ def validate_quest_changes(
             ]
             # A job about another thing is another job: Rafe's scroll from the
             # reeve's desk was filed under his crab job, and his Coral Wreck
-            # salvage under his crate loading (8B run 150, T37, T42).
-            if len(open_from_giver) == 1 and _same_job_subject(
+            # salvage under his crate loading (8B run 150, T37, T42). Unless the
+            # player asked what the job is: the answer is that job told properly,
+            # whatever it is now called ("What is the job?" then "You'll be
+            # fetching salvage from the docks" for "Clear the Guild's Sheds").
+            asked_about_the_job = bool(_ASKS_WHAT_THE_JOB_IS_RE.search(_player_own_line(str(player_input or ""))))
+            if len(open_from_giver) == 1 and (asked_about_the_job or _same_job_subject(
                 title, str(open_from_giver[0].get("title") or ""), giver_name=str(giver.get("name") or "")
-            ):
+            )):
                 dup = open_from_giver[0]
         if dup is not None and same_offer is None:
             ref = dup.get("code") or dup.get("id")

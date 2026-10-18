@@ -783,7 +783,7 @@ def refresh_setting_templates_from_model() -> dict[str, Any]:
         return {"called": False, "updated": 0}
     from app.db import connect
 
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute(
             "SELECT value FROM settings WHERE key = 'playthrough_options'"
         ).fetchone()

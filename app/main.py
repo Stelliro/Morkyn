@@ -217,7 +217,7 @@ def api_live_tick():
     """The newest turn in the save, cheaply, so a watching page knows when to reload."""
     from app.db import connect
 
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT COALESCE(MAX(turn), 0) AS turn, COALESCE(MAX(id), 0) AS id FROM journal").fetchone()
     return {"spectate": _spectating(), "turn": int(row["turn"]), "journal_id": int(row["id"])}
 
@@ -1017,7 +1017,7 @@ def api_world_facts():
     from app.db import connect
     from app.world_facts import all_facts
 
-    with connect() as conn:
+    with connect().closing() as conn:
         return all_facts(conn)
 
 
@@ -1034,7 +1034,7 @@ def api_turn_history(before: int = 0, limit: int = 10):
     before = int(before or 0)
     if before <= 1:
         return {"turns": [], "has_more": False}
-    with connect() as conn:
+    with connect().closing() as conn:
         found = [
             int(row["turn"])
             for row in conn.execute(
@@ -5038,7 +5038,7 @@ class RelationshipUpdateRequest(BaseModel):
 def api_get_quests():
     from app.quests import get_active_quests, get_offered_quests
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         quests = get_active_quests(conn)
         offered = get_offered_quests(conn)
     # "quests" stays active-only for older callers; offers ride alongside.
@@ -5055,7 +5055,7 @@ def api_quest_markers():
     from app.db import connect
 
     markers: list[dict] = []
-    with connect() as conn:
+    with connect().closing() as conn:
         rows = conn.execute(
             """
             SELECT q.id AS quest_id, q.title AS quest_name, q.current_step,
@@ -5114,7 +5114,7 @@ def api_npc_markers():
         "jeweller", "jeweler", "fence", "hawker", "stall vendor", "tinker",
     })
 
-    with connect() as conn:
+    with connect().closing() as conn:
         # Update NPC positions before reading them
         try:
             update_npc_map_positions(conn)
@@ -5210,7 +5210,7 @@ def api_npc_watch_toggle(npc_id: int):
     """Toggle the player's watch pin on an NPC. Returns {"watching": bool}."""
     from app.db import connect
 
-    with connect() as conn:
+    with connect().closing() as conn:
         # Verify NPC exists
         npc = conn.execute("SELECT id FROM npcs WHERE id = ?", (npc_id,)).fetchone()
         if not npc:
@@ -5243,7 +5243,7 @@ def api_advance_quest(quest_id: int):
     # the real sums and not the quest's unscaled reward_gold / reward_xp.
     from app.quests import complete_quest_step
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         turn = int(row["value"]) if row else 0
         result = complete_quest_step(conn, quest_id, turn=turn, source="advance_button")
@@ -5273,7 +5273,7 @@ def _answer_offer(quest_id: int, action: str) -> dict:
     from app.quests import accept_offered, decline_offered
     from app.db import connect
 
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         turn = int(row["value"]) if row else 0
         helper = accept_offered if action == "accept" else decline_offered
@@ -5347,7 +5347,7 @@ def api_create_quest(request: QuestCreateRequest):
 
     reward_items = [request.reward_item] if request.reward_item else []
 
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         turn = int(row["value"]) if row else 0
         try:
@@ -5373,7 +5373,7 @@ def api_create_quest(request: QuestCreateRequest):
 def api_seed_quests():
     from app.quests import seed_starter_quests
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         seed_starter_quests(conn)
     return {"ok": True}
 
@@ -5387,7 +5387,7 @@ def api_seed_quests():
 def api_get_relationships():
     from app.relationships import all_relationships_for_llm
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         rels = all_relationships_for_llm(conn)
     return {"ok": True, "relationships": rels}
 
@@ -5396,7 +5396,7 @@ def api_get_relationships():
 def api_get_npc_relationship(npc_id: int):
     from app.relationships import get_relationship_summary
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         rel = get_relationship_summary(conn, npc_id)
     return {"ok": True, "relationship": rel}
 
@@ -5405,7 +5405,7 @@ def api_get_npc_relationship(npc_id: int):
 def api_update_npc_relationship(npc_id: int, request: RelationshipUpdateRequest):
     from app.relationships import update_relationship
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         rel = update_relationship(
             conn,
             npc_id,
@@ -5425,7 +5425,7 @@ def api_player_titles():
     """Player's currently earned titles with stat bonuses."""
     from app.titles import get_entity_titles
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         titles = get_entity_titles(1, "player", include_hidden=False, conn=conn)
     return {"ok": True, "titles": titles}
 
@@ -5435,7 +5435,7 @@ def api_all_titles():
     """Full title catalogue with requirements (for reference)."""
     from app.titles import get_all_titles
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         titles = get_all_titles(conn=conn)
     return {"ok": True, "titles": titles}
 
@@ -5448,7 +5448,7 @@ class TitlesSettingRequest(BaseModel):
 def api_titles_setting(request: TitlesSettingRequest):
     """Toggle the titles system on/off for this playthrough."""
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('titles_enabled', ?)",
             ("true" if request.enabled else "false",),
@@ -5464,7 +5464,7 @@ def api_get_party():
     """Current party members with morale and combat bonus."""
     from app.party import get_party
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         members = get_party(conn=conn)
     return {"ok": True, "party": members}
 
@@ -5479,7 +5479,7 @@ def api_party_invite(request: PartyInviteRequest):
     """Invite an NPC to the party (requires affinity >= Friendly / 40)."""
     from app.party import invite_npc_to_party
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         result = invite_npc_to_party(request.npc_id, role=request.role, conn=conn)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Could not invite NPC")
@@ -5495,7 +5495,7 @@ def api_party_remove(request: PartyRemoveRequest):
     """Remove an NPC from the party (applies affinity −10)."""
     from app.party import remove_from_party
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         result = remove_from_party(request.npc_id, conn=conn)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "NPC not in party")
@@ -5514,7 +5514,7 @@ def api_npc_psychology(npc_id: int):
     """
     from app.npc_psychology import get_full_psychology_dump, init_psychology_tables
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         init_psychology_tables(conn)
         dump = get_full_psychology_dump(conn, npc_id)
     if "error" in dump:
@@ -5530,7 +5530,7 @@ def api_npc_psychology_seed_demo():
     """
     from app.npc_psychology import seed_demo_psychology, init_psychology_tables
     from app.db import connect
-    with connect() as conn:
+    with connect().closing() as conn:
         init_psychology_tables(conn)
         report = seed_demo_psychology(conn)
     return {"ok": True, **report}

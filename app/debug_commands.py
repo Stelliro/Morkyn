@@ -118,7 +118,7 @@ def _note(text: str, *, refresh: bool = False, command: str = "") -> dict[str, A
 
 
 def _journal(command: str, answer: str) -> None:
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         turn = int(row["value"]) if row else 0
         conn.execute(
@@ -128,19 +128,19 @@ def _journal(command: str, answer: str) -> None:
 
 
 def _set_godmode(on: bool) -> None:
-    with connect() as conn:
+    with connect().closing() as conn:
         _set_setting(conn, "debug_godmode", bool(on))
 
 
 def _godmode_on() -> bool:
-    with connect() as conn:
+    with connect().closing() as conn:
         return _settings(conn).get("debug_godmode") in (True, "true", "1", 1)
 
 
 def _set_player_fields(fields: dict[str, int]) -> None:
     if not fields:
         return
-    with connect() as conn:
+    with connect().closing() as conn:
         player = conn.execute("SELECT * FROM player WHERE id = 1").fetchone()
         if not player:
             return
@@ -161,7 +161,7 @@ def _teleport_to(name_or_code: str) -> str | None:
     target = str(name_or_code or "").strip()
     if not target:
         return None
-    with connect() as conn:
+    with connect().closing() as conn:
         code = target.upper()
         row = conn.execute("SELECT id, name FROM locations WHERE code = ?", (code,)).fetchone()
         if not row:
@@ -198,7 +198,7 @@ def _apply_patch(patch: dict[str, Any]) -> list[str]:
         done.append(f"moved to {moved}" if moved else f"no place matched {move_code}")
     item = patch.get("item") if isinstance(patch.get("item"), dict) else {}
     if item.get("code") and (item.get("description") or item.get("name")):
-        with connect() as conn:
+        with connect().closing() as conn:
             if item.get("description"):
                 conn.execute(
                     "UPDATE inventory SET description = ? WHERE code = ?",
@@ -212,7 +212,7 @@ def _apply_patch(patch: dict[str, Any]) -> list[str]:
         done.append(f"item {item.get('code')}")
     npc = patch.get("npc") if isinstance(patch.get("npc"), dict) else {}
     if npc.get("code"):
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT summary, attitude, personality FROM npcs WHERE code = ?", (str(npc["code"]).upper(),)).fetchone()
             if row:
                 conn.execute(
@@ -228,7 +228,7 @@ def _apply_patch(patch: dict[str, Any]) -> list[str]:
     give = patch.get("give") if isinstance(patch.get("give"), dict) else {}
     if str(give.get("name") or "").strip():
         qty = max(1, min(99, int(give.get("quantity") or 1)))
-        with connect() as conn:
+        with connect().closing() as conn:
             existing = conn.execute(
                 "SELECT id, quantity FROM inventory WHERE name = ? COLLATE NOCASE",
                 (str(give["name"]).strip(),),
@@ -248,7 +248,7 @@ def _apply_patch(patch: dict[str, Any]) -> list[str]:
     if any(cast.get(slot) for slot in ("present", "interacting", "off")):
         from app.world import _apply_scene_cast
 
-        with connect() as conn:
+        with connect().closing() as conn:
             _apply_scene_cast(conn, cast)
         done.append("scene cast")
     return done

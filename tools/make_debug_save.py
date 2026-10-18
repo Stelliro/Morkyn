@@ -153,7 +153,7 @@ def build(destination: Path) -> Path:
         raise SystemExit(f"refusing to build: AI_RPG_DB resolved to {db_path()!r}, outside {temp}")
 
     init_db()
-    with connect() as conn:
+    with connect().closing() as conn:
         # init_db seeds a default L1 "Mosswake Gate" and a blank player row; this
         # world replaces both rather than sitting alongside them.
         # Player first: player.current_location_id has a foreign key onto locations.

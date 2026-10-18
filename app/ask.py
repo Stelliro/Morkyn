@@ -243,7 +243,7 @@ def _record_for(context: dict[str, Any], subject: dict[str, str] | None) -> tupl
 def _store_note(kind: str, code: str, name: str, note: str, replace: bool) -> bool:
     if not note:
         return False
-    with connect() as conn:
+    with connect().closing() as conn:
         if kind == "item" and code:
             row = conn.execute("SELECT description FROM inventory WHERE code = ?", (code,)).fetchone()
             if not row:
@@ -302,7 +302,7 @@ def _item_history(name: str, limit: int = 4) -> list[str]:
     if not name:
         return []
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             rows = conn.execute(
                 "SELECT turn, kind, content FROM journal WHERE kind NOT IN ('ask', 'ooc') AND content LIKE ? ORDER BY id DESC LIMIT ?",
                 (f"%{name}%", limit),
@@ -313,7 +313,7 @@ def _item_history(name: str, limit: int = 4) -> list[str]:
 
 
 def _journal_ask(question: str, answer: str) -> None:
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         turn = int(row["value"]) if row else 0
         conn.execute(

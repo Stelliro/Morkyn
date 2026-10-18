@@ -29,7 +29,7 @@ TILE_ART_DIR = ROOT / "data" / "tile_art"
 # ---------------------------------------------------------------------------
 
 def list_tile_states() -> list[dict[str, Any]]:
-    with connect() as conn:
+    with connect().closing() as conn:
         rows = conn.execute(
             "SELECT * FROM tile_states ORDER BY category, label"
         ).fetchall()
@@ -47,7 +47,7 @@ def list_tile_states() -> list[dict[str, Any]]:
 
 
 def list_world_presets() -> list[dict[str, Any]]:
-    with connect() as conn:
+    with connect().closing() as conn:
         rows = conn.execute(
             "SELECT * FROM world_presets ORDER BY sort_order, label"
         ).fetchall()
@@ -88,7 +88,7 @@ def get_world_preset(preset_id: str) -> dict[str, Any] | None:
 
 
 def get_tile_state(state_id: str) -> dict[str, Any] | None:
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute(
             "SELECT * FROM tile_states WHERE id = ?",
             (state_id,),
@@ -165,7 +165,7 @@ def add_tile_image(
         raise ValueError(f"Unknown tile state: {state_id}")
     if not path and not data_url:
         raise ValueError("Provide path or data_url for the image.")
-    with connect() as conn:
+    with connect().closing() as conn:
         cur = conn.execute(
             """
             INSERT INTO tile_images
@@ -191,7 +191,7 @@ def set_tile_images_disabled_forever(image_ids: list[int], disabled: bool = True
     if not image_ids:
         return 0
     flag = 1 if disabled else 0
-    with connect() as conn:
+    with connect().closing() as conn:
         for iid in image_ids:
             conn.execute(
                 "UPDATE tile_images SET disabled_forever = ? WHERE id = ?",
@@ -203,7 +203,7 @@ def set_tile_images_disabled_forever(image_ids: list[int], disabled: bool = True
 def disable_tile_images_for_run(image_ids: list[int], run_id: str) -> int:
     if not image_ids or not run_id:
         return 0
-    with connect() as conn:
+    with connect().closing() as conn:
         for iid in image_ids:
             conn.execute(
                 "INSERT OR IGNORE INTO tile_image_run_disable (image_id, run_id) VALUES (?, ?)",
@@ -213,7 +213,7 @@ def disable_tile_images_for_run(image_ids: list[int], run_id: str) -> int:
 
 
 def clear_run_disables(run_id: str) -> None:
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute("DELETE FROM tile_image_run_disable WHERE run_id = ?", (run_id,))
 
 
@@ -221,7 +221,7 @@ def delete_tile_images(image_ids: list[int], *, delete_files: bool = True) -> in
     if not image_ids:
         return 0
     removed = 0
-    with connect() as conn:
+    with connect().closing() as conn:
         for iid in image_ids:
             row = conn.execute(
                 "SELECT path FROM tile_images WHERE id = ?",
@@ -689,7 +689,7 @@ def generate_map(
         "run_id": run_id,
     }
 
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             """
             INSERT INTO world_maps
@@ -1172,7 +1172,7 @@ def get_legacy_map() -> dict[str, Any] | None:
 
 
 def list_maps(limit: int = 20) -> list[dict[str, Any]]:
-    with connect() as conn:
+    with connect().closing() as conn:
         rows = conn.execute(
             """
             SELECT id, preset_id, seed, width, height, age, environment, player_x, player_y, created_at
@@ -2948,7 +2948,7 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
         raise ValueError("No active map.")
     meta_visited = list(data.get("visited") or [])
     if not meta_visited or not data.get("knowledge"):
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT meta_json FROM world_maps WHERE id = ?", (data["id"],)).fetchone()
         if row:
             try:
@@ -3003,7 +3003,7 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
     try:
         from app.world import get_weather, weather_travel_multiplier, weather_event_chance_delta
 
-        with connect() as _wc:
+        with connect().closing() as _wc:
             weather_snapshot = get_weather(_wc)
         weather_mult = weather_travel_multiplier(weather_snapshot)
         minutes = max(5, int(round(minutes * weather_mult)))
@@ -3024,7 +3024,7 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
     # permanently quiet while danger still moved with night, weather and
     # fatigue. The same turn still seeds the same roll, which rewind needs.
     try:
-        with connect() as _turn_conn:
+        with connect().closing() as _turn_conn:
             _turn_row = _turn_conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         travel_turn = int(_turn_row["value"]) if _turn_row else 0
     except Exception:

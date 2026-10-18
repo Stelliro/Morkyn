@@ -2056,7 +2056,7 @@ def get_model_config(*, ignore_override: bool = False, resolve_limits: bool = Tr
         "lora_scale": 1.0,
     }
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'model_config'").fetchone()
     except Exception:
         default["provider"] = _normalize_provider(default["provider"])
@@ -2174,7 +2174,7 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     next_config.pop("theme_model_active", None)
     next_config.pop("context_window", None)
     next_config.pop("model_limits", None)
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             ("model_config", json.dumps(next_config, ensure_ascii=True)),
@@ -17376,7 +17376,7 @@ def _load_active_quests_snapshot() -> list[dict[str, Any]]:
     try:
         from app.quests import quest_context_for_llm
 
-        with connect() as conn:
+        with connect().closing() as conn:
             return list(quest_context_for_llm(conn) or [])[:8]
     except Exception:
         return []

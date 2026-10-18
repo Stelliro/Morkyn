@@ -442,7 +442,7 @@ def snapshot() -> dict[str, Any]:
     # A snapshot must not log itself into the ledger it is taken for.
     token = _CURRENT.set(None)
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT * FROM player LIMIT 1").fetchone()
             out["player"] = {k: row[k] for k in row.keys()} if row else {}
             loc_id = out["player"].get("current_location_id")
@@ -473,7 +473,7 @@ def _new_rows(table: str, after_id: int) -> list[str]:
 
     token = _CURRENT.set(None)
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
             label = next((c for c in ("name", "title", "fact", "content", "summary", "description", "kind") if c in cols), None)
             pick = f"id, {label}" if label else "id"

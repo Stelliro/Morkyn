@@ -2047,7 +2047,7 @@ def turn_cast_options(state: dict[str, Any] | None, *, turn: int = 0) -> dict[st
     try:
         from app.db import connect
 
-        with connect() as conn:
+        with connect().closing() as conn:
             return cast_options(options, location, conn=conn, rng=rng)
     except Exception:
         return cast_options(options, location, rng=rng)

@@ -968,7 +968,7 @@ def format_world_time(
 def get_world_time(conn=None) -> dict[str, Any]:
     """Read in-world clock from pacing (defaults if missing)."""
     if conn is None:
-        with connect() as c:
+        with connect().closing() as c:
             return get_world_time(c)
     day = max(1, int(_float(_pacing_get(conn, "world_day", "1"), 1)))
     minute = int(_float(_pacing_get(conn, "world_minute", str(WORLD_DEFAULT_START_MINUTE)), WORLD_DEFAULT_START_MINUTE))
@@ -1022,7 +1022,7 @@ def normalize_wait_minutes(minutes: int | str, conn=None) -> int:
     minutes = int(minutes)
     if minutes == -1:
         if conn is None:
-            with connect() as c:
+            with connect().closing() as c:
                 return max(1, min(WORLD_DAY_LENGTH_MINUTES, minutes_until_hour(c, 6)))
         return max(1, min(WORLD_DAY_LENGTH_MINUTES, minutes_until_hour(conn, 6)))
     if minutes in WAIT_MINUTE_CHOICES:
@@ -1111,7 +1111,7 @@ def _default_weather() -> dict[str, Any]:
 
 def get_weather(conn=None) -> dict[str, Any]:
     if conn is None:
-        with connect() as c:
+        with connect().closing() as c:
             return get_weather(c)
     raw = _settings(conn).get("world_weather")
     if isinstance(raw, dict) and raw.get("kind"):
@@ -2407,7 +2407,7 @@ def _ensure_combat_profiles_for_input(state: dict[str, Any], player_input: str) 
     if not candidates:
         return False
     changed = False
-    with connect() as conn:
+    with connect().closing() as conn:
         for npc in candidates:
             combat = _combat_profile_from_npc(npc)
             if combat["max_health"] > 0 and combat["attack_max"] > 0:
@@ -3143,7 +3143,7 @@ def consolidate_memory(keep_recent_summaries: int | None = None, max_facts: int 
     fact_cap = max_facts if max_facts is not None else MEMORY_CONSOLIDATE_MAX_FACTS
     fact_cap = max(20, int(fact_cap))
 
-    with connect() as conn:
+    with connect().closing() as conn:
         summaries = rows_to_dicts(conn.execute("SELECT turn, summary FROM turn_summaries ORDER BY turn ASC").fetchall())
         turn_row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         current_turn = int(turn_row["value"]) if turn_row else 0
@@ -3384,7 +3384,7 @@ def _slim_game_start_form(form: dict[str, Any]) -> dict[str, Any]:
 
 def _read_game_start_form() -> dict[str, Any] | None:
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'game_start_form'").fetchone()
     except Exception:
         return None
@@ -3694,7 +3694,7 @@ def save_campaign_slot(slot_name: str) -> dict[str, Any]:
         except (TypeError, ValueError):
             pass
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
             if row:
                 turn = max(turn, int(row["value"] or 0))
@@ -3813,7 +3813,7 @@ def resume_snapshot(state: dict[str, Any] | None = None) -> dict[str, Any]:
     has_map = False
     if map_id:
         try:
-            with connect() as conn:
+            with connect().closing() as conn:
                 row = conn.execute("SELECT id FROM world_maps WHERE id = ?", (map_id,)).fetchone()
                 has_map = row is not None
                 if not has_map:
@@ -3849,7 +3849,7 @@ def has_continuable_save() -> dict[str, Any]:
             player = (state.get("player") or {}).get("name") or ""
             turn = 0
             try:
-                with connect() as conn:
+                with connect().closing() as conn:
                     row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
                     if row:
                         turn = int(row["value"] or 0)
@@ -4188,7 +4188,7 @@ def load_player_art(kind: str) -> dict[str, Any] | None:
     key = PLAYER_ART_KEYS.get(str(kind or "").lower())
     if not key:
         return None
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     entry = _parse_player_art(row["value"] if row else None)
     if not entry or not str(entry.get("data_url") or "").startswith("data:image"):
@@ -4197,7 +4197,7 @@ def load_player_art(kind: str) -> dict[str, Any] | None:
 
 
 def get_state(include_hidden: bool = False) -> dict[str, Any]:
-    with connect() as conn:
+    with connect().closing() as conn:
         settings = _settings(conn)
         settings.pop("game_start_form", None)
         # The speech API key only ever leaves masked (/api/tts-config). Every payload
@@ -4352,392 +4352,394 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         world_time = get_world_time(conn)
         turn_number = int(_float(_pacing_get(conn, "turn", "0"), 0))
 
-    for npc in npcs:
-        npc["known_facts"] = _json(npc.get("known_facts"), [])
-        npc["stat_profile"] = _json(npc.get("stat_profile"), {})
-        npc["skill_profile"] = _json(npc.get("skill_profile"), {})
-        raw_role = str(npc.get("role") or "")
-        clean_role = _sanitize_npc_role(raw_role)
-        if clean_role != raw_role:
-            npc["role"] = clean_role
-        npc["combat_profile"] = _combat_profile_from_npc(npc)
-    for convo in conversations:
-        convo["player_claims"] = _json(convo.get("player_claims"), [])
-    for item in inventory:
-        item["enchantments"] = _json(item.get("enchantments"), [])
-        item["stat_modifiers"] = _normalize_stat_modifiers(item.get("stat_modifiers"))
-        item["granted_abilities"] = _normalize_granted_abilities(item.get("granted_abilities"), item)
-        # Machine-usable links: canonical stat keys, referenced power codes,
-        # and the check modifiers the dice roller applies while equipped.
-        item["stat_links"] = _json(item.get("stat_links"), {})
-        item["power_codes"] = _json(item.get("power_codes"), [])
-        item["roll_profile"] = _json(item.get("roll_profile"), {})
-        item["item_stats"] = _json(item.get("item_stats"), {})
-    for slot in equipment_slots:
-        slot["accepts"] = _json(slot.get("accepts"), [])
-    for entry in verification_memory:
-        entry["entity_codes"] = _json(entry.get("entity_codes"), [])
+        for npc in npcs:
+            npc["known_facts"] = _json(npc.get("known_facts"), [])
+            npc["stat_profile"] = _json(npc.get("stat_profile"), {})
+            npc["skill_profile"] = _json(npc.get("skill_profile"), {})
+            raw_role = str(npc.get("role") or "")
+            clean_role = _sanitize_npc_role(raw_role)
+            if clean_role != raw_role:
+                npc["role"] = clean_role
+            npc["combat_profile"] = _combat_profile_from_npc(npc)
+        for convo in conversations:
+            convo["player_claims"] = _json(convo.get("player_claims"), [])
+        for item in inventory:
+            item["enchantments"] = _json(item.get("enchantments"), [])
+            item["stat_modifiers"] = _normalize_stat_modifiers(item.get("stat_modifiers"))
+            item["granted_abilities"] = _normalize_granted_abilities(item.get("granted_abilities"), item)
+            # Machine-usable links: canonical stat keys, referenced power codes,
+            # and the check modifiers the dice roller applies while equipped.
+            item["stat_links"] = _json(item.get("stat_links"), {})
+            item["power_codes"] = _json(item.get("power_codes"), [])
+            item["roll_profile"] = _json(item.get("roll_profile"), {})
+            item["item_stats"] = _json(item.get("item_stats"), {})
+        for slot in equipment_slots:
+            slot["accepts"] = _json(slot.get("accepts"), [])
+        for entry in verification_memory:
+            entry["entity_codes"] = _json(entry.get("entity_codes"), [])
 
-    for ability in abilities:
-        ability["roll_profile"] = _json(ability.get("roll_profile"), {})
-        ability["resource_cost"] = _json(ability.get("resource_cost"), {})
-        ability["read_only"] = bool(ability.get("read_only", 1))
+        for ability in abilities:
+            ability["roll_profile"] = _json(ability.get("roll_profile"), {})
+            ability["resource_cost"] = _json(ability.get("resource_cost"), {})
+            ability["read_only"] = bool(ability.get("read_only", 1))
 
-    equipment_effects = _equipment_effects(inventory)
-    state_abilities = [*abilities, *equipment_effects["granted_abilities"]]
-    if player is not None:
-        player["effective_stats"] = equipment_effects["stat_modifiers"]
-        player["equipment_ability_names"] = [ability.get("name") for ability in equipment_effects["granted_abilities"] if ability.get("name")]
+        equipment_effects = _equipment_effects(inventory)
+        state_abilities = [*abilities, *equipment_effects["granted_abilities"]]
+        if player is not None:
+            player["effective_stats"] = equipment_effects["stat_modifiers"]
+            player["equipment_ability_names"] = [ability.get("name") for ability in equipment_effects["granted_abilities"] if ability.get("name")]
 
-    # Flat check modifiers currently in effect from equipped gear and passive
-    # or item-granted powers. Surfaced so the UI can show why a roll succeeded
-    # and so the narrator never has to compute a bonus itself.
-    try:
-        from app.skill_checks import gear_roll_modifiers
-
-        gear_rolls = gear_roll_modifiers(inventory, state_abilities)
-    except Exception:
-        gear_rolls = {"modifiers": {}, "sources": []}
-
-    # Energy / fatigue / mana pools (server-enforced)
-    resources: dict[str, Any] = {}
-    opts = settings.get("playthrough_options") if isinstance(settings.get("playthrough_options"), dict) else {}
-    try:
-        from app.player_resources import ensure_player_resources
-
-        with connect() as res_conn:
-            raw_bonus = (player or {}).get("effective_stats") if isinstance(player, dict) else None
-            resources = ensure_player_resources(
-                res_conn,
-                opts,
-                player=player,
-                stats=_gear_scores(raw_bonus) if isinstance(raw_bonus, dict) else None,
-            )
-        if isinstance(player, dict) and resources:
-            for key in (
-                "energy",
-                "max_energy",
-                "mana",
-                "max_mana",
-                "fatigue",
-                "max_fatigue",
-            ):
-                if key in resources:
-                    player[key] = resources[key]
-            player["resources"] = resources
-    except Exception:
-        resources = {}
-
-    collapse: dict[str, Any] = {}
-    res_settings: dict[str, Any] = {}
-    try:
-        from app.player_resources import collapse_state, resource_settings as _resource_settings
-
-        collapse = collapse_state(resources) if resources else {}
-        res_settings = _resource_settings(opts) if opts else _resource_settings({})
-        if isinstance(player, dict) and collapse:
-            player["collapse"] = collapse
-    except Exception:
-        collapse = {}
-        res_settings = {}
-
-    # Stamp power costs + cooldown / afford flags on abilities
-    try:
-        from app.player_resources import (
-            enrich_ability_runtime,
-            load_ability_cooldowns,
-            magic_allows_mana,
-        )
-
-        magic_ok = magic_allows_mana(str(opts.get("magic_level") or ""), opts)
-        cds = load_ability_cooldowns(settings)
-        res_for_afford = dict(resources) if resources else {}
-        if isinstance(player, dict) and player.get("health") is not None:
-            res_for_afford["health"] = player.get("health")
-        enriched: list[dict[str, Any]] = []
-        for ab in state_abilities:
-            if not isinstance(ab, dict):
-                continue
-            # Persist missing resource_cost for DB-backed abilities
-            needs_persist = False
-            if ab.get("id") is not None:
-                raw_rc = ab.get("resource_cost")
-                if not raw_rc or raw_rc in ("{}", ""):
-                    needs_persist = True
-            stamped = enrich_ability_runtime(
-                ab,
-                magic_ok=magic_ok,
-                cooldowns=cds,
-                world_time=world_time,
-                resources=res_for_afford,
-            )
-            if needs_persist and stamped.get("resource_cost") and ab.get("id") is not None:
-                try:
-                    with connect() as ab_conn:
-                        ab_conn.execute(
-                            "UPDATE abilities SET resource_cost = ?, cost = COALESCE(NULLIF(cost, ''), ?) WHERE id = ?",
-                            (
-                                json.dumps(stamped["resource_cost"], ensure_ascii=True),
-                                str(stamped.get("cost") or "")[:300],
-                                int(ab["id"]),
-                            ),
-                        )
-                except Exception:
-                    pass
-            enriched.append(stamped)
-        state_abilities = enriched
-        abilities = [a for a in enriched if a.get("id") is not None or a.get("source") not in {None}]
-    except Exception:
-        pass
-
-    location_tree: list[dict[str, Any]] = []
-    for location in locations:
-        local_npcs = [npc for npc in npcs if npc["location_id"] == location["id"]]
-        local_events = [event for event in events if event.get("location_id") == location["id"]]
-        location_tree.append({**location, "npcs": local_npcs, "events": local_events})
-
-    current_location = None
-    if player:
-        current_location = next(
-            (location for location in locations if location["id"] == player["current_location_id"]),
-            None,
-        )
-    if current_location:
-        # On or off duty right now, from the job and the clock (playtest #83).
+        # Flat check modifiers currently in effect from equipped gear and passive
+        # or item-granted powers. Surfaced so the UI can show why a roll succeeded
+        # and so the narrator never has to compute a bonus itself.
         try:
-            from app.shifts import stamp_duty
+            from app.skill_checks import gear_roll_modifiers
 
-            stamp_duty(conn, [npc for npc in npcs if npc.get("location_id") == current_location["id"]])
+            gear_rolls = gear_roll_modifiers(inventory, state_abilities)
+        except Exception:
+            gear_rolls = {"modifiers": {}, "sources": []}
+
+        # Energy / fatigue / mana pools (server-enforced)
+        resources: dict[str, Any] = {}
+        opts = settings.get("playthrough_options") if isinstance(settings.get("playthrough_options"), dict) else {}
+        try:
+            from app.player_resources import ensure_player_resources
+
+            with connect().closing() as res_conn:
+                raw_bonus = (player or {}).get("effective_stats") if isinstance(player, dict) else None
+                resources = ensure_player_resources(
+                    res_conn,
+                    opts,
+                    player=player,
+                    stats=_gear_scores(raw_bonus) if isinstance(raw_bonus, dict) else None,
+                )
+            if isinstance(player, dict) and resources:
+                for key in (
+                    "energy",
+                    "max_energy",
+                    "mana",
+                    "max_mana",
+                    "fatigue",
+                    "max_fatigue",
+                ):
+                    if key in resources:
+                        player[key] = resources[key]
+                player["resources"] = resources
+        except Exception:
+            resources = {}
+
+        collapse: dict[str, Any] = {}
+        res_settings: dict[str, Any] = {}
+        try:
+            from app.player_resources import collapse_state, resource_settings as _resource_settings
+
+            collapse = collapse_state(resources) if resources else {}
+            res_settings = _resource_settings(opts) if opts else _resource_settings({})
+            if isinstance(player, dict) and collapse:
+                player["collapse"] = collapse
+        except Exception:
+            collapse = {}
+            res_settings = {}
+
+        # Stamp power costs + cooldown / afford flags on abilities
+        try:
+            from app.player_resources import (
+                enrich_ability_runtime,
+                load_ability_cooldowns,
+                magic_allows_mana,
+            )
+
+            magic_ok = magic_allows_mana(str(opts.get("magic_level") or ""), opts)
+            cds = load_ability_cooldowns(settings)
+            res_for_afford = dict(resources) if resources else {}
+            if isinstance(player, dict) and player.get("health") is not None:
+                res_for_afford["health"] = player.get("health")
+            enriched: list[dict[str, Any]] = []
+            for ab in state_abilities:
+                if not isinstance(ab, dict):
+                    continue
+                # Persist missing resource_cost for DB-backed abilities
+                needs_persist = False
+                if ab.get("id") is not None:
+                    raw_rc = ab.get("resource_cost")
+                    if not raw_rc or raw_rc in ("{}", ""):
+                        needs_persist = True
+                stamped = enrich_ability_runtime(
+                    ab,
+                    magic_ok=magic_ok,
+                    cooldowns=cds,
+                    world_time=world_time,
+                    resources=res_for_afford,
+                )
+                if needs_persist and stamped.get("resource_cost") and ab.get("id") is not None:
+                    try:
+                        with connect().closing() as ab_conn:
+                            ab_conn.execute(
+                                "UPDATE abilities SET resource_cost = ?, cost = COALESCE(NULLIF(cost, ''), ?) WHERE id = ?",
+                                (
+                                    json.dumps(stamped["resource_cost"], ensure_ascii=True),
+                                    str(stamped.get("cost") or "")[:300],
+                                    int(ab["id"]),
+                                ),
+                            )
+                    except Exception:
+                        pass
+                enriched.append(stamped)
+            state_abilities = enriched
+            abilities = [a for a in enriched if a.get("id") is not None or a.get("source") not in {None}]
         except Exception:
             pass
-        # What can be walked into from right here, and whether it is open at this
-        # hour. Without this the model has no way to know a shop exists, so it
-        # invents one -- which is how an apothecary appeared in a hamlet.
-        current_location = dict(current_location)
-        inside_id = int(current_location.get("parent_id") or 0)
-        current_location["venues_here"] = venues_at(conn, int(current_location["id"]))
-        if inside_id:
-            parent = next((loc for loc in locations if loc["id"] == inside_id), None)
-            current_location["inside_venue"] = True
-            current_location["venue_kind"] = str(current_location.get("kind") or "")
-            current_location["exit_to"] = str((parent or {}).get("name") or "")
-            keeper_id = int(current_location.get("keeper_npc_id") or 0)
-            keeper = next((n for n in npcs if int(n.get("id") or 0) == keeper_id), None) if keeper_id else None
-            if keeper:
-                current_location["keeper"] = {
-                    "code": str(keeper.get("code") or ""),
-                    "name": str(keeper.get("name") or ""),
-                    "role": str(keeper.get("role") or ""),
-                }
-            # Siblings share the street outside, so they are one step away, not two.
-            current_location["venues_here"] = venues_at(conn, inside_id)
-        else:
-            current_location["inside_venue"] = False
-            current_location["settlement_size"] = settlement_size_for(conn, current_location)
 
-    context_window = context_window_tokens()
-    latest_budget = max((int(log.get("estimated_tokens") or 0) for log in model_logs[:2]), default=0)
-    state = {
-        "setup_complete": settings.get("setup_complete") == "true" or settings.get("setup_complete") is True,
-        "settings": settings,
-        "player": player,
-        "resources": resources,
-        "collapse": collapse,
-        "resource_settings": res_settings,
-        "current_location": current_location,
-        "locations": location_tree,
-        "inventory": inventory,
-        "equipment_slots": equipment_slots,
-        "inventory_capacity_modifiers": inventory_capacity_modifiers,
-        "inventory_summary": _inventory_summary(settings, inventory, equipment_slots, inventory_capacity_modifiers),
-        "equipment_effects": equipment_effects,
-        "gear_roll_modifiers": gear_rolls,
-        "skills": skills,
-        "abilities": state_abilities,
-        "events": events,
-        "relationships": relationships,
-        "conversations": conversations,
-        "response_drafts": response_drafts,
-        "aliases": aliases,
-        "player_aliases": player_aliases,
-        "active_player_alias": next((alias for alias in player_aliases if int(alias.get("active") or 0)), None),
-        "karma_history": karma_history,
-        "turn_summaries": turn_summaries,
-        "model_logs": model_logs,
-        "model_budget": {
-            "context_window": context_window,
-            "warning_threshold": int(context_window * 0.75),
-            "latest_estimated_tokens": latest_budget,
-            "warning": latest_budget >= int(context_window * 0.75),
-            "consolidated_facts": len(_load_consolidated_facts()) if consolidated_facts_path().exists() else 0,
-            "turn_summaries": len(turn_summaries),
-        },
-        "rewind_points": rewind_points,
-        "history": journal,
-        "world_time": world_time,
-        "turn": turn_number,
-        "weather": get_weather(conn),
-    }
-    # Quest and relationship context for LLM injection
-    try:
-        from app.quests import quest_context_for_llm
-        state["active_quests"] = quest_context_for_llm(conn)
-    except Exception:
-        state["active_quests"] = []
-    # Posted, not yet taken: the quest parser files story offers here too.
-    try:
-        from app.quests import get_offered_quests
+        location_tree: list[dict[str, Any]] = []
+        for location in locations:
+            local_npcs = [npc for npc in npcs if npc["location_id"] == location["id"]]
+            local_events = [event for event in events if event.get("location_id") == location["id"]]
+            location_tree.append({**location, "npcs": local_npcs, "events": local_events})
 
-        # id, giver_code, place and the promise feed the Accept / Decline
-        # prompt in the play view (TODO n20); the rest is what prompts read.
-        state["open_quest_offers"] = [
-            {
-                "id": q.get("id"),
-                "code": q.get("code"),
-                "title": q.get("title"),
-                "status": "offered",
-                "giver": q.get("giver_name") or "",
-                "giver_code": q.get("giver_code") or "",
-                "reward": f"{q.get('reward_gold') or 0}g / {q.get('reward_xp') or 0}xp",
-                "promised": (re.search(r"Promised: (.+)$", str(q.get("description") or "")) or [None, ""])[1],
-                "current_objective": (q.get("steps") or [{}])[0].get("description", ""),
-                "first_step": (q.get("steps") or [{}])[0].get("title", ""),
-                "location": (q.get("steps") or [{}])[0].get("location_name", ""),
-                "offered_turn": q.get("created_turn") or 0,
-            }
-            for q in get_offered_quests(conn)[:8]
-        ]
-    except Exception:
-        state["open_quest_offers"] = []
-    # Go with / Stay and Travel there buttons, and the set destination (TODO
-    # n21, n22): drawn under the narration by static/app.js renderMovePrompt.
-    try:
-        from app.turn_prompts import state_view
+        current_location = None
+        if player:
+            current_location = next(
+                (location for location in locations if location["id"] == player["current_location_id"]),
+                None,
+            )
+        if current_location:
+            # On or off duty right now, from the job and the clock (playtest #83).
+            try:
+                from app.shifts import stamp_duty
 
-        state.update(state_view(conn))
-    except Exception:
-        state["prompts"] = []
-        state["travel_destination"] = None
-    try:
-        from app.relationships import all_relationships_for_llm
-        state["npc_player_relationships"] = all_relationships_for_llm(conn)
-    except Exception:
-        state["npc_player_relationships"] = []
-    # Player titles
-    try:
-        from app.titles import get_entity_titles, title_stat_bonuses_for_player
-        state["player_titles"] = get_entity_titles(1, "player", include_hidden=False, conn=conn)
-        # Merge title stat bonuses into player effective_stats when titles enabled
-        titles_on = settings.get("titles_enabled")
-        if titles_on != "false" and titles_on is not False and state["player_titles"]:
-            bonuses = title_stat_bonuses_for_player(conn=conn)
-            if bonuses and isinstance(state.get("player"), dict):
-                eff = dict(state["player"].get("effective_stats") or {})
-                for stat, val in bonuses.items():
-                    eff[stat] = int(eff.get(stat) or 0) + val
-                state["player"]["effective_stats"] = eff
-                state["title_stat_bonuses"] = bonuses
-    except Exception:
-        state["player_titles"] = []
-    # Party
-    try:
-        from app.party import get_party
-        state["party"] = get_party(conn=conn)
-    except Exception:
-        state["party"] = []
-    # Companions of a save made before knows_player_name existed are marked
-    # once by the db migration (playtest #78). Following the player through a
-    # scene is not being told the name (7B run 30, T6: Dunstan, a scene
-    # companion since T2, said "Good thinking, Isk." unasked).
-    # Who the player is talking to, for the "Talking to" chip (app/conversation.py).
-    try:
-        from app.conversation import view as conversation_view
+                # The state's own connection closed with its block (app.db._Connection).
+                with connect().closing() as duty_conn:
+                    stamp_duty(duty_conn, [npc for npc in npcs if npc.get("location_id") == current_location["id"]])
+            except Exception:
+                pass
+            # What can be walked into from right here, and whether it is open at this
+            # hour. Without this the model has no way to know a shop exists, so it
+            # invents one -- which is how an apothecary appeared in a hamlet.
+            current_location = dict(current_location)
+            inside_id = int(current_location.get("parent_id") or 0)
+            current_location["venues_here"] = venues_at(conn, int(current_location["id"]))
+            if inside_id:
+                parent = next((loc for loc in locations if loc["id"] == inside_id), None)
+                current_location["inside_venue"] = True
+                current_location["venue_kind"] = str(current_location.get("kind") or "")
+                current_location["exit_to"] = str((parent or {}).get("name") or "")
+                keeper_id = int(current_location.get("keeper_npc_id") or 0)
+                keeper = next((n for n in npcs if int(n.get("id") or 0) == keeper_id), None) if keeper_id else None
+                if keeper:
+                    current_location["keeper"] = {
+                        "code": str(keeper.get("code") or ""),
+                        "name": str(keeper.get("name") or ""),
+                        "role": str(keeper.get("role") or ""),
+                    }
+                # Siblings share the street outside, so they are one step away, not two.
+                current_location["venues_here"] = venues_at(conn, inside_id)
+            else:
+                current_location["inside_venue"] = False
+                current_location["settlement_size"] = settlement_size_for(conn, current_location)
 
-        state["conversation"] = conversation_view(state)
-    except Exception:
-        state["conversation"] = {}
-    # What the player is in the middle of (app/scene_thread.py): the turn
-    # builds on it, and the suggestion ask offers a move that continues it.
-    try:
-        from app.scene_thread import load as load_scene_thread
-
-        state["scene_thread"] = load_scene_thread(settings)
-    except Exception:
-        state["scene_thread"] = None
-    try:
-        from app.encounter_board import load_encounter
-
-        state["active_encounter"] = load_encounter(conn)
-    except Exception:
-        state["active_encounter"] = {
-            "active": False,
-            "updated_turn": 0,
-            "closed_turn": 0,
-            "outcome": "",
-            "scale_note": "",
-            "allies": [],
-            "foes": [],
-            "seen_moves": [],
+        context_window = context_window_tokens()
+        latest_budget = max((int(log.get("estimated_tokens") or 0) for log in model_logs[:2]), default=0)
+        state = {
+            "setup_complete": settings.get("setup_complete") == "true" or settings.get("setup_complete") is True,
+            "settings": settings,
+            "player": player,
+            "resources": resources,
+            "collapse": collapse,
+            "resource_settings": res_settings,
+            "current_location": current_location,
+            "locations": location_tree,
+            "inventory": inventory,
+            "equipment_slots": equipment_slots,
+            "inventory_capacity_modifiers": inventory_capacity_modifiers,
+            "inventory_summary": _inventory_summary(settings, inventory, equipment_slots, inventory_capacity_modifiers),
+            "equipment_effects": equipment_effects,
+            "gear_roll_modifiers": gear_rolls,
+            "skills": skills,
+            "abilities": state_abilities,
+            "events": events,
+            "relationships": relationships,
+            "conversations": conversations,
+            "response_drafts": response_drafts,
+            "aliases": aliases,
+            "player_aliases": player_aliases,
+            "active_player_alias": next((alias for alias in player_aliases if int(alias.get("active") or 0)), None),
+            "karma_history": karma_history,
+            "turn_summaries": turn_summaries,
+            "model_logs": model_logs,
+            "model_budget": {
+                "context_window": context_window,
+                "warning_threshold": int(context_window * 0.75),
+                "latest_estimated_tokens": latest_budget,
+                "warning": latest_budget >= int(context_window * 0.75),
+                "consolidated_facts": len(_load_consolidated_facts()) if consolidated_facts_path().exists() else 0,
+                "turn_summaries": len(turn_summaries),
+            },
+            "rewind_points": rewind_points,
+            "history": journal,
+            "world_time": world_time,
+            "turn": turn_number,
+            "weather": get_weather(),
         }
-    # The death, when there was one (playtest #88): the browser shows the You
-    # died screen from this and play_turn refuses to go on.
-    dead = settings.get("player_dead")
-    state["dead"] = dead if isinstance(dead, dict) and dead else None
-    raw_conditions = settings.get("player_conditions")
-    if isinstance(raw_conditions, list):
-        state["conditions"] = raw_conditions
-    elif isinstance(raw_conditions, str) and raw_conditions.strip():
+        # Quest and relationship context for LLM injection
         try:
-            state["conditions"] = json.loads(raw_conditions)
+            from app.quests import quest_context_for_llm
+            state["active_quests"] = quest_context_for_llm(conn)
         except Exception:
+            state["active_quests"] = []
+        # Posted, not yet taken: the quest parser files story offers here too.
+        try:
+            from app.quests import get_offered_quests
+
+            # id, giver_code, place and the promise feed the Accept / Decline
+            # prompt in the play view (TODO n20); the rest is what prompts read.
+            state["open_quest_offers"] = [
+                {
+                    "id": q.get("id"),
+                    "code": q.get("code"),
+                    "title": q.get("title"),
+                    "status": "offered",
+                    "giver": q.get("giver_name") or "",
+                    "giver_code": q.get("giver_code") or "",
+                    "reward": f"{q.get('reward_gold') or 0}g / {q.get('reward_xp') or 0}xp",
+                    "promised": (re.search(r"Promised: (.+)$", str(q.get("description") or "")) or [None, ""])[1],
+                    "current_objective": (q.get("steps") or [{}])[0].get("description", ""),
+                    "first_step": (q.get("steps") or [{}])[0].get("title", ""),
+                    "location": (q.get("steps") or [{}])[0].get("location_name", ""),
+                    "offered_turn": q.get("created_turn") or 0,
+                }
+                for q in get_offered_quests(conn)[:8]
+            ]
+        except Exception:
+            state["open_quest_offers"] = []
+        # Go with / Stay and Travel there buttons, and the set destination (TODO
+        # n21, n22): drawn under the narration by static/app.js renderMovePrompt.
+        try:
+            from app.turn_prompts import state_view
+
+            state.update(state_view(conn))
+        except Exception:
+            state["prompts"] = []
+            state["travel_destination"] = None
+        try:
+            from app.relationships import all_relationships_for_llm
+            state["npc_player_relationships"] = all_relationships_for_llm(conn)
+        except Exception:
+            state["npc_player_relationships"] = []
+        # Player titles
+        try:
+            from app.titles import get_entity_titles, title_stat_bonuses_for_player
+            state["player_titles"] = get_entity_titles(1, "player", include_hidden=False, conn=conn)
+            # Merge title stat bonuses into player effective_stats when titles enabled
+            titles_on = settings.get("titles_enabled")
+            if titles_on != "false" and titles_on is not False and state["player_titles"]:
+                bonuses = title_stat_bonuses_for_player(conn=conn)
+                if bonuses and isinstance(state.get("player"), dict):
+                    eff = dict(state["player"].get("effective_stats") or {})
+                    for stat, val in bonuses.items():
+                        eff[stat] = int(eff.get(stat) or 0) + val
+                    state["player"]["effective_stats"] = eff
+                    state["title_stat_bonuses"] = bonuses
+        except Exception:
+            state["player_titles"] = []
+        # Party
+        try:
+            from app.party import get_party
+            state["party"] = get_party(conn=conn)
+        except Exception:
+            state["party"] = []
+        # Companions of a save made before knows_player_name existed are marked
+        # once by the db migration (playtest #78). Following the player through a
+        # scene is not being told the name (7B run 30, T6: Dunstan, a scene
+        # companion since T2, said "Good thinking, Isk." unasked).
+        # Who the player is talking to, for the "Talking to" chip (app/conversation.py).
+        try:
+            from app.conversation import view as conversation_view
+
+            state["conversation"] = conversation_view(state)
+        except Exception:
+            state["conversation"] = {}
+        # What the player is in the middle of (app/scene_thread.py): the turn
+        # builds on it, and the suggestion ask offers a move that continues it.
+        try:
+            from app.scene_thread import load as load_scene_thread
+
+            state["scene_thread"] = load_scene_thread(settings)
+        except Exception:
+            state["scene_thread"] = None
+        try:
+            from app.encounter_board import load_encounter
+
+            state["active_encounter"] = load_encounter(conn)
+        except Exception:
+            state["active_encounter"] = {
+                "active": False,
+                "updated_turn": 0,
+                "closed_turn": 0,
+                "outcome": "",
+                "scale_note": "",
+                "allies": [],
+                "foes": [],
+                "seen_moves": [],
+            }
+        # The death, when there was one (playtest #88): the browser shows the You
+        # died screen from this and play_turn refuses to go on.
+        dead = settings.get("player_dead")
+        state["dead"] = dead if isinstance(dead, dict) and dead else None
+        raw_conditions = settings.get("player_conditions")
+        if isinstance(raw_conditions, list):
+            state["conditions"] = raw_conditions
+        elif isinstance(raw_conditions, str) and raw_conditions.strip():
+            try:
+                state["conditions"] = json.loads(raw_conditions)
+            except Exception:
+                state["conditions"] = []
+        else:
             state["conditions"] = []
-    else:
-        state["conditions"] = []
-    tr = settings.get("travel_ready")
-    if isinstance(tr, bool):
-        state["travel_ready"] = tr
-    else:
-        state["travel_ready"] = str(tr).lower() in {"1", "true", "yes", "on"} if tr is not None else True
-    # Location specials: heavens prison (blank map + no free movement), etc.
-    loc_flags = settings.get("location_special_flags")
-    if isinstance(loc_flags, str) and loc_flags.strip():
-        try:
-            loc_flags = json.loads(loc_flags)
-        except Exception:
+        tr = settings.get("travel_ready")
+        if isinstance(tr, bool):
+            state["travel_ready"] = tr
+        else:
+            state["travel_ready"] = str(tr).lower() in {"1", "true", "yes", "on"} if tr is not None else True
+        # Location specials: heavens prison (blank map + no free movement), etc.
+        loc_flags = settings.get("location_special_flags")
+        if isinstance(loc_flags, str) and loc_flags.strip():
+            try:
+                loc_flags = json.loads(loc_flags)
+            except Exception:
+                loc_flags = {}
+        if not isinstance(loc_flags, dict):
             loc_flags = {}
-    if not isinstance(loc_flags, dict):
-        loc_flags = {}
-    ml = settings.get("movement_locked")
-    if isinstance(ml, bool):
-        movement_locked = ml
-    else:
-        movement_locked = str(ml).lower() in {"1", "true", "yes", "on"} if ml is not None else bool(
-            loc_flags.get("movement_locked")
-        )
-    mb = settings.get("map_blank")
-    if isinstance(mb, bool):
-        map_blank = mb
-    else:
-        map_blank = str(mb).lower() in {"1", "true", "yes", "on"} if mb is not None else bool(
-            loc_flags.get("map_blank")
-        )
-    state["location_special_flags"] = loc_flags
-    state["movement_locked"] = bool(movement_locked)
-    state["map_blank"] = bool(map_blank)
-    # The art is named on the state top level (kind, token, url, updated_at)
-    # and never carried: the browser fetches /api/player-art/{kind} once per
-    # token. The copies left inside settings were 1.2 MB of base64 on every
-    # /api/state and turn payload and in every trace file, read by nothing:
-    # export and the save editor read the settings table, not this dict.
-    state["player_portrait"] = _player_art_ref(settings.get("player_portrait"), "face")
-    state["player_fullbody"] = _player_art_ref(settings.get("player_fullbody"), "fullbody")
-    settings.pop("player_portrait", None)
-    settings.pop("player_fullbody", None)
-    if include_hidden:
-        state["gm_notes"] = gm_notes or {"id": 1, "content": ""}
-        state["gm_events"] = gm_events
-        state["verification_memory"] = verification_memory
-    return state
+        ml = settings.get("movement_locked")
+        if isinstance(ml, bool):
+            movement_locked = ml
+        else:
+            movement_locked = str(ml).lower() in {"1", "true", "yes", "on"} if ml is not None else bool(
+                loc_flags.get("movement_locked")
+            )
+        mb = settings.get("map_blank")
+        if isinstance(mb, bool):
+            map_blank = mb
+        else:
+            map_blank = str(mb).lower() in {"1", "true", "yes", "on"} if mb is not None else bool(
+                loc_flags.get("map_blank")
+            )
+        state["location_special_flags"] = loc_flags
+        state["movement_locked"] = bool(movement_locked)
+        state["map_blank"] = bool(map_blank)
+        # The art is named on the state top level (kind, token, url, updated_at)
+        # and never carried: the browser fetches /api/player-art/{kind} once per
+        # token. The copies left inside settings were 1.2 MB of base64 on every
+        # /api/state and turn payload and in every trace file, read by nothing:
+        # export and the save editor read the settings table, not this dict.
+        state["player_portrait"] = _player_art_ref(settings.get("player_portrait"), "face")
+        state["player_fullbody"] = _player_art_ref(settings.get("player_fullbody"), "fullbody")
+        settings.pop("player_portrait", None)
+        settings.pop("player_fullbody", None)
+        if include_hidden:
+            state["gm_notes"] = gm_notes or {"id": 1, "content": ""}
+            state["gm_events"] = gm_events
+            state["verification_memory"] = verification_memory
+        return state
 
 
 def _apply_scene_cast(conn, cast: Any, narration: str = "") -> None:
@@ -4922,7 +4924,7 @@ def update_session_theme(patch: dict[str, Any] | None) -> dict[str, Any]:
     """
     if not isinstance(patch, dict):
         patch = {}
-    with connect() as conn:
+    with connect().closing() as conn:
         raw = conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()
         options: dict[str, Any] = {}
         if raw and raw["value"]:
@@ -5311,7 +5313,7 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    with connect() as conn:
+    with connect().closing() as conn:
         _clear_playthrough(conn)
         # The map was rolled before Start and is the active one; every other
         # stored map is a reroll or an earlier game (playtest #25). Saved slots
@@ -6022,7 +6024,7 @@ def _purge_test_settings(conn) -> None:
 
 
 def export_world() -> dict[str, Any]:
-    with connect() as conn:
+    with connect().closing() as conn:
         tables = {table: _table_rows(conn, table) for table in WORLD_TABLES}
         # Only the map this campaign uses (playtest #25: game 2 carried 75).
         if "world_maps" in tables:
@@ -6066,7 +6068,7 @@ def _restore_world(data: dict[str, Any]) -> None:
             return isinstance(tables, dict) and table in tables
         return True
 
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute("PRAGMA foreign_keys = OFF")
         try:
             for table in RESTORE_ORDER:
@@ -6144,7 +6146,7 @@ def import_world(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_gm_notes(content: str) -> dict[str, Any]:
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "UPDATE gm_notes SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
             (content[:6000],),
@@ -11696,7 +11698,7 @@ def _verification_memory_context(context: dict[str, Any]) -> dict[str, Any]:
     scope_keys = [scope["scope_key"] for scope in scopes.values()]
     placeholders = ", ".join("?" for _ in scope_keys)
     params: list[Any] = [*scope_keys, VERIFICATION_MEMORY_CONFIDENCE_MIN, VERIFICATION_MEMORY_LIMIT]
-    with connect() as conn:
+    with connect().closing() as conn:
         entries = rows_to_dicts(
             conn.execute(
                 f"""
@@ -12124,7 +12126,7 @@ def _event_lifecycle_context(state: dict[str, Any]) -> dict[str, Any]:
 def _recent_narration_tics() -> list[str]:
     """Tic list for the turn packet; never lets a stats query break a turn."""
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             return narration_tics(conn)
     except Exception:
         return []
@@ -12200,7 +12202,7 @@ def resolve_turn_naming(state: dict[str, Any], player_input: str) -> dict[str, A
                     known.append(str(npc["name"]))
         turn = int((state.get("pacing") or {}).get("turn") or 0)
         player_name = str((state.get("player") or {}).get("name") or "")
-        with connect() as conn:
+        with connect().closing() as conn:
             return resolve_name_demand(
                 conn, player_input, known_names=known, turn=turn, player_name=player_name
             )
@@ -12572,7 +12574,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     try:
         from app.turn_prompts import leads_for_draft
 
-        with connect() as c_leads:
+        with connect().closing() as c_leads:
             leads = leads_for_draft(c_leads, _current_turn_number() + 1)
         if leads:
             prompt_context["open_leads"] = leads
@@ -12730,7 +12732,7 @@ def _update_or_insert_row(conn, table: str, row: dict[str, Any]) -> None:
 
 def rewind_last_turn(snapshot_id: int | None = None) -> dict[str, Any]:
     rewound_turn = 0
-    with connect() as conn:
+    with connect().closing() as conn:
         if snapshot_id is None:
             row = conn.execute("SELECT * FROM turn_snapshots ORDER BY id DESC LIMIT 1").fetchone()
         else:
@@ -12790,7 +12792,7 @@ def rewind_last_turn(snapshot_id: int | None = None) -> dict[str, Any]:
 
 
 def _latest_regeneration_target() -> dict[str, Any]:
-    with connect() as conn:
+    with connect().closing() as conn:
         snapshot = conn.execute("SELECT id, turn FROM turn_snapshots ORDER BY id DESC LIMIT 1").fetchone()
         if snapshot is None:
             raise ValueError("No turn is available to regenerate.")
@@ -12836,7 +12838,7 @@ def regenerate_last_turn(allow_fallback: bool = True) -> dict[str, Any]:
     # world sits one turn back and the input it was about to replay is kept
     # under REGENERATE_PENDING_KEY. Honour that instead of rewinding a second
     # turn, which is what a plain Retry of /api/regenerate would otherwise do.
-    with connect() as conn:
+    with connect().closing() as conn:
         pending = _read_pending_regeneration(conn)
         conn.execute("DELETE FROM settings WHERE key = ?", (REGENERATE_PENDING_KEY,))
     if pending and int(pending.get("turn") or 0) == _current_turn_number() + 1:
@@ -12872,7 +12874,7 @@ def regenerate_last_turn(allow_fallback: bool = True) -> dict[str, Any]:
             "input_kind": input_kind,
             "content": str(target.get("content") or ""),
         }
-        with connect() as conn:
+        with connect().closing() as conn:
             _set_setting(conn, REGENERATE_PENDING_KEY, replay)
         exc.problem["pending_replay"] = {"turn": replay["turn"], "input_kind": input_kind}
         raise
@@ -20898,7 +20900,7 @@ def create_player_alias(alias: str, notes: str = "") -> dict[str, Any]:
     if not alias:
         raise ValueError("Alias is required.")
 
-    with connect() as conn:
+    with connect().closing() as conn:
         settings = _settings(conn)
         turn = _turn_value(conn)
         if settings.get("setup_complete") != "true" and settings.get("setup_complete") is not True:
@@ -20927,7 +20929,7 @@ def create_player_alias(alias: str, notes: str = "") -> dict[str, Any]:
 
 def update_player_alias_state(alias_id: int | None, active: bool | None = None, disguised: bool | None = None, disguise_description: str = "") -> dict[str, Any]:
     disguise_description = str(disguise_description or "")[:300]
-    with connect() as conn:
+    with connect().closing() as conn:
         turn = _turn_value(conn)
         if alias_id is None:
             conn.execute("UPDATE player_aliases SET active = 0, updated_at = CURRENT_TIMESTAMP")
@@ -20964,7 +20966,7 @@ def delete_player_alias(alias_id: int) -> dict[str, Any]:
         alias_id = int(alias_id)
     except (TypeError, ValueError) as exc:
         raise ValueError("Unknown gameplay alias.") from exc
-    with connect() as conn:
+    with connect().closing() as conn:
         turn = _turn_value(conn)
         alias = conn.execute("SELECT * FROM player_aliases WHERE id = ?", (alias_id,)).fetchone()
         if alias is None:
@@ -21025,7 +21027,7 @@ def add_alias(alias: str, entity_type: str, entity_code: str) -> dict[str, Any]:
     if not alias or not entity_code:
         raise ValueError("Alias and entity code are required.")
 
-    with connect() as conn:
+    with connect().closing() as conn:
         exists = False
         if entity_type == "npc":
             exists = conn.execute("SELECT 1 FROM npcs WHERE code = ?", (entity_code,)).fetchone() is not None
@@ -23449,7 +23451,7 @@ def apply_turn(
     caller_result = result
     map_report: dict[str, Any] = {"status": "skipped", "steps_taken": 0}
     quest_report: dict[str, Any] = {"status": "skipped", "created": [], "updated": [], "rejected": []}
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         next_turn = int(row["value"]) + 1 if row else 1
         # People who exist before this turn: someone above this id was met now
@@ -24448,7 +24450,7 @@ def apply_turn(
 
     # Hierarchical memory: roll older summaries into durable facts after enough history accumulates.
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             summary_count = conn.execute("SELECT COUNT(*) AS count FROM turn_summaries").fetchone()
             count = int(summary_count["count"] or 0) if summary_count else 0
         if count > MEMORY_CONSOLIDATE_KEEP_SUMMARIES + 2:
@@ -24788,7 +24790,7 @@ def _quest_step_match(player_input: str) -> dict[str, Any] | None:
     try:
         from app.quests import get_active_quests, match_quest_step, quest_reward_amounts, reward_text
 
-        with connect() as conn:
+        with connect().closing() as conn:
             if not _play_system_enabled(conn, "quests_enabled", True):
                 return None
             quests = get_active_quests(conn)
@@ -25057,7 +25059,7 @@ def _journal_ooc(note: str) -> None:
     """Keep the player's out-of-character note where they can see it, as its
     own journal row, never in the prose or the model's input (playtest #79)."""
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
             turn = int(row["value"]) if row else 0
             conn.execute(
@@ -25097,7 +25099,7 @@ def _ability_risk_tier(context: dict[str, Any], player_line: str) -> int:
     try:
         from app.encounter_board import load_encounter
 
-        with connect() as c_enc:
+        with connect().closing() as c_enc:
             encounter = load_encounter(c_enc) or {}
     except Exception:
         encounter = {}
@@ -25195,7 +25197,7 @@ def play_turn(
                 )
             )
             if walk_away or persist:
-                with connect() as c_soc:
+                with connect().closing() as c_soc:
                     last = _settings(c_soc).get("last_social")
                     if isinstance(last, dict) and last.get("npc_code"):
                         loc_id = last.get("location_id")
@@ -25251,7 +25253,7 @@ def play_turn(
     mechanics_context = dict(mechanics_context or {})
     # Weather + pending announce for DM prose (non-blocking system)
     try:
-        with connect() as _cw:
+        with connect().closing() as _cw:
             wx = get_weather(_cw)
             mechanics_context["weather"] = {
                 "kind": wx.get("kind"),
@@ -25279,7 +25281,7 @@ def play_turn(
     # rewind gives the turn's energy back (playtest #80 review).
     if input_kind in {"player", "continue"} and not str(model_input).startswith("__"):
         try:
-            with connect() as c_pre:
+            with connect().closing() as c_pre:
                 _snapshot_row(c_pre, "player", "id = 1", (), pre_snapshot_rows)
                 _capture_pre_turn_rows(c_pre, pre_snapshot_rows, setting_keys=("resource_carry",))
         except Exception:
@@ -25305,14 +25307,14 @@ def play_turn(
                 turn_n = int(_float(context.get("turn"), _current_turn_number()) or 0)
 
                 def _sg():
-                    with connect() as c:
+                    with connect().closing() as c:
                         return _settings(c)
 
                 def _ss(key: str, value: Any):
-                    with connect() as c:
+                    with connect().closing() as c:
                         _set_setting(c, key, value)
 
-                with connect() as c_ab:
+                with connect().closing() as c_ab:
                     ability_use_pack = apply_ability_use(
                         c_ab,
                         matched,
@@ -25376,7 +25378,7 @@ def play_turn(
         try:
             # The player's line only, like _turn_intent (playtest #80, the #43 leak).
             spent = estimate_action_minutes(player_line)
-            with connect() as c_time:
+            with connect().closing() as c_time:
                 # A wait "until the evening tide" lasts until the evening: the
                 # clock stayed at noon through a wait, a row out and a dive, and
                 # the prose's evening was rewritten to morning (8B run 145,
@@ -25386,7 +25388,7 @@ def play_turn(
                     turn_ledger.note("time", "waited_until", minutes=until, line=player_line[:120])
                     spent = until
             if spent > 0:
-                with connect() as c_time:
+                with connect().closing() as c_time:
                     ticked = advance_world_time(c_time, spent)
                     # The weather can turn in these minutes; the packet was
                     # built before them and showed the old sky, so the prose
@@ -25422,13 +25424,13 @@ def play_turn(
                 # a town goes through the legacy MOVE path, which charges nothing.
                 from app.town_moves import get_position as _town_position
 
-                with connect() as c_pos:
+                with connect().closing() as c_pos:
                     if not _town_position(c_pos):
                         akind = "journey"
             opts = ((context.get("settings") or {}).get("playthrough_options") or {})
             player = context.get("player") if isinstance(context.get("player"), dict) else {}
             stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
-            with connect() as c_act:
+            with connect().closing() as c_act:
                 action_spend_pack = apply_action_spend(
                     c_act,
                     kind=akind,
@@ -25466,7 +25468,7 @@ def play_turn(
     # already polished" after a polish no engine decided). The draft follows it.
     if input_kind == "player":
         try:
-            with connect() as c_prev:
+            with connect().closing() as c_prev:
                 prev_act = _previous_act(c_prev, _current_turn_number())
             if prev_act:
                 mechanics_context = dict(context.get("mechanics_context") or {})
@@ -25746,13 +25748,13 @@ def play_turn(
             health_now = int(player_row.get("health") or 0)
             max_hp = max(1, int(player_row.get("max_health") or 1))
             options = _playthrough_options(context)
-            with connect() as c_hp:
+            with connect().closing() as c_hp:
                 downed = _settings(c_hp).get("player_downed")
             mechanics_context = dict(context.get("mechanics_context") or {})
             ironman = _setup_flag_enabled(options, "ironman_mode", False)
             if isinstance(downed, dict) and downed and health_now > 0:
                 # A rewind took the drop back: the mark is stale.
-                with connect() as c_hp:
+                with connect().closing() as c_hp:
                     c_hp.execute("DELETE FROM settings WHERE key = 'player_downed'")
                 downed = None
             if isinstance(downed, dict) and downed:
@@ -25788,7 +25790,7 @@ def play_turn(
                         + str(recovery.get("what_happens") or "")
                         + " Do not carry out the action in the player's line."
                     )
-                with connect() as c_hp:
+                with connect().closing() as c_hp:
                     conn_minutes = int(recovery.get("minutes") or 0)
                     if conn_minutes > 0:
                         advance_world_time(c_hp, conn_minutes)
@@ -25835,7 +25837,7 @@ def play_turn(
                             "of it: the action does not finish, and the scene ends with the player on the ground, "
                             "losing consciousness. Do not write them acting past that."
                         )
-                        with connect() as c_hp:
+                        with connect().closing() as c_hp:
                             _set_setting(
                                 c_hp,
                                 "player_downed",
@@ -25896,7 +25898,7 @@ def play_turn(
     try:
         from app.town_moves import plan_turn as plan_town_turn
 
-        with connect() as c_town:
+        with connect().closing() as c_town:
             town_turn = plan_town_turn(
                 c_town, player_input if input_kind == "player" else "", input_kind=input_kind, context=context
             )
@@ -25915,7 +25917,7 @@ def play_turn(
         try:
             from app.turn_prompts import typed_go_with
 
-            with connect() as c_lead:
+            with connect().closing() as c_lead:
                 answered = typed_go_with(c_lead, player_input)
             led_by = str((answered or {}).get("npc_name") or "")
         except Exception:
@@ -25941,7 +25943,7 @@ def play_turn(
     try:
         from app.npc_psychology import get_scene_psychology_context, init_psychology_tables
 
-        with connect() as _psy_conn:
+        with connect().closing() as _psy_conn:
             init_psychology_tables(_psy_conn)
             _scene_npc_ids: list[int] = []
             for _loc in prompt_context.get("locations") or []:
@@ -26079,7 +26081,7 @@ def play_turn(
         # gain, banded and rolled like any other, never a model's guess.
         if skills_on and input_kind == "player":
             practice_turn, _practice_seed = _skill_check_seed()
-            with connect() as c_practice:
+            with connect().closing() as c_practice:
                 for resolved in skill_check_results:
                     change = _practice_skill_change(
                         c_practice, resolved, context.get("skills") or [], practice_turn
@@ -26173,7 +26175,7 @@ def play_turn(
     # Pin each NPC's pronouns from the first prose that commits to them, so the
     # next turn's contract can state it instead of letting the model re-decide.
     try:
-        with connect() as _conn_pron:
+        with connect().closing() as _conn_pron:
             bind_npc_pronouns(_conn_pron, _narration_text_of(result), pre_rows=pre_snapshot_rows)
     except Exception:
         pass
@@ -26188,7 +26190,7 @@ def play_turn(
         result["_direction_hint"] = direction_resolved
     actual_player_input = journal_input if journal_input is not None else player_input
     try:
-        with connect() as _conn_max:
+        with connect().closing() as _conn_max:
             npc_max_before = int(_conn_max.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
     except Exception:
         npc_max_before = None
@@ -26205,7 +26207,7 @@ def play_turn(
     # "she" from T2). Pin them from the prose that shipped.
     if npc_max_before is not None:
         try:
-            with connect() as _conn_pron2:
+            with connect().closing() as _conn_pron2:
                 new_rows = [
                     dict(r)
                     for r in _conn_pron2.execute("SELECT id, name, pronouns FROM npcs WHERE id > ?", (npc_max_before,))
@@ -26285,7 +26287,7 @@ def play_turn(
             if recovery and isinstance(recovery.get("lasting_injury"), dict):
                 injuries.append(recovery["lasting_injury"])
             if injuries:
-                with _db_connect() as conn:
+                with _db_connect().closing() as conn:
                     row = conn.execute("SELECT value FROM settings WHERE key = 'player_conditions'").fetchone()
                     existing = []
                     if row:
@@ -26395,7 +26397,7 @@ def play_turn(
             # Opening locks travel until player acts once
             if input_kind == "opening":
                 travel_ready = False
-        with connect() as conn:
+        with connect().closing() as conn:
             _set_setting(conn, "travel_ready", bool(travel_ready))
     except Exception:
         travel_ready = True
@@ -26651,7 +26653,7 @@ def _record_death(death: dict[str, Any], state: dict[str, Any], turn: dict[str, 
         "at": datetime.now(timezone.utc).isoformat(),
         "ironman": str(death.get("rule") or "") == "ironman",
     }
-    with connect() as conn:
+    with connect().closing() as conn:
         _set_setting(conn, "player_dead", record)
         conn.execute("DELETE FROM settings WHERE key = 'player_downed'")
     return record
@@ -26696,7 +26698,7 @@ def _wipe_campaign_saves(cid: str) -> int:
 
 
 def _current_turn_number() -> int:
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
     return int(row["value"]) if row else 0
 
@@ -26752,7 +26754,7 @@ def queue_world_event(
     payload = payload if isinstance(payload, dict) else {}
     payload.setdefault("kind", kind)
     payload.setdefault("queued_turn", turn_now)
-    with connect() as conn:
+    with connect().closing() as conn:
         cur = conn.execute(
             """
             INSERT INTO gm_events (turn, trigger, summary, status, priority, location_id, npc_id, event_id, kind, due_turn, force, payload)
@@ -26800,7 +26802,7 @@ def queue_quest_stage_event(
         pack.setdefault("replace_turn", True)
         pack.setdefault("immutable", True)
     # Persist stage flag for versatile branching
-    with connect() as conn:
+    with connect().closing() as conn:
         stages = _settings(conn).get("quest_stages")
         if not isinstance(stages, dict):
             stages = {}
@@ -26829,7 +26831,7 @@ def queue_quest_stage_event(
 def get_quest_stages() -> dict[str, Any]:
     """Reached stages + pending quest-related bus events (for stage editor UI)."""
     turn = _current_turn_number()
-    with connect() as conn:
+    with connect().closing() as conn:
         stages = _settings(conn).get("quest_stages")
         if not isinstance(stages, dict):
             stages = {}
@@ -26873,7 +26875,7 @@ def get_quest_stages() -> dict[str, Any]:
 
 def list_pending_world_events(*, limit: int = 24) -> list[dict[str, Any]]:
     """All non-resolved bus events (for tools UI), not only currently due."""
-    with connect() as conn:
+    with connect().closing() as conn:
         rows = conn.execute(
             """
             SELECT * FROM gm_events
@@ -26888,7 +26890,7 @@ def list_pending_world_events(*, limit: int = 24) -> list[dict[str, Any]]:
 
 def cancel_world_event(event_id: int) -> bool:
     """Soft-cancel a pending bus event (stage editor / tools)."""
-    with connect() as conn:
+    with connect().closing() as conn:
         cur = conn.execute(
             "UPDATE gm_events SET status = 'cancelled' WHERE id = ? AND status IN ('pending', 'seeded', '')",
             (int(event_id),),
@@ -26928,7 +26930,7 @@ def list_due_world_events(
         status_sql = "status IN ('pending', 'active', 'seeded', '')"
     else:
         status_sql = "status IN ('pending', 'seeded', '')"
-    with connect() as conn:
+    with connect().closing() as conn:
         if force_only:
             rows = conn.execute(
                 f"""
@@ -26963,7 +26965,7 @@ def consume_due_world_events(*, force_only: bool = False, limit: int = 3) -> lis
         stuck = list_due_world_events(force_only=force_only, limit=1, include_active=True)
         stuck = [e for e in stuck if str(e.get("status") or "") == "active"]
         return stuck[:1] if stuck else []
-    with connect() as conn:
+    with connect().closing() as conn:
         for ev in due:
             conn.execute(
                 "UPDATE gm_events SET status = 'active' WHERE id = ? AND status IN ('pending', 'seeded', '')",
@@ -26973,7 +26975,7 @@ def consume_due_world_events(*, force_only: bool = False, limit: int = 3) -> lis
 
 
 def resolve_world_event(event_id: int, *, status: str = "resolved") -> None:
-    with connect() as conn:
+    with connect().closing() as conn:
         conn.execute(
             "UPDATE gm_events SET status = ? WHERE id = ?",
             (str(status)[:40], int(event_id)),
@@ -26995,7 +26997,7 @@ def play_world_event_turn(
     # Mark bus row active while narrating (map path queues pending then plays immediately)
     if eid:
         try:
-            with connect() as conn:
+            with connect().closing() as conn:
                 conn.execute(
                     "UPDATE gm_events SET status = 'active' WHERE id = ? AND status IN ('pending', 'seeded', '')",
                     (int(eid),),
@@ -27076,7 +27078,7 @@ def initiate_fight(npc_code: str) -> dict[str, Any]:
     if not code:
         raise ValueError("npc_code is required")
 
-    with connect() as conn:
+    with connect().closing() as conn:
         row = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone()
     if row is None:
         raise ValueError(f"NPC {code!r} not found")
@@ -27155,7 +27157,7 @@ def _maybe_apply_event_help_reputation(
     if hostile_default and not helper and kind.startswith("travel_ambush"):
         if (int(payload.get("outcome_seed") or 0) % 10) >= 3:
             return None
-    with connect() as conn:
+    with connect().closing() as conn:
         prow = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
         loc_id = int(prow["current_location_id"]) if prow and prow["current_location_id"] else None
         # If no helper, still small area bump for surviving with local goodwill
@@ -27546,7 +27548,7 @@ def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any]
         "weather_announce": None,
         "ambient": "",
     }
-    with connect() as conn:
+    with connect().closing() as conn:
         if _spend_travel(conn, travel, context, out):
             # Do not advance clock, spawn encounters, or journal this step
             return out
@@ -27645,7 +27647,7 @@ def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any]
     out["ambient_source"] = "template"
     # Optional short LLM polish (off by default; never blocks movement on failure)
     try:
-        with connect() as conn:
+        with connect().closing() as conn:
             settings = _settings(conn)
     except Exception:
         settings = {}
@@ -27690,13 +27692,13 @@ def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True
             return opening
 
     # Normalize duration first (supports -1 / dawn / custom 1–1440)
-    with connect() as c_norm:
+    with connect().closing() as c_norm:
         minutes = normalize_wait_minutes(minutes, c_norm)
 
     # Forced quest beats interrupt wait: clock still advances so wait is not free cancel.
     forced = consume_due_world_events(force_only=True, limit=1)
     if forced:
-        with connect() as c_force:
+        with connect().closing() as c_force:
             advance_world_time(c_force, minutes)
             try:
                 from app.player_resources import apply_regen
@@ -27740,7 +27742,7 @@ def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True
         pass
 
     risk = _local_crowd_danger(context)
-    with connect() as conn:
+    with connect().closing() as conn:
         before = get_world_time(conn)
         wx = get_weather(conn)
         danger = min(1.0, risk["danger"] + weather_event_chance_delta(wx))
@@ -27890,7 +27892,7 @@ def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True
     except FailsafeBlocked:
         # Nothing was narrated, so nothing was waited: put the clock back where
         # the request found it, or a Retry charges the minutes twice.
-        with connect() as c_undo:
+        with connect().closing() as c_undo:
             _pacing_set(c_undo, "world_day", int(before["day"]))
             _pacing_set(c_undo, "world_minute", int(before["minute"]))
         raise

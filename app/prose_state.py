@@ -860,6 +860,8 @@ _NOT_WORK_RE = re.compile(
     r"|hammer\w*\s+(?:on|at)\s+(?:the|a|his|her|their)\s+(?:\w+\s+)?(?:door|gate|wall|table|shutters?)\b"
     r"|build\w*\s+(?:up\b|(?:\w+\s+)?(?:courage|nerve|trust|rapport|confidence|reputation|hopes?)\b)"
     r"|fix\w*\s+\w+(?:\s+\w+)?\s+with\s+(?:a|an|my|the)\s+(?:\w+\s+)?(?:look|glare|stare|gaze|glance|eye)\b"
+    # "fix it in my memory", "set the name in my mind" (8B run 151, T13: a craft roll and its cost).
+    r"|(?:fix|set|hold|keep|lock)\w*\s+(?:\w+\s+){0,3}?in\s+(?:my|your|his|her|their|our)\s+(?:\w+\s+)?(?:memory|memories|mind|head|heart)\b"
     r"|dig\w*\s+(?:through|in|into|around\s+in)\s+(?:my|his|her|their|the|a)\s+(?:\w+\s+)?"
     r"(?:bag|pack|pockets?|purse|satchel|pouch|memory|memories|notes)\b"
     r"|treat\w*\s+\w+(?:\s+\w+)?\s+(?:like|as|kindly|fairly|badly|with\s+(?:\w+\s+)?"

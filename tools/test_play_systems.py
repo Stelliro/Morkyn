@@ -31,7 +31,7 @@ def main() -> int:
     from app.tile_world import walk_minutes_for_step, mark_hidden_base_discovered, generate_map
 
     init_db()
-    with connect() as c:
+    with connect().closing() as c:
         init_world_clock(c, epoch_label="Test Era")
         assert "Test Era" in get_world_time(c)["label"]
         assert normalize_wait_minutes(-1, c) >= 1
