@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -67,7 +68,23 @@ def _record_event(kind: str, detail: dict[str, Any]) -> None:
     _save_history(history)
 
 
+PACKAGED_NOTE = ("This is a packaged build: get the next build from the releases page and copy your data/ folder "
+                 "across. The in-game updater works from a git checkout.")
+
+
 def current_status() -> dict[str, Any]:
+    if getattr(sys, "frozen", False):
+        # A packaged build has no checkout to pull; say where the next build is
+        # instead of "not a git checkout" (packaging, 2026-10-18).
+        return {
+            "ok": False,
+            "packaged": True,
+            "error": "",
+            "git_available": False,
+            "phone_home": False,
+            "note": PACKAGED_NOTE,
+            "release_url": "https://github.com/Stelliro/Morkyn/releases",
+        }
     code, head, err = _run_git(["rev-parse", "HEAD"])
     if code != 0:
         return {

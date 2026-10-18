@@ -38,6 +38,17 @@ class OneRoot(unittest.TestCase):
         self.assertEqual(offenders, [], "use app.paths.ROOT so the packaged build finds its folders")
 
 
+class ThePackagedUpdater(unittest.TestCase):
+    def test_a_frozen_build_points_at_the_releases(self):
+        from app import updates
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            status = updates.current_status()
+        self.assertTrue(status.get("packaged"))
+        self.assertIn("releases", status.get("release_url", ""))
+        self.assertIn("packaged build", status.get("note", ""))
+
+
 class LauncherCommands(unittest.TestCase):
     def test_a_checkout_uses_the_interpreter(self):
         from app import launcher
