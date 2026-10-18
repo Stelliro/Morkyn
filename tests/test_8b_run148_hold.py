@@ -199,6 +199,29 @@ class TakingBackOnesOwnThing(unittest.TestCase):
         self.assertEqual([c["name"] for c in kept], ["guild key"], rejected)
 
 
+class BringingUpWhateverIsThere(unittest.TestCase):
+    """8B run 149, T23: the box brought up from the Dredges held coins, a compass and an envelope, all refused as taken unasked."""
+
+    LINE = "I dive the Dredges again, deeper this time, and bring up whatever the guild's token was meant to open."
+    PROSE = ("You dive the Dredges again, deeper this time. Your hand finds the object the guild's iron token was meant to open. "
+             "It's a small, rusted box, its surface worn and its lock stiff with age. You surface and make your way to the "
+             "shore. You pry it open with your brass lockpick, and inside you find a collection of old coins, a broken compass, "
+             "and a single, unmarked envelope.")
+
+    def test_bringing_up_whatever_asks_for_it(self):
+        from app.llm import player_take_intent
+
+        self.assertTrue(player_take_intent(self.LINE))
+
+    def test_the_compass_and_the_envelope_arrive(self):
+        _pack()
+        kept, rejected = _filter(
+            [{"name": "broken compass", "quantity_delta": 1}, {"name": "unmarked envelope", "quantity_delta": 1}],
+            self.PROSE, self.LINE,
+        )
+        self.assertEqual([c["name"] for c in kept], ["broken compass", "unmarked envelope"], rejected)
+
+
 class APaperFoundUnderAnotherName(unittest.TestCase):
     def test_the_damp_paper_retrieved_is_the_ledger(self):
         from app.world import _handed_under_another_noun
