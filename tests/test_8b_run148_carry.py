@@ -289,6 +289,45 @@ class ComeWithMeIsGoing(unittest.TestCase):
         self.assertNotIn(report.get("status"), {"dropped_unshown", "dropped"}, report)
 
 
+class RecalledIsNotShown(unittest.TestCase):
+    """8B run 150, T6: "Mabel's words linger in your mind" after the walk to the dock carried Mabel from the tally house to the dock."""
+
+    LINE = "I go down to the dock to find the reeve and ask his price for the boat to the east reef."
+
+    def _dock(self):
+        from app.db import connect
+
+        town = _world("The Reeve's Office")
+        with connect() as conn:
+            conn.execute("INSERT INTO locations (code, name, summary, parent_id) VALUES ('L95', 'The Dock', '', ?)", (town,))
+            conn.execute("UPDATE npcs SET name = 'Mabel', code = 'A' WHERE code = 'B'")
+        return town
+
+    def test_her_words_recalled_leave_her_at_the_tally_house(self):
+        from app import world
+        from app.db import connect
+
+        town = self._dock()
+        prose = ("You step out of the tally house and onto the dock. Mabel [[A]]’s words linger in your mind—the reeve’s got a "
+                 "boat tied up at the dock. You find the reeve standing by a small boat, his arms crossed.")
+        with connect() as conn:
+            world._place_new_people_at_arrival(conn, [], {"player": {"move_to_location": "The Dock"}}, self.LINE, prose)
+            now = int(conn.execute("SELECT location_id FROM npcs WHERE code = 'A'").fetchone()[0])
+        self.assertEqual(now, town)
+
+    def test_her_standing_there_brings_her(self):
+        from app import world
+        from app.db import connect
+
+        self._dock()
+        prose = "You step onto the dock. Mabel [[A]] is already there, haggling with the reeve over a coil of rope."
+        with connect() as conn:
+            world._place_new_people_at_arrival(conn, [], {"player": {"move_to_location": "The Dock"}}, self.LINE, prose)
+            dock = int(conn.execute("SELECT id FROM locations WHERE code = 'L95'").fetchone()[0])
+            now = int(conn.execute("SELECT location_id FROM npcs WHERE code = 'A'").fetchone()[0])
+        self.assertEqual(now, dock)
+
+
 class TheOfficeUnderAnotherSpelling(unittest.TestCase):
     """T66: "go into the Reeves' Office" made a third office beside "The Reeve's Office" and "Reeves’ Office"."""
 
