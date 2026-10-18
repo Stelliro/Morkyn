@@ -15138,6 +15138,11 @@ def _sentence_item_events_detail(
             elif player:
                 events.append((m.start(), "loss", True))
             continue
+        # Slid across the table: the other side's slide gives, the player's
+        # slide gives away (8B run 151, T6).
+        if text_l.startswith("slid"):
+            events.append((m.start(), "loss" if player else "gain", player))
+            continue
         if player:
             events.append((m.start(), "gain", not text_l.startswith("receiv")))
     for m in _DISCOVER_GAIN_RE.finditer(lower):
@@ -22361,6 +22366,11 @@ _OWN_UNPRICED_PAY_RE = re.compile(
 )
 # Buying, in the player's line or the narration.
 _BUY_VERB_RE = re.compile(r"\b(?:buy|buys|bought|buying|purchase|purchases|purchased|purchasing)\b", re.I)
+# The player buying, done: "you buy a lantern", "you've bought"; not "what it
+# might buy" or "enough to buy a boat".
+_NARRATED_BUY_RE = re.compile(
+    r"\byou(?:['’]ve|\s+have)?\s+(?:\w+ly\s+)?(?:buy|bought|purchase|purchased)\b", re.I
+)
 
 
 def _settle_unopped_coin(
@@ -22391,7 +22401,10 @@ def _settle_unopped_coin(
     # buy a lantern and a length of rope" put both in the pack for nothing):
     # a payment with no price (8B run 147, T20, T21).
     own_pays = bool(_OWN_UNPRICED_PAY_RE.search(own_acts)) and not prose_state.coin_mentions(own_acts)
-    bought = bool(goods) and bool(_BUY_VERB_RE.search(own_acts) or _BUY_VERB_RE.search(venues.strip_speech(narration)))
+    # In the narration only a purchase the player makes counts: "the promise of
+    # what it might buy" about a coin just pocketed took 9 gold as an unpriced
+    # payment (8B run 151, T13).
+    bought = bool(goods) and bool(_BUY_VERB_RE.search(own_acts) or _NARRATED_BUY_RE.search(venues.strip_speech(narration)))
     if prose_state.shows_unpriced_payment(narration) or own_pays or bought:
         amount, how = _unpriced_payment_amount(conn, result, narration)
         if not amount:
