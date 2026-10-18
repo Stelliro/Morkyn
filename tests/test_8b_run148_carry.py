@@ -347,6 +347,23 @@ class TheOfficeUnderAnotherSpelling(unittest.TestCase):
         self.assertEqual(name, "The Reeve's Office")
         self.assertEqual(before, after)
 
+    def test_a_building_named_through_its_door_is_entered(self):
+        """8B run 150, T62: "I knock on the reeve's office door and go in" resolved no destination."""
+        from app import world
+        from app.db import connect
+
+        _world("The Reeve's Office")
+        line = "I knock on the reeve's office door and go in when I'm answered."
+        prose = ("You knock on the reeve's office door and go in when you're answered. The reeve's door creaks open, revealing "
+                 "a dimly lit room where the scent of ink lingers. A man in a threadbare cloak looks up as you enter.")
+        with connect() as conn:
+            harbour = int(conn.execute("SELECT id FROM locations WHERE code = 'L90'").fetchone()[0])
+            before = int(conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0])
+            name = world._civic_building_requested(conn, harbour, line, prose)
+            after = int(conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0])
+        self.assertEqual(name, "The Reeve's Office")
+        self.assertEqual(before, after)
+
 
 if __name__ == "__main__":
     unittest.main()
