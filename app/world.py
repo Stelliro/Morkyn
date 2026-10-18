@@ -21142,6 +21142,24 @@ def _void_unbought_spend(
             bought.append(name)
     if not bought or _gain_names(kept_changes):
         return False
+    # Coin the player's own line sets down for words is spent: "I put three
+    # gold on the bar for Eldric and swear to keep it to myself" bought the
+    # Stormbreaker's story, and with GRANT "clue" refused as abstract the -3
+    # was voided as a purchase of nothing and the player's own sentence cut
+    # from the prose (8B run 148, T51). When nothing bought was a thing, there
+    # is no thing to have failed to arrive; only a refusal of the coin leaves
+    # it in the purse. Coin set down for a flask the chandler would not sell
+    # (8B run 146, T16) is still voided: the flask is a thing.
+    try:
+        from app import prose_state
+
+        if all(_ABSTRACT_ITEM_RE.match(str(name or "").strip()) for name in bought) and (
+            prose_state.player_trade_offer(own_acts) is not None
+            and prose_state.offer_answer(str(narration or ""), own_acts) != "refused"
+        ):
+            return False
+    except Exception:
+        pass
     player["gold_delta"] = 0
     line = f"gold loss voided ({gold}): nothing was bought; {', '.join(bought[:4])} did not change hands"
     if isinstance(band_report, dict):
