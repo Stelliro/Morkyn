@@ -16640,6 +16640,15 @@ def _bare_item_name(name: str) -> str:
     return re.sub(r"\s+", " ", _ITEM_ARTICLE_RE.sub("", str(name or "").strip())).strip().lower()
 
 
+def _measured_item_name(name: str) -> str:
+    """The thing under its measure: "a coil of rope" and "rope" are one row (8B run 148, T69)."""
+    bare = _bare_item_name(name)
+    m = re.match(r"^([a-z]+)\s+of\s+(?:the\s+)?(.+)$", bare)
+    if m and m.group(1) in _MEASURE_NOUNS:
+        return m.group(2).strip()
+    return bare
+
+
 def _inventory_row_named(conn, name: str):
     """The pack's row for this name: exact, else the same words under another
     article or case. GRANT "a rusted iron key" went in beside the "rusted iron
@@ -16650,8 +16659,13 @@ def _inventory_row_named(conn, name: str):
     bare = _bare_item_name(name)
     if not bare:
         return None
-    for cand in conn.execute("SELECT * FROM inventory").fetchall():
+    rows = conn.execute("SELECT * FROM inventory").fetchall()
+    for cand in rows:
         if _bare_item_name(str(cand["name"] or "")) == bare:
+            return cand
+    measured = _measured_item_name(name)
+    for cand in rows:
+        if _measured_item_name(str(cand["name"] or "")) == measured:
             return cand
     return None
 
@@ -18564,6 +18578,63 @@ def _named_as_present(text: str, pattern: str, *, flags: int = 0) -> bool:
     return False
 
 
+# Marks a body keeps: the roster's own words for the one who wears them.
+_MARK_RE = re.compile(
+    r"\b(scar(?:red|s)?|one-eyed|eye\s*patch|eyepatch|missing\s+(?:an?\s+)?(?:hand|arm|eye|ear|finger|fingers|leg|teeth)|"
+    r"hook(?:ed)?\s+hand|hook\s+for\s+a\s+hand|peg\s+leg|wooden\s+leg|limp(?:s|ing)?|hunchback(?:ed)?|tattoo(?:ed|s)?|"
+    r"brand(?:ed)?|burn(?:ed|s)?\s+(?:face|cheek|hands?|arm)|gap-toothed|toothless|bald|white-haired|grey-haired|"
+    r"gray-haired|red-haired|grey-bearded|gray-bearded|white-bearded|black-bearded|crooked\s+nose|broken\s+nose|"
+    r"milky\s+eye|clouded\s+eye|birthmark|pockmarked|pox-scarred)\b",
+    re.I,
+)
+
+
+def _mark_keys(text: str) -> set[str]:
+    out = set()
+    for m in _MARK_RE.finditer(str(text or "")):
+        key = re.sub(r"[^a-z]", "", m.group(1).lower())
+        key = {"scarred": "scar", "scars": "scar", "tattooed": "tattoo", "tattoos": "tattoo", "branded": "brand",
+               "limps": "limp", "limping": "limp", "hunchbacked": "hunchback", "eyepatch": "eyepatch",
+               "grayhaired": "greyhaired", "graybearded": "greybearded", "hookedhand": "hookhand", "hookforahand": "hookhand"}.get(key, key)
+        out.add(key)
+    return out
+
+
+def _known_by_mark(conn, text: str, hints: list[str], new_name: str = "", place: Any = None) -> Any:
+    """(known person, the hint, the mark) for a figure whose mark one person here already wears, or None."""
+    try:
+        here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        places = {int(here[0] or 0)} if here else set()
+        if str(place or "").strip():
+            told = _find_location_id(conn, str(place))
+            if told:
+                places.add(int(told))
+        if not places:
+            return None
+        marks_q = ",".join("?" for _ in places)
+        rows = conn.execute(f"SELECT * FROM npcs WHERE location_id IN ({marks_q})", tuple(places)).fetchall()
+    except Exception:
+        return None
+    for hint in hints or []:
+        sentence = _hint_sentence(text, hint)
+        marks = _mark_keys(hint) | _mark_keys(sentence)
+        if not marks:
+            continue
+        for mark in sorted(marks):
+            wearers = []
+            for row in rows:
+                name = str(row["name"] or "").strip()
+                if not name or name.lower() == str(new_name or "").strip().lower():
+                    continue
+                if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", text, re.I):
+                    continue  # named apart in the same prose: the figure is someone else beside them
+                if mark in _mark_keys(f"{row['summary'] or ''} {row['known_facts'] or ''}"):
+                    wearers.append(row)
+            if len(wearers) == 1:
+                return wearers[0], hint, mark
+    return None
+
+
 def _known_here_in_role(conn, role_words: set[str], text: str, new_name: str = "", place: Any = None) -> Any:
     """The one known person at the player's place, or at ``place`` (the op's own LOC), whose job shares a word with ``role_words``, unless the prose names them apart.
 
@@ -18805,6 +18876,21 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
             text, re.I,
         ):
             turn_ledger.note("npc", "name_only_spoken_of", name=npc_name)
+            continue
+        # A figure wearing a mark someone here already carries is that person:
+        # "the scarred man" minted Garret and then Kael beside Bertram
+        # Northcott, "a burly man with a scar across his brow" (8B run 148,
+        # T69-T70). One person at this place or the op's with the same mark.
+        marked = _known_by_mark(conn, text, free, npc_name, place=npc.get("location"))
+        if marked is not None:
+            twin, hint, mark = marked
+            turn_ledger.note("npc", "marked_figure_is_known_person", name=npc_name, known=str(twin["name"] or ""), mark=mark)
+            npc["name"] = str(twin["name"] or npc_name)
+            if str(twin["code"] or "").strip():
+                npc["code"] = str(twin["code"])
+            keep_ids.add(id(npc))
+            if hint in free:
+                free.remove(hint)
             continue
         role_words = {w for w in re.findall(r"[a-z]+", str(npc.get("role") or "").lower()) if len(w) >= 3}
         # The figure in a known person's trade, here, is that person: "A clerk
@@ -22131,6 +22217,29 @@ def _settle_stated_gold(
         result["player"] = player
         turn_ledger.note("gold", "offered_sum_not_received", stated=raw or band)
         return {"source": "offered_sum_not_received", "gold_delta": 0, "offer": None}
+    if (
+        (band or raw) and not losing and not quest_pays and not said["received"]
+        and not prose_state.coin_handed_to_player(narration) and prose_state.shows_unpriced_payment(narration)
+    ):
+        # The prose shows the player paying with no sum in the clause, under a
+        # gain op: "The price's ten gold for the rope and mallet ... You hand
+        # over the coin" with GOLD 10 was dropped to nothing (8B run 148,
+        # T68). The one price the scene names is the spend; none, a small one.
+        priced = said["priced"][0] if len(said["priced"]) == 1 else None
+        if priced:
+            player["gold_delta"] = -abs(priced)
+            player.pop("gold_band", None)
+            authored = [str(p) for p in (result.get("_server_authored") or [])]
+            if "player.gold_delta" not in authored:
+                authored.append("player.gold_delta")
+            result["_server_authored"] = authored
+        else:
+            player["gold_band"] = "-small"
+            player.pop("gold_delta", None)
+        result["player"] = player
+        turn_ledger.note("gold", "payment_shown_over_gain_op", paid=priced, stated=raw or band)
+        return {"source": "prose_paid_over_gain", "gold_delta": player.get("gold_delta"), "band": player.get("gold_band"),
+                "offer": offer, "model": raw or band or None}
     if (band or raw) and not losing and not quest_pays:
         # A gain the prose shows nothing behind: no coin handed over or
         # received, no sum, no pay or sale (7B run 42, T2: GOLD 5 rolled to +10
