@@ -99,6 +99,11 @@ belong to, with the date).
   another rule.
 - **Roadmap:** stable 0.10 first, then 1.0 as an exe or package. Test saves can pile up until
   then; the cleanup and template saves happen at 1.0.
+  Stell (2026-10-18, after 0.10.0-dev.14 was pushed and released): "we should probably leave a
+  release here and start working on an exe and linux/mac equivalent." The 8B playtest loop
+  pauses at run 151 T14; packaging is the work now: a Windows exe and the Linux/Mac equivalents,
+  from the real launch path (Morkyn.bat / start.sh / morkyn_app.py), with the local model and the
+  data folder outside the bundle.
 
 ## Design decisions
 

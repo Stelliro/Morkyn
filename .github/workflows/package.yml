@@ -1,0 +1,61 @@
+name: Package
+
+# Builds the packaged folder for Windows, Linux and macOS on every v* tag (and
+# on request), and attaches the archives to that tag's GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: ubuntu-22.04
+            name: linux
+          - os: macos-14
+            name: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install requirements (Windows, CUDA wheel index as in requirements.txt)
+        if: matrix.name == 'windows'
+        run: python -m pip install -r requirements.txt
+      - name: Install requirements (Linux/macOS, CPU wheels for llama-cpp-python)
+        if: matrix.name != 'windows'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu -r requirements.txt
+      - name: Install the macOS window
+        if: matrix.name == 'macos'
+        run: python -m pip install "pywebview>=6.2"
+      - name: Build (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File packaging/build.ps1 -Python python
+      - name: Build (Linux/macOS)
+        if: matrix.name != 'windows'
+        run: bash packaging/build.sh --python python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Morkyn-${{ matrix.name }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.zip dist/*.tar.gz --clobber 2>/dev/null || gh release upload "${GITHUB_REF_NAME}" dist/* --clobber

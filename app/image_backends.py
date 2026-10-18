@@ -24,7 +24,7 @@ from typing import Any
 
 from app.db import connect
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 WORKFLOW_DIR = Path(__file__).resolve().parent / "comfy_workflows"
 PORTRAIT_DIR = ROOT / "data" / "portraits"
 PRESETS_DEFAULT_PATH = ROOT / "config" / "image_presets.default.json"

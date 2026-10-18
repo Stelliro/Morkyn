@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 BUILTIN_DIR = ROOT / "content" / "ability_templates"
 MAX_LEARNED = 1500
 DEFAULT_THEME = "fantasy"

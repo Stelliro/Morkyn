@@ -23,6 +23,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Added
+- [CLAUDE] Packaging: the exe and the Linux/macOS builds (Stell, 2026-10-18: "start working on an exe and linux/mac equivalent"). `packaging/morkyn.spec` builds one folder per platform from `morkyn_app.py` with PyInstaller; `packaging/build.ps1` and `build.sh` copy `static/`, `content/`, `config/` and `Media/` beside the executable and archive it; `.github/workflows/package.yml` builds all three on every `v*` tag and attaches them to the release. `app/paths.py` gives every module one `ROOT` (the repo, or the folder beside the exe), and the launcher asks the exe to serve, run a module or a snippet where a checkout runs the interpreter. The local model and `data/` stay outside the bundle. Notes in docs/Packaging.md. - `app/paths.py`, `app/launcher.py`, `morkyn_app.py`, `packaging/`, `tests/test_packaging_paths.py`
+
 ## [0.10.0-dev.14] - 2026-10-18
 
 > Pre-release on the way to `0.10.0`. Saltmarrow replayed ten more times on Qwen3 8B (runs 142-151, two of them to a hundred turns), each fault fixed by class at the one place it is decided: 163 fixes. Jobs bind by reference (`@Q1`, the open jobs by code in the offer check) instead of title similarity. The engine's own slips are mended too: a verifier patch may not shrink a scene to a fragment, a dropped sentence takes its quote along, routine talk is never a brutal miss, and the database connection leak that starved a live run (about 70 handles and 25 MB a turn) is closed. The player's words and acts stay theirs: lines they "start", answers opening on the quote, strikes said aloud, a conditional yes, a plan told to someone; things arrive and leave as the prose shows, from a caught crab to a key slid across a table in a bundle.

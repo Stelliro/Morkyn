@@ -500,9 +500,36 @@ def _keep_paste_working(webview: Any) -> None:
     EdgeChrome.on_navigation_completed = on_navigation_completed
 
 
+def run_module(module: str, args: list[str]) -> int:
+    """`--run-module name args`: what a packaged build runs instead of `python -m name`.
+
+    The launcher starts the llama.cpp server and probes a model's limits this
+    way (app.launcher.module_command); a checkout still uses the interpreter.
+    """
+    import runpy
+
+    sys.argv = [module, *args]
+    try:
+        runpy.run_module(module, run_name="__main__", alter_sys=True)
+    except SystemExit as exc:
+        code = exc.code
+        return int(code) if isinstance(code, int) else (0 if code is None else 1)
+    return 0
+
+
+def run_code(code: str) -> int:
+    """`--run-code "..."`: what a packaged build runs instead of `python -c`."""
+    exec(compile(code, "<morkyn --run-code>", "exec"), {"__name__": "__main__"})
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) >= 3 and argv[0] == "--serve":
         return serve(argv[1], argv[2])
+    if len(argv) >= 2 and argv[0] == "--run-module":
+        return run_module(argv[1], argv[2:])
+    if len(argv) >= 2 and argv[0] == "--run-code":
+        return run_code(argv[1])
     opts = parse_args(argv)
     from app.launcher_prefs import load_prefs
 

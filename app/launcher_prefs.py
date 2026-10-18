@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
 def prefs_path() -> Path:
     """Resolved per call so AI_RPG_LAUNCHER_PREFS is honoured whatever the import order."""
     return Path(os.getenv("AI_RPG_LAUNCHER_PREFS") or (ROOT / "data" / "launcher_prefs.json"))
