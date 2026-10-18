@@ -397,6 +397,40 @@ case, crate); a tale about a dead person filed as a job (F1 cont. 2); one typed 
 offers (F84); the figure the prose then names as a known person still gets a new name (F26 cont.
 10, 11); a TAKE of a thing set down read as a gain (F82).
 
+### Run 148 (2026-10-18): the check on the run-147 fixes, stopped at T80
+
+Run 148 ran on the code as of commit 4feaa0c (same setup, 8B, 16k context, 13-53 s a turn) and
+was stopped at T80 by Claude Code reaping the harness under system memory pressure, not by a
+fault. The save is intact. Fewer faults than run 147 in the same stretch; the ones found were
+fixed by class on main as the run went (commits 3cb64a7 through 4369693, all tested, the full
+suite on 538cec3 at the 14 known failures with the unready-parser test passing again). Fixed:
+
+- Items: a leading article is no part of a name and a thing under its measure is one row
+  ("a rusted iron key" beside "rusted iron key", "rope" beside "a coil of rope"); a meal
+  ordered and eaten is not carried; a thing named in the singular is one; a declared search
+  of a place asks for what it finds; a paper found under another paper's name arrives.
+- Places: a venue the prose enters is entered from any start but a settlement; open ground
+  under a place (the wreck under the harbour) has no door; a requested building is found under
+  any spelling of its owner (three Reeve's Offices); business at another known place is a walk
+  there ("report to Ulric at the Reeves' Office").
+- People: the op's own LOC finds the known clerk; a vanished figure binds no one; a quality
+  measured by a figure ("the weight of a man who") is no man; a figure wearing a known person's
+  mark (the scar) is that person; a person shown staying behind does not travel with the player.
+- Acts and steps: a reported clause and a passive are no act ("picked clean"); a step's
+  objects come from the act's own clause; a "secure" act family (lash, shore, brace).
+- Coin: paying a person is a purchase and an unpriced one rolls small; a bare offer in a line
+  about gold is the offer and the sum said back accepts it; coin set down for words stands;
+  coin handed over at a named price is paid whatever sign the op gave.
+- Jobs: advice ("you should speak to the guildmaster") and a debt read out of a ledger are no
+  job; the player's own ask told back backs no gain.
+- Scene: a step made for the player ends the scene on the line spoken to them.
+
+Logged only (docs/showcase/run-fault-log-2026-10-18.md): the player acting on after an NPC
+line with no move verb (F58), engine notes and state lists in the prose (F88), past-tense
+prose (F99), a self-named figure never stored (F101), a known name given to another figure
+(F103), a place asked for by its role (F108), a mark worn by two known people (F26). Run 149
+starts on this code.
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
