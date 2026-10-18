@@ -7044,7 +7044,14 @@ def venue_move_intent(text: str) -> str:
     # freed iron core out of the hull" walked Isk off the berth (8B run 73, T6).
     exit_at = max((m.end() for m in _VENUE_EXIT_RE.finditer(line) if not re.search(
         r"\b(?:lift|pull|take|took|haul|drag|carr(?:y|ies|ied)|fish|draw|hoist|pr[iy]\w*|work|ease|wrench|tug)\w*\b",
-        m.group(0), re.I) and not _out_of_another_verb(m.group(0))), default=-1)
+        m.group(0), re.I) and not _out_of_another_verb(m.group(0))
+        # Out of hiding is not out of the building: "I step out from behind the
+        # crates with my hands open" walked the player from the Dredges to the
+        # town square (8B run 149, T88).
+        and not re.search(
+            r"\b(?:out|outside)\s+(?:from\s+(?:behind|under|beneath|the\s+shadows|cover)|of\s+(?:the\s+)?(?:shadows|hiding|cover|"
+            r"the\s+way|sight)|into\s+(?:view|the\s+open|the\s+light|plain\s+sight))\b",
+            line[m.start(): m.end() + 40], re.I)), default=-1)
     # "step back out into the street" is still the way out.
     enter_at = max(
         (
