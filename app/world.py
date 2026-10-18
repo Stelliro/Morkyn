@@ -21102,6 +21102,11 @@ def _mention_catalog(context: dict[str, Any]) -> list[dict[str, str]]:
     for ability in context.get("abilities") or []:
         if isinstance(ability, dict):
             push("A", str(ability.get("name") or ""), str(ability.get("code") or ""), "ability")
+    # Jobs by reference (Stell, 2026-10-18): "@Q1" names the quest, taken or
+    # offered, so a job told again under another name binds to it.
+    for quest in list(context.get("active_quests") or []) + list(context.get("open_quest_offers") or []):
+        if isinstance(quest, dict) and quest.get("title"):
+            push("Q", str(quest.get("title") or ""), str(quest.get("code") or ""), "quest")
     return rows
 
 
@@ -21252,6 +21257,10 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
             return match.group(0)
         kind = match.group(1).upper()
         hit = _pick_mention(rows, kind, match.group(2))
+        if not hit and kind == "Q":
+            # "@Q1" is the quest's own code, not a title fragment.
+            code = f"Q{match.group(2)}".upper()
+            hit = next((row for row in rows if row["kind"] == "Q" and row["code"].upper() == code), None)
         if not hit:
             return match.group(0)
         name = hit["name"]
@@ -21260,9 +21269,12 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
         resolved_notes.append(f"@{kind}{hit['slug']} = {name} ({code or 'no code'}, {hit['label']})")
         return shown
 
-    text = re.sub(r"@([CILSAE])([a-z0-9_]+)", replace_mention, text, flags=re.IGNORECASE)
+    text = re.sub(r"@([CILSAEQ])([a-z0-9_]+)", replace_mention, text, flags=re.IGNORECASE)
 
     refs: dict[str, str] = {}
+    for quest in list(context.get("active_quests") or []) + list(context.get("open_quest_offers") or []):
+        if isinstance(quest, dict) and quest.get("code"):
+            refs[f"@{quest['code']}"] = f"{quest.get('title') or ''} ({quest['code']}, quest)"
     for location in context.get("locations", []):
         refs[f"#{location['code']}"] = f"{location['name']} ({location['code']}, location)"
         for npc in location.get("npcs", []):

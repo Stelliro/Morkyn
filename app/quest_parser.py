@@ -1553,7 +1553,13 @@ def validate_quest_changes(
             prior_item = same_offer["item"]
             if offer_line and not prior_item["reward"]["text"] and _norm(offer_line) != _norm(prior_item["evidence"]):
                 prior_item["reward"]["text"] = offer_line[:200]
-        dup = _is_duplicate(
+        # By reference first: the check named the open job this line tells again
+        # ("retells": "Q1"), so it is that job whatever it is now called. The
+        # title rules below are the fallback (Stell, 2026-10-18).
+        told_as = _resolve_quest(str(raw.get("retells") or "").strip(), existing) if raw.get("retells") else None
+        if told_as is not None and str(told_as.get("status") or "") not in {"offered", "active"}:
+            told_as = None
+        dup = told_as or _is_duplicate(
             {"title": title, "step_text": " ".join(f"{s['title']} {s.get('description') or ''}" for s in steps[:1])},
             list(existing or []) + taken_this_turn, giver.get("id") if giver else None, first_place,
         )
