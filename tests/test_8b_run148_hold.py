@@ -140,6 +140,26 @@ class ThingAlreadyCarriedUnderItsMeasure(unittest.TestCase):
         self.assertIn("a coil of rope", names)
 
 
+class TheKeyInHandUnderANewName(unittest.TestCase):
+    """8B run 149, T7: GRANT "guild key" for the tarnished key in the player's grip put a third key in the pack."""
+
+    LINE = "\"Nothing's free with the guild, I know. What's the mark on this key, Lettice?\""
+    PROSE = ("“Nothing's free with the guild, I know. What's the mark on this key, Lettice?” you ask. The key in your grip "
+             "feels heavier than it should. Lettice Garner [[F]] leans in, her fingers tracing the rusted metal. \"This is a "
+             "guild mark,\" she says. \"Older than most of the things you’ll find in these waters.\"")
+
+    def test_the_key_held_is_not_a_new_key(self):
+        _pack(("tarnished key", 1))
+        kept, rejected = _filter([{"name": "guild key", "quantity_delta": 1}], self.PROSE, self.LINE)
+        self.assertEqual(kept, [], rejected)
+
+    def test_a_key_handed_over_is_new(self):
+        _pack(("tarnished key", 1))
+        prose = "Lettice Garner [[F]] presses a brass guild key into your hand. \"Show them this,\" she says."
+        kept, rejected = _filter([{"name": "guild key", "quantity_delta": 1}], prose, self.LINE)
+        self.assertEqual([c["name"] for c in kept], ["guild key"], rejected)
+
+
 class APaperFoundUnderAnotherName(unittest.TestCase):
     def test_the_damp_paper_retrieved_is_the_ledger(self):
         from app.world import _handed_under_another_noun
