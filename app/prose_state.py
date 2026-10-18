@@ -1243,6 +1243,14 @@ _BAND_COIN_RE = re.compile(
 )
 
 
+# A run of letters from the Cyrillic, Greek, Armenian, Hebrew, Arabic, CJK,
+# Japanese, Hangul or Thai blocks, with any Latin letters glued to it.
+_FOREIGN_SCRIPT_TOKEN_RE = re.compile(
+    r"[^\W\d_]*[Ͱ-ϿЀ-ԯ԰-֏֐-׿؀-ۿ฀-๿぀-ヿ㐀-䶿一-鿿가-힯]"
+    r"[^\s.,;:!?\"“”'’)\]]*"
+)
+
+
 def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
     """
     Narrow repairs of exact engine shapes in the prose; the rest is left as written.
@@ -1337,6 +1345,14 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
     if glued:
         out = re.sub(r"\b(the|a|an|your|his|her|their|my|our)\(([a-z][\w'’-]*)\)?", r"\1 \2", out)
         fixes.append({"why": "glued_bracket", "text": ", ".join(glued[:4])})
+    # A word in another script inside Latin prose is the model's slip, not a
+    # word of the scene: "You're not the только person who's asked that" (8B run
+    # 150, T79, echoed at T80). The token goes; the sentence stays.
+    foreign = [m.group(0).strip() for m in _FOREIGN_SCRIPT_TOKEN_RE.finditer(out)]
+    if foreign and len(re.findall(r"[A-Za-z]", out)) > 4 * sum(len(f) for f in foreign):
+        out = re.sub(r"\s+(?=[.,;:!?])", "", _FOREIGN_SCRIPT_TOKEN_RE.sub(" ", out))
+        out = re.sub(r"[ \t]{2,}", " ", out)
+        fixes.append({"why": "foreign_script", "text": ", ".join(foreign[:4])[:160]})
     # The packet's word for the reader, outside speech: "pushed a stack of papers
     # toward the player", "the player's patched tunic" (8B run 68, T2).
     pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", out)
