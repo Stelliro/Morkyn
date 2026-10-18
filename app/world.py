@@ -9891,6 +9891,26 @@ def _same_place_name(a: str, b: str) -> bool:
     return len(small) >= 2 and small <= big
 
 
+_AT_PLACE_RE = re.compile(
+    r"\b(?:at|inside|in)\s+(?:the\s+)?(?P<place>[A-Z][\w'’-]*(?:\s+(?:of\s+the\s+|of\s+)?[A-Z][\w'’-]*){0,4})"
+    r"(?=\s*(?:[,.;:!?]|$)|\s+(?:that|and|to|for|about|whether|if|where|what|who|how|with|before|after|so)\b)",
+)
+
+
+def _acts_at_known_place(acts: str, rows: list[Any], current_name: str = "") -> bool:
+    """The narrated line does its business at a known place that is not here: "report to Ulric at the Reeves' Office"."""
+    text = str(acts or "")
+    for m in _AT_PLACE_RE.finditer(text):
+        place = m.group("place").strip()
+        if current_name and _same_place_name(place, current_name):
+            continue
+        for row in rows or []:
+            stored = str(row["name"] or "")
+            if stored and (_same_place_name(stored, place) or _same_place_name(stored, f"The {place}")):
+                return True
+    return False
+
+
 def _unasked_unshown_move(
     result: dict[str, Any],
     player_patch: dict[str, Any],
@@ -9945,7 +9965,13 @@ def _unasked_unshown_move(
     # was cut at his "Start there" (8B run 16, T3). Only the narrated part of
     # the line asks.
     acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", _player_line(player_input))
-    if travel_intent(acts) or venue_move_intent(acts) or (intent == "travel" and _turn_intent(acts)[0] == "travel"):
+    if (
+        travel_intent(acts) or venue_move_intent(acts) or (intent == "travel" and _turn_intent(acts)[0] == "travel")
+        # Doing something at another known place is going there: "I report to
+        # Ulric at the Reeves' Office" left the player at the wreck talking to
+        # a man two places away (8B run 148, T74).
+        or _acts_at_known_place(acts, rows, current_name)
+    ):
         # A walk asks to go somewhere, not anywhere: "I walk over to where the
         # mole catcher is digging" came back with MOVE "Seventh Pike Stables",
         # a place neither the line nor the prose names (7B run 19, T1).

@@ -110,6 +110,39 @@ class TheClerkStaysBehind(unittest.TestCase):
         self.assertFalse(_stays_behind("Aldous falls in beside you on the path.", "Aldous"))
 
 
+class ReportingAtAnotherPlaceGoesThere(unittest.TestCase):
+    """T74: "I report to Ulric at the Reeves' Office ..." kept the player at the wreck; the MOVE was dropped as unasked."""
+
+    LINE = ("I report to Ulric at the Reeves' Office that the Stormbreaker's hull is shored and lashed, and ask what the "
+            "Reeves pay for it.")
+    PROSE = ("You report to Ulric [[E]] at The Reeves' Office [[L91]] that The Stormbreaker's Wreck is secured, its timbers "
+             "shored and lashed. The man leans on a desk, his fingers tapping a rhythm on the worn surface. \"Reeves pay for "
+             "salvage,\" he says, \"but the wreck is not yours to sell.\"")
+
+    def test_the_line_acts_at_the_office(self):
+        from app import world
+
+        rows = [{"name": "The Reeve's Office", "code": "L7"}, {"name": "The Stormbreaker's Wreck", "code": "L8"}]
+        self.assertTrue(world._acts_at_known_place(self.LINE, rows, "The Stormbreaker's Wreck"))
+        self.assertFalse(world._acts_at_known_place("I search the hull at the wreck for anything left.", rows, "The Stormbreaker's Wreck"))
+        self.assertFalse(world._acts_at_known_place("I ask who is at the Reeve's Office these days.", rows, "The Stormbreaker's Wreck"))
+
+    def test_the_move_to_the_office_stands(self):
+        from app import world
+        from app.db import connect
+
+        _world("The Reeve's Office")
+        with connect() as conn:
+            harbour = int(conn.execute("SELECT id FROM locations WHERE code = 'L90'").fetchone()[0])
+            conn.execute("INSERT INTO locations (code, name, summary, parent_id) VALUES ('L92', \"The Stormbreaker's Wreck\", '', ?)", (harbour,))
+            wreck = int(conn.execute("SELECT id FROM locations WHERE code = 'L92'").fetchone()[0])
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (wreck,))
+            result = {"narration": self.PROSE, "player": {"move_to_location": "Reeves’ Office"}}
+            report = world.resolve_movement(conn, result, self.LINE, intent="conversation", narration=self.PROSE)
+        self.assertNotIn(report.get("status"), {"dropped_unshown", "dropped"}, report)
+        self.assertTrue(result["player"].get("move_to_location") or result["player"].get("move_to_location_code"), report)
+
+
 class TheOfficeUnderAnotherSpelling(unittest.TestCase):
     """T66: "go into the Reeves' Office" made a third office beside "The Reeve's Office" and "Reeves’ Office"."""
 
