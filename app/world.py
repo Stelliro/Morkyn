@@ -16718,7 +16718,27 @@ def _inventory_row_named(conn, name: str):
     for cand in rows:
         if _measured_item_name(str(cand["name"] or "")) == measured:
             return cand
+    # One or many of the same thing is the same row: TAKE "brass keys" for
+    # the "brass key" carried read as a gain of a new thing (8B run 149, T9).
+    plain = _singular_item_key(measured)
+    for cand in rows:
+        if _singular_item_key(_measured_item_name(str(cand["name"] or ""))) == plain:
+            return cand
     return None
+
+
+def _singular_item_key(bare: str) -> str:
+    words = str(bare or "").split()
+    if not words:
+        return ""
+    last = words[-1]
+    if len(last) > 3 and last.endswith("ies"):
+        last = last[:-3] + "y"
+    elif len(last) > 4 and last.endswith(("ches", "shes", "sses", "xes")):
+        last = last[:-2]
+    elif len(last) > 3 and last.endswith("s") and not last.endswith("ss"):
+        last = last[:-1]
+    return " ".join(words[:-1] + [last])
 
 
 def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
