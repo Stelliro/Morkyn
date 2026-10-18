@@ -96,6 +96,15 @@ class TheActsOwnClause(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match["step_number"], 3)
 
+    def test_starting_the_dive_is_the_dive(self):
+        # 8B run 149, T5: "start the dive the guild asked for" read no act and rolled persuasion.
+        from app.prose_state import act_rules
+
+        act = act_rules("I wade out into the Dredges at low tide and start the dive the guild asked for, reckoner in hand.")
+        self.assertIsNotNone(act)
+        self.assertEqual(act["family"], "swim")
+        self.assertIsNone(act_rules("I look over the dive gear on the bench and ask its price."))
+
     def test_an_act_in_a_later_clause_keeps_its_own_words(self):
         from app.quests import _act_clause
 
