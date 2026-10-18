@@ -302,7 +302,12 @@ _UNPRICED_PAYMENT_RE = re.compile(
     # toss them into his palm" moved no gold (8B run 147, T21).
     r"|\byou\s+(?:\w+ly\s+)?(?:toss|tossed|count|counted|drop|dropped|press|pressed|put|place|placed|slide|slid|tip|tipped)\s+"
     r"(?:the\s+|a\s+few\s+|some\s+|your\s+)?(?:coins?|silver|coppers?|gold|crowns?|them)\b[^.!?\n]{0,40}?"
-    r"\binto\s+(?:his|her|their)\s+(?:open\s+|waiting\s+|outstretched\s+)?(?:palm|hand|hands|pouch|purse|apron)\b",
+    r"\binto\s+(?:his|her|their)\s+(?:open\s+|waiting\s+|outstretched\s+)?(?:palm|hand|hands|pouch|purse|apron)\b"
+    # The coin handed over with no sum: "You hand over the coin, and he hands
+    # over the items" at a price said a sentence before (8B run 148, T68).
+    r"|\byou\s+(?:\w+ly\s+)?(?:hand|handed|pass|passed|slide|slid|push|pushed)\s+(?:over\s+|across\s+)?"
+    r"(?:him|her|them\s+)?(?:the|your|some|a\s+few)\s+(?:coins?|gold|silver|coppers?|money|sum|payment|price|fee)\b"
+    r"|\byou\s+(?:\w+ly\s+)?(?:hand|handed|pass|passed|slide|slid)\s+(?:the|your)\s+(?:coins?|gold|money)\s+(?:over|across)\b",
     re.I,
 )
 

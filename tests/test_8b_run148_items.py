@@ -92,6 +92,16 @@ class AGrantUnderAnArticle(unittest.TestCase):
             world._apply_inventory(conn, [{"name": "the cod fillets", "quantity_delta": -1}])
         self.assertEqual(_rows(), {"cod fillets": 1})
 
+    def test_rope_is_the_coil_of_rope_carried(self):
+        # 8B run 148, T69: GRANT "rope" the turn after "a coil of rope" was taken put "rope x1" beside it.
+        from app import world
+        from app.db import connect
+
+        _pack(("a coil of rope", 1))
+        with connect() as conn:
+            world._apply_inventory(conn, [{"name": "rope", "quantity_delta": 1}])
+        self.assertEqual(_rows(), {"a coil of rope": 2})
+
     def test_another_thing_is_not_matched(self):
         from app import world
         from app.db import connect

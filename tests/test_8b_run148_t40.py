@@ -156,5 +156,48 @@ class TheClerkAtTheOpsPlace(unittest.TestCase):
         self.assertFalse(_figure_gone("The cloaked man steps closer, his hand out.", "The cloaked man"))
 
 
+class TheScarredManIsBertram(unittest.TestCase):
+    """T69-T70: "the scarred man" minted Garret, then Kael, beside Bertram Northcott, "a burly man with a scar across his brow"."""
+
+    PROSE = ("You take the scarred man and two others, and you walk down to the wreck with the mallet and the line. "
+             "The scarred man sets the mallet down and begins to lash the line around the hull, his movements sure and "
+             "practiced. The younger man helps, tying the knots.")
+
+    def _with_bertram(self):
+        from app.db import connect
+
+        town, tally, docks = _world()
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO npcs (code, location_id, name, race, role, summary, attitude, known_facts) VALUES "
+                "('M', ?, 'Bertram Northcott', 'human', 'dock hand', 'Their leader, a burly man with a scar across his brow, steps forward.', 'neutral', '[]')",
+                (docks,),
+            )
+
+    def test_the_scarred_man_is_the_known_scarred_man(self):
+        from app import world
+        from app.db import connect
+
+        self._with_bertram()
+        with connect() as conn:
+            out = world._npcs_shown_in_prose(conn, [{"name": "Kael", "role": "dock worker"}], self.PROSE)
+        self.assertEqual([n.get("name") for n in out], ["Bertram Northcott"], out)
+
+    def test_two_scarred_men_known_bind_nobody(self):
+        from app import world
+        from app.db import connect
+
+        self._with_bertram()
+        with connect() as conn:
+            docks = int(conn.execute("SELECT location_id FROM npcs WHERE code = 'M'").fetchone()[0])
+            conn.execute(
+                "INSERT INTO npcs (code, location_id, name, race, role, summary, attitude, known_facts) VALUES "
+                "('N', ?, 'Garret', 'human', 'dock hand', 'a fellow with a scar from temple to jaw', 'neutral', '[]')",
+                (docks,),
+            )
+            out = world._npcs_shown_in_prose(conn, [{"name": "Kael", "role": "dock worker"}], self.PROSE)
+        self.assertNotIn("Bertram Northcott", [n.get("name") for n in out])
+
+
 if __name__ == "__main__":
     unittest.main()

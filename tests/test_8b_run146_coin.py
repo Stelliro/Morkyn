@@ -158,6 +158,15 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
         self.assertEqual((note or {}).get("source"), "purchase_gain_flipped", note)
         self.assertEqual(result["player"].get("gold_band"), "-small", note)
 
+    def test_coin_handed_over_at_a_named_price_is_paid(self):
+        # 8B run 148, T68: GOLD 10 (a gain) on "You hand over the coin" at "ten gold for the rope and mallet" was dropped to nothing.
+        prose = ("You reach for a coil of rope and a mallet. You ask for his name and price. “Name’s Ulric,” he says. “The "
+                 "price’s ten gold for the rope and mallet. That’s the going rate.” You hand over the coin, and he hands over "
+                 "the items. The transaction is quick.")
+        result = {"narration": prose, "player": {"gold_delta": 10}}
+        note = _settle_stated_gold(result, "I go to the crates and take a coil of rope and a mallet, then ask the scarred man his name and his price.")
+        self.assertEqual(result["player"].get("gold_delta"), -10, note)
+
     def test_a_named_price_on_a_purchase_is_the_spend(self):
         prose = ("\"Two gold for the bed,\" the innkeeper says. You pay for the bed and climb the stairs.")
         result = {"narration": prose, "player": {"gold_delta": 30}}

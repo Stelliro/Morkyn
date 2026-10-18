@@ -116,6 +116,30 @@ class OneOfANamedThing(unittest.TestCase):
         self.assertEqual(_one_of_a_named_thing(change, "arrows", "i gather the arrows from the straw.", ""), change)
 
 
+class ThingAlreadyCarriedUnderItsMeasure(unittest.TestCase):
+    """T69: GRANT "rope" for the coil of rope taken the turn before, now paid for, is no new rope."""
+
+    LINE = "I pay the ten gold for the rope and mallet and ask Ulric which of his men will come to the wreck with me."
+    PROSE = ("You hand over the ten gold, the coins clinking as they pass from your pouch to Ulric’s rough palm. He nods, "
+             "the transaction sealed, and the rope and mallet you’ve paid for now rest in your gear. You ask which of his "
+             "men will join you at the wreck.")
+
+    def test_the_rope_lands_on_the_coil_row(self):
+        # A rope paid for the turn after it was taken cannot be told from a second rope by the judge;
+        # the write at least keeps one row for it (no "rope x1" beside "a coil of rope x1").
+        from app import world
+        from app.db import connect
+
+        _pack(("a coil of rope", 1))
+        kept, rejected = _filter([{"name": "rope", "quantity_delta": 1}, {"name": "mallet", "quantity_delta": 1}], self.PROSE, self.LINE)
+        self.assertIn("mallet", [c["name"] for c in kept], rejected)
+        with connect() as conn:
+            world._apply_inventory(conn, kept)
+            names = {str(r[0]) for r in conn.execute("SELECT name FROM inventory WHERE quantity > 0")}
+        self.assertNotIn("rope", names)
+        self.assertIn("a coil of rope", names)
+
+
 class APaperFoundUnderAnotherName(unittest.TestCase):
     def test_the_damp_paper_retrieved_is_the_ledger(self):
         from app.world import _handed_under_another_noun
