@@ -11388,6 +11388,18 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
         re.IGNORECASE,
     )
     match = pattern.search(wanted or "")
+    if not match and re.search(r"\b(?:go|goes|step|steps|walk|walks|head|heads|slip|slips|duck|ducks)\s+(?:in|inside)\b|\benter\w*\b", wanted or "", re.I):
+        # Named through its door and gone into: "I knock on the reeve's office
+        # door and go in when I'm answered" resolved no destination and the
+        # state stayed on the wharf while the prose sat in the office (8B run
+        # 150, T62).
+        door = re.compile(
+            r"\b(?:knock\w*\s+(?:on|at)|push\w*\s+(?:open\s+)?|pull\w*\s+(?:open\s+)?|open\w*|through|rap\w*\s+(?:on|at))\s+(?:the\s+)?"
+            r"(?P<place>(?:[a-z'’-]+\s+){0,2}?(?:" + "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True)) + r"))"
+            r"(?:['’]s)?\s+(?:door|doors|gate|gates|threshold|shutter|shutters)\b",
+            re.IGNORECASE,
+        )
+        match = door.search(wanted or "")
     if not match:
         # "I walk up into town to the salvage guild's tally house" (8B run 26,
         # T1): the walk verb a few words before, the owner before the building.
