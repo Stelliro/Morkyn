@@ -160,6 +160,25 @@ class TheKeyInHandUnderANewName(unittest.TestCase):
         self.assertEqual([c["name"] for c in kept], ["guild key"], rejected)
 
 
+class HeldIsNotGained(unittest.TestCase):
+    """8B run 149, T11: "the guild's lockpicking tools clutched in your hands" put two picks nobody gave or found in the pack."""
+
+    LINE = "I leave the tally house and walk back to the Dredges to search the main sump for the locks the guild wants."
+    PROSE = ("You walk through the damp streets. The main sump, a gaping wound in the earth, awaits your descent. You pause at "
+             "the edge, the guild's lockpicking tools clutched in your hands, and prepare to dive into the depths.")
+
+    def test_tools_only_held_came_from_nowhere(self):
+        _pack()
+        kept, rejected = _filter([{"name": "brass lockpick", "quantity_band": "moderate"}], self.PROSE, self.LINE)
+        self.assertEqual(kept, [], rejected)
+
+    def test_tools_the_prose_hands_over_arrive(self):
+        _pack()
+        prose = "Lettice presses a set of brass lockpicks into your hands. \"Bring them back,\" she says."
+        kept, rejected = _filter([{"name": "brass lockpick", "quantity_band": "small"}], prose, self.LINE)
+        self.assertEqual([c["name"] for c in kept], ["brass lockpick"], rejected)
+
+
 class APaperFoundUnderAnotherName(unittest.TestCase):
     def test_the_damp_paper_retrieved_is_the_ledger(self):
         from app.world import _handed_under_another_noun
