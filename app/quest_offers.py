@@ -541,6 +541,17 @@ def run_offer_pass(
         ) and not _names_pay(str(candidate.get("line") or "")):
             report["fills"][-1]["dropped"] = "task_is_the_players_words"
             continue
+        # The steps are the giver's words too: Nell's "You'll be paid well for
+        # this" filled "Load the Hesperian's crates for Rafe" and "Pay Mabel's
+        # three gold" out of the player's own line (8B run 150, T72). A step
+        # found in the player's line and not in the giver's goes; a card left
+        # with none is no offer.
+        giver_line = str(candidate.get("line") or "")
+        kept_steps = [s for s in card["steps"] if not (qp.evidence_found(s, own) and not qp.evidence_found(s, giver_line))]
+        if not kept_steps:
+            report["fills"][-1]["dropped"] = "steps_are_the_players_words"
+            continue
+        card["steps"] = kept_steps
         system, user = build_check_prompt(candidate, card, player_input)
         try:
             raw = ask(system, user, max_tokens=CHECK_MAX_TOKENS, phase=CHECK_PHASE)

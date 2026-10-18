@@ -278,6 +278,22 @@ class TheAsksFillAndCheck(unittest.TestCase):
         self.assertEqual([c["phase"] for c in calls], [qo.FILL_PHASE])
         self.assertEqual(report["fills"][0].get("dropped"), "task_is_the_players_words")
 
+    def test_steps_lifted_from_the_players_line_are_dropped(self):
+        # 8B run 150, T72: Nell's "You'll be paid well for this" filled steps out of the player's own line.
+        line = ("\"Guildmaster. I've loaded the Hesperian's crates for Rafe today and paid Mabel's three gold. I'm looking for "
+                "steady work with the guild.\" I stand straight and wait.")
+        prose = ("\"Guildmaster. I've loaded the Hesperian's crates for Rafe today and paid Mabel's three gold. I'm looking for "
+                 "steady work with the guild,\" you say. Nell [[J]] eyes you. \"You've done well. You're looking for steady work, "
+                 "are you? Good. You'll be paid well for this.\"")
+        nell = [{"code": "J", "name": "Nell", "role": "guildmaster"}]
+        ask, calls = _fake_ask(fill={"offers_work": True, "task": "You'll be paid well for this.", "title": "Salvage Work with Rafe",
+                                     "steps": ["Load the Hesperian's crates for Rafe", "Pay Mabel's three gold"], "place": "The Dock",
+                                     "pay": "You'll be paid well for this", "gold": 0})
+        report = qo.run_offer_pass(prose, line, npcs=nell, asked_for_work=True, ask=ask)
+        self.assertEqual(report["new"], [])
+        self.assertEqual([c["phase"] for c in calls], [qo.FILL_PHASE])
+        self.assertEqual(report["fills"][0].get("dropped"), "steps_are_the_players_words")
+
     def test_a_fill_that_sees_no_work_asks_no_check(self):
         ask, calls = _fake_ask(fill={"offers_work": False, "task": "", "title": ""})
         report = qo.run_offer_pass(FISH, FISH_INPUT, npcs=VEYRA, asked_for_work=True, ask=ask)
