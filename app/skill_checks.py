@@ -1596,7 +1596,7 @@ def social_attitude_from_check(
 
 SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     # Striking a flint, a match or a bargain is not a blow (playtest #102).
-    (r"\b(attack|strike(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance)\b)|slash|stab|swing|fight|melee)\b", "melee"),
+    (r"\b(attack|strike(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance|entry|entries|name|names|line|lines|record|records|word|words|debt|sum|figure|charge|clause|it\s+(?:from|out|off|through)|that\s+(?:entry|name|line|out)|them\s+(?:from|out|off))\b)|slash|stab|swing|fight|melee)\b", "melee"),
     # The verbs only: "I eat the soup by the fire" rolled ranged (7B run 5, T30),
     # and "bow to her" is a greeting.
     (r"\b(shoot|(?<!the )(?<!by )(?<!a )(?<!of )fire (?:at|on|upon|into|a|an|the|my|arrows?|bolts?|shots?|again)|"
@@ -1898,7 +1898,14 @@ _THING_STRIKES_RE = re.compile(
 )
 _COMBAT_LINE_RE = re.compile(
     r"\b(?:(?:attack|fight|slash|stab|punch|kick|shoot)(?:s|es|ed|ing|bed|bing)?"
-    r"|(?:strikes?|striking|struck)\b(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance)\b))\b",
+    r"|(?:strikes?|striking|struck)\b(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance|entry|entries|name|names|line|lines|record|records|word|words|debt|sum|figure|charge|clause|it\s+(?:from|out|off|through)|that\s+(?:entry|name|line|out)|them\s+(?:from|out|off))\b))\b",
+    re.I,
+)
+
+
+_ATTRIBUTION_TAIL_RE = re.compile(
+    r",?\s*(?:just\s+|exactly\s+)?(?:as|like)\s+(?:[A-Z][\w'’-]+|she|he|they|the\s+[a-z]+)\s+(?:had\s+)?"
+    r"(?:asked|said|told\s+(?:me|us)|wanted|suggested|instructed|advised|put\s+it|described|showed\s+(?:me|us)|promised)\b[^.;,]*",
     re.I,
 )
 
@@ -1923,6 +1930,8 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # What the player watches happen is not the player's act: "watch how fast
     # the water climbs the tiles" rolled athletics (#102).
     text = _WATCHED_CLAUSE_RE.sub(" ", _NEGATED_VERB_RE.sub(" ", own.lower()))
+    # An attribution tail is not the player asking (8B run 150, T14).
+    text = re.sub(r"\s+(?=[.,;!?])", "", _ATTRIBUTION_TAIL_RE.sub("", text))
     # Words inside the player's quotes are speech, not acts (7B run 6, T3):
     # "...before they pick the lower district clean" rolled lockpicking on a
     # walk to the yard. Speech can still carry a social check (a plea, a
@@ -1938,6 +1947,11 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # scarred crewman (8B run 146, T11).
     own_acts = _THING_STRIKES_RE.sub(" ", own_acts)
     acted = _THING_STRIKES_RE.sub(" ", acted)
+    # An attribution tail is not the player asking: "search the wreck's hold
+    # for anything alive, as Mabel asked" rolled persuasion against Mabel, two
+    # places away (8B run 150, T14).
+    own_acts = re.sub(r"\s+(?=[.,;!?])", "", _ATTRIBUTION_TAIL_RE.sub("", own_acts))
+    acted = re.sub(r"\s+(?=[.,;!?])", "", _ATTRIBUTION_TAIL_RE.sub("", acted))
     text = _THING_STRIKES_RE.sub(" ", text)
     act = None
     if not _COMBAT_LINE_RE.search(own_acts):
