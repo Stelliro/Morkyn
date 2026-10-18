@@ -141,6 +141,45 @@ class AJobAboutAnotherThing(unittest.TestCase):
         self.assertTrue(_same_job_subject("Salvage Job", "Clear the Wreck"))
 
 
+class TheTakeIsOfTheThingNamedInItsClause(unittest.TestCase):
+    """T53: "I pocket the coins and ask Rafe to strike the three gold from Mabel's ledger" let GRANT "ledger" in."""
+
+    LINE = "I pocket the coins and ask Rafe to strike the three gold from Mabel's ledger as part of the day's pay."
+    PROSE = ("You pocket the coins and call out to Rafe. He pulls a small knife from his belt and slices through the three "
+             "gold marks. The paper shudders, the ink bleeding. The ledger is lighter, the debt lessened.")
+
+    def test_the_ledger_is_not_taken(self):
+        _pack()
+        kept, rejected = _filter([{"name": "ledger", "quantity_delta": 1}], self.PROSE, self.LINE)
+        self.assertEqual(kept, [], rejected)
+
+    def test_a_second_thing_in_the_take_clause_is_taken(self):
+        from app.world import _take_clause_names_item
+
+        self.assertTrue(_take_clause_names_item("I pick up the key and the coin from the floor.", "coin", ["coin"]))
+        self.assertFalse(_take_clause_names_item(self.LINE, "ledger", ["ledger"]))
+
+
+class AStrikeOnALedgerIsNoBlow(unittest.TestCase):
+    """T53: "ask Rafe to strike the three gold from Mabel's ledger" rolled melee."""
+
+    def test_no_melee(self):
+        from app.skill_checks import infer_check_from_action
+
+        check = infer_check_from_action("I pocket the coins and ask Rafe to strike the three gold from Mabel's ledger.")
+        self.assertFalse(check and check.get("skill_code") == "melee", check)
+
+
+class ASingleGoldPieceIsOne(unittest.TestCase):
+    """T52: "three silver, two copper, and a single gold piece" dropped into the palm, and GOLD moderate rolled 31."""
+
+    def test_coin_mentions_reads_one(self):
+        from app.prose_state import coin_mentions
+
+        self.assertEqual(coin_mentions("He dropped a handful of coins into your palm: three silver, two copper, and a single gold piece."), [1])
+        self.assertEqual(coin_mentions("She counts out one gold coin."), [1])
+
+
 class PraiseOfWorkIsNoJob(unittest.TestCase):
     def test_good_work_is_vetoed(self):
         from app import quest_offers as qo

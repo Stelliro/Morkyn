@@ -24,6 +24,9 @@ _NUMBER_WORDS = {
     "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
     "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
     "a hundred": 100, "hundred": 100,
+    # "three silver, two copper, and a single gold piece" dropped into the palm
+    # read as no stated sum, and GOLD moderate rolled 31 (8B run 150, T52).
+    "a single": 1, "single": 1, "a lone": 1, "lone": 1,
 }
 # "forty-six gold" read as "six gold" and the purse grew by a rolled gain
 # while the player paid (8B run 146, T73): tens and units together are one number.

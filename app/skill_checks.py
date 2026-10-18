@@ -1596,7 +1596,7 @@ def social_attitude_from_check(
 
 SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     # Striking a flint, a match or a bargain is not a blow (playtest #102).
-    (r"\b(attack|strike(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance|entry|entries|name|names|line|lines|record|records|word|words|debt|sum|figure|charge|clause|it\s+(?:from|out|off|through)|that\s+(?:entry|name|line|out)|them\s+(?:from|out|off))\b)|slash|stab|swing|fight|melee)\b", "melee"),
+    (r"\b(attack|strike(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance|entry|entries|name|names|line|lines|record|records|word|words|debt|sum|figure|charge|clause|it\s+(?:from|out|off|through)|that\s+(?:entry|name|line|out)|them\s+(?:from|out|off)|(?:[\w'’-]+\s+){0,4}?(?:from|out\s+of|off)\s+(?:the\s+|a\s+|my\s+|his\s+|her\s+|[\w'’-]+['’]s\s+)?(?:[\w'’-]+\s+){0,2}?(?:ledger|books?|records?|tally|roll|list|register|page|slate))\b)|slash|stab|swing|fight|melee)\b", "melee"),
     # The verbs only: "I eat the soup by the fire" rolled ranged (7B run 5, T30),
     # and "bow to her" is a greeting.
     (r"\b(shoot|(?<!the )(?<!by )(?<!a )(?<!of )fire (?:at|on|upon|into|a|an|the|my|arrows?|bolts?|shots?|again)|"
@@ -1900,7 +1900,7 @@ _THING_STRIKES_RE = re.compile(
 )
 _COMBAT_LINE_RE = re.compile(
     r"\b(?:(?:attack|fight|slash|stab|punch|kick|shoot)(?:s|es|ed|ing|bed|bing)?"
-    r"|(?:strikes?|striking|struck)\b(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance|entry|entries|name|names|line|lines|record|records|word|words|debt|sum|figure|charge|clause|it\s+(?:from|out|off|through)|that\s+(?:entry|name|line|out)|them\s+(?:from|out|off))\b))\b",
+    r"|(?:strikes?|striking|struck)\b(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance|entry|entries|name|names|line|lines|record|records|word|words|debt|sum|figure|charge|clause|it\s+(?:from|out|off|through)|that\s+(?:entry|name|line|out)|them\s+(?:from|out|off)|(?:[\w'’-]+\s+){0,4}?(?:from|out\s+of|off)\s+(?:the\s+|a\s+|my\s+|his\s+|her\s+|[\w'’-]+['’]s\s+)?(?:[\w'’-]+\s+){0,2}?(?:ledger|books?|records?|tally|roll|list|register|page|slate))\b))\b",
     re.I,
 )
 
