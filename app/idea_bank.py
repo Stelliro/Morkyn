@@ -20,8 +20,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
-SHIPPED_DIR = ROOT / "config" / "idea_bank"
+from app.paths import APP_DIR, ROOT  # ROOT: the home (data/); APP_DIR: this version's files
+SHIPPED_DIR = APP_DIR / "config" / "idea_bank"
 def user_dir() -> Path:
     """Resolved per call so AI_RPG_IDEA_BANK is honoured whatever the import order."""
     return Path(os.getenv("AI_RPG_IDEA_BANK", str(ROOT / "data" / "idea_bank")))

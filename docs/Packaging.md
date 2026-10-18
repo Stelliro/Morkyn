@@ -33,6 +33,47 @@ The local model is not in the build. It is a `.gguf` the player points the Model
 or a cloud API. `llama-cpp-python` is inside (CUDA wheels on Windows, CPU wheels elsewhere);
 `data/mle-models` beside the exe is where the in-app downloader puts weights.
 
+## Runtime packs and versions (Stell, 2026-10-19)
+
+"could we make the exe seperate from its dependancies so we dont ship them together? also, we
+will need a new method for updating, but we should probbaly make it so the user can select a
+version, this is a future proofing method i want to use" and "we need hardware specific auto
+installs as well as an area the user can select what they want and if they want to use a custom
+one".
+
+The home folder (beside the executable the player downloaded) holds three shared things:
+
+```
+Morkyn/                     the home (app.paths.ROOT)
+  Morkyn.exe + _internal/   the build the player downloaded (about 60 MB)
+  static/ content/ config/ Media/
+  data/                     saves, prefs, logs, models (shared by every version)
+  runtime/<pack>/           engine packs: llama-cpp-python per accelerator (shared)
+  versions/<tag>/Morkyn/    other installed versions, each a full app build
+```
+
+- **Packs** (`app/runtime_packs.py`): the app build does not ship llama-cpp-python. A pack is a
+  zip (`pack.json` + `site/`) per accelerator, OS, architecture and Python tag, built by
+  `packaging/build_packs.py` and attached to the standing `runtime-packs` release. `activate()`
+  runs in every process of the app and puts the chosen engine on `sys.path`. The choice is the
+  launcher pref `engine_pack`: `auto` (the pack that fits the hardware, `app/hardware.py`:
+  CUDA for NVIDIA, Metal on Apple Silicon, Vulkan for AMD and Intel, else CPU; installed on
+  its own at the first packaged start that needs it), a pack id, `custom` (a folder or zip of
+  the player's own build, `engine_pack_custom`) or `none`. Catalog: `llama-cpp-cuda`
+  (Windows, Linux), `llama-cpp-metal` (macOS), `llama-cpp-vulkan` (Windows, Linux; built from
+  source, not on the release yet), `llama-cpp-cpu` (all).
+- **Versions** (`app/versions.py`): the Versions & engine panel lists the GitHub releases; the
+  player installs any one (newer or older) into `versions/<tag>/` and chooses it; at the next
+  start the home executable hands over to that version's executable with `MORKYN_HOME` set, so
+  every version shares `data/` and the packs. "Use this build" clears the choice. A chosen
+  version that dies within seconds is dropped, so a bad download never locks the player out.
+- Routes: `/api/versions` (+`/install`, `/activate`, `/remove`), `/api/runtime/packs`
+  (+`/install`, `/remove`), `/api/runtime/engine`. The panel is the Updates modal of a packaged
+  build (static/app.js, `renderVersionsList`, `renderEnginePanel`).
+- Paths: `app.paths.ROOT` is the home (`MORKYN_HOME`, else beside the exe, else the repo) for
+  `data/`, `runtime/`, `versions/`; `app.paths.APP_DIR` is the running version's own files
+  (`static/`, `content/`, `config/`, `Media/`).
+
 ## Building
 
 - Windows: `powershell -ExecutionPolicy Bypass -File packaging\build.ps1` (add `-Console` for a

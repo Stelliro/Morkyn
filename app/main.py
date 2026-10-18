@@ -172,9 +172,9 @@ from app.world import (
 )
 
 
-from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
-STATIC_DIR = ROOT / "static"
-MEDIA_DIR = ROOT / "Media"
+from app.paths import APP_DIR, ROOT  # ROOT: the home (data/); APP_DIR: this version's files
+STATIC_DIR = APP_DIR / "static"
+MEDIA_DIR = APP_DIR / "Media"
 APP_VERSION = "V0.10.0-dev.14"
 
 app = FastAPI(title="Mørkyn")
@@ -859,6 +859,14 @@ class SuggestionRequest(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    # A packaged build with the engine on auto fetches the pack that fits the
+    # hardware (app/runtime_packs.py); the Versions & engine panel shows it.
+    try:
+        from app.runtime_packs import auto_install_if_needed
+
+        auto_install_if_needed()
+    except Exception as exc:
+        print(f"[runtime-packs] auto install skipped: {exc}")
     # Load content packs from content/packs (built-in) and data/packs (user),
     # then push their tables into the dice and encounter systems. Dropping a
     # JSON file in data/packs is the whole install step.
@@ -1002,6 +1010,99 @@ def api_updates_rollback(request: RollbackRequest):
     result = rollback(request.target or "")
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Rollback failed")
+    return result
+
+
+# --- Versions and engine packs (the packaged build's updater; Stell, 2026-10-19) ---
+
+class VersionRequest(BaseModel):
+    tag: str = ""
+    url: str | None = None
+
+
+class PackRequest(BaseModel):
+    id: str = ""
+    url: str | None = None
+
+
+class EngineChoiceRequest(BaseModel):
+    mode: str = "auto"
+    custom: str = ""
+
+
+@app.get("/api/versions")
+def api_versions(online: bool = True):
+    """The releases the player can install and switch to; only contacts GitHub when ``online``."""
+    from app.versions import list_releases
+
+    return list_releases(check_online=online)
+
+
+@app.post("/api/versions/install")
+def api_versions_install(request: VersionRequest):
+    from app.versions import install
+
+    result = install(request.tag, request.url)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Install failed")
+    return result
+
+
+@app.post("/api/versions/activate")
+def api_versions_activate(request: VersionRequest):
+    from app.versions import set_active
+
+    result = set_active(request.tag)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Could not choose that version")
+    return result
+
+
+@app.post("/api/versions/remove")
+def api_versions_remove(request: VersionRequest):
+    from app.versions import remove
+
+    result = remove(request.tag)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Remove failed")
+    return result
+
+
+@app.get("/api/runtime/packs")
+def api_runtime_packs(online: bool = False):
+    """The hardware, the engine choice and the packs; ``online`` also lists what the release offers."""
+    from app.runtime_packs import status
+
+    return status(check_online=online)
+
+
+@app.post("/api/runtime/packs/install")
+def api_runtime_packs_install(request: PackRequest):
+    from app.runtime_packs import install
+
+    result = install(request.id, request.url)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Install failed")
+    return result
+
+
+@app.post("/api/runtime/packs/remove")
+def api_runtime_packs_remove(request: PackRequest):
+    from app.runtime_packs import remove
+
+    result = remove(request.id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Remove failed")
+    return result
+
+
+@app.post("/api/runtime/engine")
+def api_runtime_engine(request: EngineChoiceRequest):
+    from app.runtime_packs import set_choice
+
+    result = set_choice(request.mode, request.custom)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Could not set the engine")
     return result
 
 

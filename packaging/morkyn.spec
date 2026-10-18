@@ -48,19 +48,29 @@ datas = [
     (str(ROOT / "app" / "comfy_workflows"), "app/comfy_workflows"),
 ]
 binaries = []
-# llama-cpp-python and pywebview are optional at build time: a Linux build
-# without a wheel for its libc (musl) still packages the game with cloud APIs
-# and the browser; the in-app downloader and the llama.cpp engine need the wheel.
-for optional in ("llama_cpp", "webview"):
+# The app build does not ship llama-cpp-python: it is a runtime pack (CUDA, CPU,
+# Metal, Vulkan) the app downloads for the player's hardware, see
+# app/runtime_packs.py and packaging/build_packs.py (Stell, 2026-10-19). Set
+# MORKYN_BUNDLE_LLAMA=1 for a self-contained build. pywebview is optional too:
+# a Linux build without it opens the game in the browser.
+optional_packages = ["webview"]
+excludes_extra: list[str] = []
+if os.environ.get("MORKYN_BUNDLE_LLAMA") == "1":
+    optional_packages.append("llama_cpp")
+else:
+    hiddenimports = [h for h in hiddenimports if not h.startswith("llama_cpp")
+                     and h not in {"sse_starlette", "starlette_context", "pydantic_settings"}]
+    excludes_extra = ["llama_cpp", "sse_starlette", "starlette_context", "pydantic_settings"]
+for name in optional_packages:
     try:
-        __import__(optional)
+        __import__(name)
     except Exception:
-        print(f"morkyn.spec: {optional} not installed; building without it")
-        hiddenimports = [h for h in hiddenimports if not h.startswith(optional)]
+        print(f"morkyn.spec: {name} not installed; building without it")
+        hiddenimports = [h for h in hiddenimports if not h.startswith(name)]
         continue
-    hiddenimports += collect_submodules(optional)
-    datas += collect_data_files(optional)
-    binaries += collect_dynamic_libs(optional)
+    hiddenimports += collect_submodules(name)
+    datas += collect_data_files(name)
+    binaries += collect_dynamic_libs(name)
 
 icon = None
 try:
@@ -86,7 +96,7 @@ a = Analysis(  # noqa: F821
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tests", "tools", "pytest", "tkinter", "matplotlib", "IPython", "notebook"],
+    excludes=["tests", "tools", "pytest", "tkinter", "matplotlib", "IPython", "notebook", *excludes_extra],
     noarchive=False,
 )
 pyz = PYZ(a.pure)  # noqa: F821
