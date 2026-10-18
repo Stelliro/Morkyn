@@ -421,14 +421,23 @@ def parse_fill(raw: Any) -> dict[str, Any] | None:
     }
 
 
-def build_check_prompt(candidate: dict[str, Any], card: dict[str, Any], player_input: str = "") -> tuple[str, str]:
-    """(system, user) for the check ask: three yes/no questions against the paragraph."""
+def build_check_prompt(
+    candidate: dict[str, Any], card: dict[str, Any], player_input: str = "",
+    open_jobs: list[dict[str, Any]] | None = None,
+) -> tuple[str, str]:
+    """(system, user) for the check ask: three yes/no questions against the paragraph.
+
+    With ``open_jobs`` (the jobs already offered or taken, by code), a fourth
+    question asks which of them, if any, this line tells again: a job retold
+    under another name binds by its reference, not by title similarity
+    (Stell, 2026-10-18).
+    """
     import json
 
     giver = _npc_label(candidate.get("speaker"), candidate.get("stranger") or "", candidate.get("kind") or "spoken")
     passage = str(candidate.get("paragraph") or candidate.get("line") or "")[:900]
     own = qp._player_own_line(str(player_input or ""))[:300]
-    payload = {
+    payload: dict[str, Any] = {
         "passage": passage,
         "player_said": own,
         "card": {"giver": giver, "title": card.get("title"), "task": card.get("task")},
@@ -440,6 +449,16 @@ def build_check_prompt(candidate: dict[str, Any], card: dict[str, Any], player_i
         },
         "return": {"offered": "yes or no", "specific": "yes or no", "in_text": "yes or no", "why": "one short sentence"},
     }
+    jobs = [
+        {"code": str(j.get("code") or ""), "title": str(j.get("title") or "")[:80], "giver": str(j.get("giver") or "")[:60]}
+        for j in open_jobs or [] if isinstance(j, dict) and j.get("code") and j.get("title")
+    ][:8]
+    if jobs:
+        payload["open_jobs"] = jobs
+        payload["questions"]["same_job"] = (
+            "Is this task one of open_jobs told again, in other words or more detail? If so, which code; if it is new work, none."
+        )
+        payload["return"]["same_job"] = "a code from open_jobs, or none"
     return _CHECK_SYSTEM, json.dumps(payload, ensure_ascii=True)
 
 
@@ -452,9 +471,29 @@ def parse_check(raw: Any) -> dict[str, Any]:
         except Exception:
             data = None
     if not isinstance(data, dict):
-        return {"ok": False, "offered": False, "specific": False, "in_text": False, "why": "unusable reply"}
+        return {"ok": False, "offered": False, "specific": False, "in_text": False, "why": "unusable reply", "same_job": ""}
     verdict = {key: _yes(data.get(key)) for key in ("offered", "specific", "in_text")}
-    return {"ok": all(verdict.values()), **verdict, "why": str(data.get("why") or "")[:200]}
+    same = re.search(r"\bQ\d+\b", str(data.get("same_job") or ""), re.I)
+    return {"ok": all(verdict.values()), **verdict, "why": str(data.get("why") or "")[:200],
+            "same_job": same.group(0).upper() if same else ""}
+
+
+def _verified_retell(code: str, open_jobs: list[dict[str, Any]] | None, candidate: dict[str, Any]) -> str:
+    """The open job's code the check named, when it is listed and its giver fits this line's speaker; else ""."""
+    code = str(code or "").strip().upper()
+    if not code:
+        return ""
+    job = next((j for j in open_jobs or [] if isinstance(j, dict) and str(j.get("code") or "").upper() == code), None)
+    if job is None:
+        return ""
+    speaker = candidate.get("speaker") if isinstance(candidate.get("speaker"), dict) else None
+    giver = str(job.get("giver") or "").strip().lower()
+    if speaker and giver:
+        who = {str(speaker.get("name") or "").lower(), str(speaker.get("code") or "").lower()}
+        first = str(speaker.get("name") or "").split()[0].lower() if str(speaker.get("name") or "").split() else ""
+        if giver not in who and (not first or not giver.startswith(first)):
+            return ""
+    return code
 
 
 def card_to_proposal(candidate: dict[str, Any], card: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
@@ -491,9 +530,14 @@ def run_offer_pass(
     marks: list[dict[str, Any]] | None = None,
     asked_for_work: bool = False,
     ask: Ask | None = None,
+    open_jobs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     Find, fill, check. Returns {"new": [proposals], "candidates", "dropped", "fills", "checks"}.
+
+    ``open_jobs`` (code, title, giver) are the jobs already offered or taken;
+    the check names the one a line tells again, and the proposal carries it as
+    ``retells`` so the parser binds by reference.
 
     ``ask(system, user, max_tokens=..., phase=...)`` returns the model's JSON
     (a dict) or raises. With no ``ask`` nothing is proposed: the engine never
@@ -552,17 +596,24 @@ def run_offer_pass(
             report["fills"][-1]["dropped"] = "steps_are_the_players_words"
             continue
         card["steps"] = kept_steps
-        system, user = build_check_prompt(candidate, card, player_input)
+        system, user = build_check_prompt(candidate, card, player_input, open_jobs=open_jobs)
         try:
             raw = ask(system, user, max_tokens=CHECK_MAX_TOKENS, phase=CHECK_PHASE)
         except Exception as exc:
             report["checks"].append({"title": card["title"], "error": f"{exc.__class__.__name__}: {exc}"[:200]})
             continue
         check = parse_check(raw)
+        # The engine checks the reference: the code has to be a listed open job,
+        # and its giver this line's speaker when both are known.
+        retells = _verified_retell(check.get("same_job") or "", open_jobs, candidate)
+        check["same_job"] = retells
         report["checks"].append({"title": card["title"], **check})
-        if not check["ok"]:
+        if not check["ok"] and not (retells and check.get("in_text")):
             continue
-        report["new"].append(card_to_proposal(candidate, card, check))
+        proposal = card_to_proposal(candidate, card, check)
+        if retells:
+            proposal["retells"] = retells
+        report["new"].append(proposal)
         if len(report["new"]) >= qp.MAX_NEW_PER_TURN:
             break
     return report

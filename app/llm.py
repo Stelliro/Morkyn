@@ -17543,6 +17543,13 @@ def _run_quest_parser(
             asked = qp.player_asks_for_work(player_input) or (
                 bool(memory.get("talking_to_someone")) and qp.player_asks_for_work(memory.get("previous_input") or "")
             )
+            # The jobs already offered or taken, by code: a job told again under
+            # another name binds to its reference (Stell, 2026-10-18).
+            open_jobs = [
+                {"code": q.get("code"), "title": q.get("title"), "giver": q.get("giver") or q.get("giver_name") or ""}
+                for q in [*inputs["open_offers"], *inputs["active_quests"]]
+                if isinstance(q, dict) and q.get("code") and q.get("title")
+            ]
             offers = qo.run_offer_pass(
                 narration,
                 player_input,
@@ -17551,6 +17558,7 @@ def _run_quest_parser(
                 marks=marks,
                 asked_for_work=asked,
                 ask=ask,
+                open_jobs=open_jobs,
             )
             progress = qo.run_progress_pass(narration, player_input, active=inputs["active_quests"], ask=ask)
             typed = qo.typed_accepts(player_input, inputs["open_offers"])

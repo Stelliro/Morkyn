@@ -110,6 +110,12 @@ belong to, with the date).
   a gate rather than retrying the model.
 - **Rosters:** resolve model text against the roster and its synonyms; mint only on a genuine
   miss; ambiguous matches resolve to nothing.
+- **Jobs bind by reference, not title** (2026-10-18): "a job being retold under a different
+  name isnt the worst thing, however we should be using the references for it so for example
+  '@Q'". Quests are referenced by code like everything else (`@Q1` in the player's line beside
+  `@A`, `#L1`, `!I1`, `&E1`; `Q1` in ops). The offer check is shown the open jobs by code and
+  names the one a line tells again; the parser binds that proposal to the referenced quest
+  (`retells`) before any title rule. Title similarity is the fallback only.
 - **UI comes from the logo** (Media/ key art): black-violet void, one thread of light as a line,
   never a fill, cut-corner shards. Generic dark-fantasy chrome was rejected. Rules in
   docs/UI_RULEBOOK.md.
