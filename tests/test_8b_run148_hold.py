@@ -347,5 +347,27 @@ class APaperFoundUnderAnotherName(unittest.TestCase):
         self.assertEqual(kept, [], rejected)
 
 
+class CatchingALooseThingIsTakingIt(unittest.TestCase):
+    """8B run 150, T28: the crab the player asked to catch was held_not_gained."""
+
+    LINE = "I catch the crustacean before it scuttles off the Dock and carry it up to Mabel."
+    PROSE = ("You spot the crustacean scuttling across the planks, its carapace gleaming in the pale light. You move swiftly, "
+             "catching it before it can escape into the water. Its claws twitch, but you hold it steady, its shell warm "
+             "against your palm. You carry it toward Mabel's stall.")
+
+    def test_the_crab_caught_arrives(self):
+        _pack()
+        kept, rejected = _filter([{"name": "crustacean", "quantity_delta": 1}], self.PROSE, self.LINE)
+        self.assertEqual([c["name"] for c in kept], ["crustacean"], rejected)
+
+    def test_catching_an_eye_or_a_breath_takes_nothing(self):
+        from app.llm import player_take_intent
+        from app.world import _ACQUIRE_PROSE_RE
+
+        self.assertFalse(player_take_intent("I catch the eye of the reeve and nod."))
+        self.assertFalse(player_take_intent("I catch my breath and look around."))
+        self.assertIsNone(_ACQUIRE_PROSE_RE.search("You catch a glimpse of the reeve. You catch your breath on the step."))
+
+
 if __name__ == "__main__":
     unittest.main()
