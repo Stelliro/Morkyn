@@ -14868,6 +14868,37 @@ from app.llm import _TAKE_NOT_ACQUIRE_TAIL, _TAKE_PERCEPTION_RE  # noqa: E402
 # over" contains "hand ... over". Inflection is now required on `hand`. The same
 # narration also matched a bare `pocket` in "warm from your pocket", so that too
 # needs an inflection or an explicit "you pocket".
+_CLAUSE_SPLIT_RE = re.compile(r"[,;:]|\b(?:and|then|before|after|while|but)\b", re.I)
+_CLAUSE_OWN_VERB_RE = re.compile(
+    r"^\s*(?!(?:the|a|an|my|his|her|their|its|our|your|some|any|this|that|these|those|every|each|both|one|two|three|"
+    r"four|five|six|several|all|\d)\b)[a-z]",
+    re.I,
+)
+
+
+def _take_clause_names_item(text: str, name_l: str, tokens: list[str]) -> bool:
+    """The clause of the player's line that takes something names this thing.
+
+    "I pocket the coins and ask Rafe to strike the three gold from Mabel's
+    ledger" takes the coins, not the ledger (8B run 150, T53). A clause with
+    no verb of its own ("and the coin") hangs off the clause before it. A
+    search for whatever turns up asks for each find.
+    """
+    low = str(text or "").lower()
+    if _SEARCH_FOR_ANY_RE.search(low) or _LINE_TAKES_ANY_RE.search(low):
+        return True
+    taking = False
+    for clause in _CLAUSE_SPLIT_RE.split(low):
+        if not clause.strip():
+            continue
+        # A bare noun or two ("and mallet", "and the coin") hangs off the clause before.
+        if _CLAUSE_OWN_VERB_RE.match(clause) and len(clause.split()) >= 3:
+            taking = player_take_intent(clause)
+        if taking and _sentence_mentions_item(clause, name_l, tokens):
+            return True
+    return False
+
+
 # Catching an eye, a glimpse or one's breath takes nothing.
 _CATCH_NOT_TAKE = (
     r"eye|eyes|glimpse|sight|look|whiff|scent|smell|hint|word|words|sound|drift|gist|name|"
@@ -16080,10 +16111,14 @@ def _remove_shown_gives(
             continue
         in_prose = next((p for p in prose_parts if _sentence_mentions_item(p, name_l, tokens)), None)
         if in_prose is None:
-            turn_ledger.note("inventory", "give_not_shown", item=name)
-            continue
+            # The player's own give or put-down of their own thing is theirs:
+            # "I set the ledger down on her desk and step back" kept the ledger
+            # because the prose went straight to Mabel's answer (8B run 150,
+            # T56). Only a prose that hands it back or refuses it (above) undoes
+            # it; silence does not.
+            turn_ledger.note("inventory", "give_taken_from_line", item=name)
         have = int(row["quantity"] or 0)
-        qty = have if (_WHOLE_STACK_RE.search(in_line) or _WHOLE_STACK_RE.search(in_prose)) else 1
+        qty = have if (_WHOLE_STACK_RE.search(in_line) or (in_prose and _WHOLE_STACK_RE.search(in_prose))) else 1
         added.append({
             "name": name,
             "quantity_delta": -max(1, min(have, qty)),
@@ -16607,6 +16642,13 @@ def _filter_inventory_changes(
         # it: the spoken "I'll haul the beams off the east pier wreck" (the job,
         # promised) put "Iron beams" in the pack (8B run 71, T4).
         narrated_take = player_take_intent(venues.strip_speech(str(player_input or "")))
+        # And the take has to be of this thing: "I pocket the coins and ask Rafe
+        # to strike the three gold from Mabel's ledger" let GRANT "ledger" in, a
+        # book nobody handed over (8B run 150, T53). The clause that names the
+        # item has to be the one that takes, or hang off it with no verb of its
+        # own ("pick up the key and the coin").
+        if narrated_take and not _take_clause_names_item(venues.strip_speech(str(player_input or "")), name_l, tokens):
+            narrated_take = False
         arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and narrated_take and line_names_it)
         grounded = named and arrived
         # A thing already owned grows only when the prose shows another one
@@ -16659,8 +16701,19 @@ def _filter_inventory_changes(
         # Asked to pick one's own thing back up, with the prose only holding it:
         # "I pick the crustacean back up" with "the crustacean in your hands"
         # made it x2 (8B run 150, T36).
+        # The line picks it "back up" or out of the pack, or the prose has the
+        # owned thing in view (held, shown); a terse prose on a plain take
+        # ("Done.") still lets the asked take through.
+        own_narrated = venues.strip_speech(str(player_input or "")).lower()
+        retake_asked = bool(re.search(r"\b(?:back\s+up|again|out\s+of\s+(?:my|the)\s+(?:pack|bag|satchel|pouch|pocket))\b", own_narrated))
+        prose_has_it = any(
+            _sentence_mentions_item(s.lower(), name_l, tokens) for s in re.split(r"(?<=[.!?])\s+", final_text) if s.strip()
+        )
         if (
-            grounded and existing and ((outcome == "gain" and by_player) or (outcome is None and acquire_intent and line_names_it))
+            grounded and existing and (
+                (outcome == "gain" and by_player)
+                or (outcome is None and acquire_intent and line_names_it and (retake_asked or prose_has_it))
+            )
             and not _another_of_named(final_text, name_l, tokens)
             and not _found_in_item_sentences(final_text, name_l, tokens)
             and not _prose_item_handed_over(final_text, name_l, tokens, owned=True)
