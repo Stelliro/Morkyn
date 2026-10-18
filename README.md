@@ -4,7 +4,7 @@
   <img src="Media/morkyn-cover.png" alt="Mørkyn: the model narrates, the game decides what is true" width="72%" />
 </p>
 
-**Version `0.10.0-dev.13`** · pre-release builds on the way to `0.10.0`, not stable (see [CHANGELOG](CHANGELOG.md) for each `dev.N`). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.10.0-dev.14`** · pre-release builds on the way to `0.10.0`, not stable (see [CHANGELOG](CHANGELOG.md) for each `dev.N`). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
 ## This is not the usual AI RPG
 
@@ -372,6 +372,7 @@ Further reading: [docs/NarrationPipeline.md](docs/NarrationPipeline.md) · [docs
 
 ### Latest
 
+- **0.10.0-dev.14:** ten more Qwen3 8B runs (142-151) and 163 fixes by class; jobs bind by reference (`@Q1`) rather than by title, the engine's own prose slips are mended (no scene shrunk to a fragment, no orphaned quotes, routine talk never a brutal miss), and the connection leak that starved a live run is closed.
 - **0.10.0-dev.13:** 184 test runs with a local model as the narrator (43 on Qwen2.5 7B, 141 on Qwen3 8B) and 377 fixes, so the save follows the story: places, people, jobs, gold and items change only when the scene shows it, and lines written for you are removed.
 - **0.10.0 dev builds:** Mørkyn's own window, abilities whose growth the engine computes, a theme ability library that learns new powers, death and Ironman, towns with streets, read-aloud narration. Full notes: [changelogs/0.10.0-dev.md](changelogs/0.10.0-dev.md).
 - **Newest devlog:** [The save follows the story](changelogs/devlogs/itch-0.10.0-dev.13.md).
