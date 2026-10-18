@@ -176,10 +176,8 @@ _SIMPLE_ACCEPT_RE = re.compile(
 # A yes that waits on something is no yes: "I will hear your terms before I
 # agree to any of them" accepted Elara's job (8B run 146, T62). The clause
 # after before/until/unless/if/whether/once is a condition, not the answer.
-_CONDITIONAL_CLAUSE_RE = re.compile(
-    r"\b(?:before|until|unless|if|whether|once|should)\s+(?:i|we)\b[^.!?;]*",
-    re.I,
-)
+# The one rule lives with the typed accept (8B run 150, T37, T40).
+from app.local_intel import CONDITIONAL_CLAUSE_RE as _CONDITIONAL_CLAUSE_RE  # noqa: E402
 
 
 # "as agreed", "as we arranged": a deal already made, not a yes to an open offer
@@ -1157,6 +1155,33 @@ def _lead_verb(title: str) -> str:
     return words[0] if words else ""
 
 
+# An employer gives many jobs: these words say nothing about which one.
+_EMPLOYER_WORDS = frozenset({
+    "guild", "house", "company", "office", "council", "watch", "hall", "crew", "reeve", "harbour", "harbor", "town",
+    "master", "clerk", "desk", "job", "work", "task", "errand", "favour", "favor",
+})
+
+
+def _same_job_subject(title: str, other: str) -> bool:
+    """Two job titles about the same thing.
+
+    "Fetch the Crab from the Reeve" and "Fetch a Scroll from the Reeve's Office"
+    are two jobs: the verb and the employer are shared, the thing fetched is not
+    (8B run 150, T37). A title with no subject word of its own ("Salvage Job")
+    decides nothing and counts as the same.
+    """
+
+    def subject(text: str) -> set[str]:
+        stems = _stems(re.sub(r"['’]s\b", "", str(text or "")))
+        lead = _stem(_lead_verb(text))
+        return {s for s in stems if s != lead and s not in _EMPLOYER_WORDS}
+
+    mine, theirs = subject(title), subject(other)
+    if not mine or not theirs:
+        return True
+    return bool(mine & theirs)
+
+
 def _is_duplicate(item: dict[str, Any], existing: list[dict[str, Any]] | None, giver_id: Any, first_place: str) -> dict[str, Any] | None:
     title = _norm(item.get("title"))
 
@@ -1519,7 +1544,10 @@ def validate_quest_changes(
                 if str(q.get("status") or "") in {"offered", "active"} and q.get("giver_npc_id") == giver.get("id")
                 and int(q.get("current_step") or 1) == 1
             ]
-            if len(open_from_giver) == 1:
+            # A job about another thing is another job: Rafe's scroll from the
+            # reeve's desk was filed under his crab job, and his Coral Wreck
+            # salvage under his crate loading (8B run 150, T37, T42).
+            if len(open_from_giver) == 1 and _same_job_subject(title, str(open_from_giver[0].get("title") or "")):
                 dup = open_from_giver[0]
         if dup is not None and same_offer is None:
             ref = dup.get("code") or dup.get("id")

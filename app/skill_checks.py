@@ -1650,7 +1650,9 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
      # roll; "The dive. I'll take it." does not (8B run 145, T3 and T9: the
      # dive on the wreck rolled nothing).
      r"(?:dive|dives|dived|dove|diving)\s+(?:on|onto|into|in|down|for|off|to|under|beneath|after|through)|go(?:es)?\s+over\s+the\s+side)\b", "athletics"),
-    (r"\b(lock|pick the|unlock)\b", "lockpicking"),
+    # Picking a thing up is a take, not a lock: "I pick the crustacean back up"
+    # rolled lockpicking (8B run 150, T36).
+    (r"\b(lock|pick the(?!\s+(?:[\w'’-]+\s+){0,4}?(?:back\s+)?up\b)|unlock)\b", "lockpicking"),
     (r"\b(heal|bandage|medicine|first aid|triage|splint)\b", "healing"),
     (r"\b(rally|cover (me|them|him|her)|support (ally|friend)|buff)\b", "support"),
     (r"\b(summon|call (a |the )?(spirit|familiar|demon)|pact)\b", "summoning"),

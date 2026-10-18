@@ -143,11 +143,22 @@ def _code_veto(line: str, *, asked_for_work: bool) -> str:
     # on that debt (collect it, bring it, deliver it) is work.
     if _DEBT_STATEMENT_RE.search(cleaned) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned) and not _ERRAND_VERB_RE.search(cleaned):
         return "debt_statement"
+    # A word on work under way is no new job: "You're doing good work,
+    # Flat-runner. The guild needs more hands, and you're helping out" from a
+    # passing hand filed "Helping Out at the Guild" while the crates were being
+    # loaded (8B run 150, T46).
+    if _PRAISE_OF_WORK_RE.search(cleaned) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned) and not _names_pay(cleaned):
+        return "praise_of_work"
     return ""
 
 
 _DEBT_STATEMENT_RE = re.compile(
     r"\b(?:owes?|owed|is\s+owed|are\s+owed|in\s+debt\s+to|the\s+debt\s+(?:stands|is|comes)\s+(?:at|to))\b", re.I
+)
+_PRAISE_OF_WORK_RE = re.compile(
+    r"\b(?:good\s+work|well\s+done|keep\s+(?:it|that)\s+up|nice\s+work|fine\s+work|"
+    r"you(?:['’]re|\s+are)\s+(?:doing|helping|working|pulling|earning)\b)",
+    re.I,
 )
 _ERRAND_VERB_RE = re.compile(
     r"\b(?:bring|fetch|collect|deliver|find|take|carry|haul|go|get|recover|settle|pay\s+(?:it|him|her|them)|"

@@ -1179,9 +1179,20 @@ _OFFER_STOP = frozenset({"the", "a", "an", "of", "to", "for", "and", "in", "on",
 JOB_WORDS = frozenset({"work", "works", "job", "jobs", "task", "tasks", "errand", "errands", "help", "quest", "contract", "some"})
 
 
+# A yes that waits on something is no yes: "I will hear your terms before I
+# agree to any of them" accepted Elara's job (8B run 146, T62), and so did
+# "I'll tell you if I'll do it" and "before I agree to anything" (8B run 150,
+# T37, T40). The clause after before/until/unless/if/whether/once is a
+# condition, not the answer. One rule for the parser and the typed accept.
+CONDITIONAL_CLAUSE_RE = re.compile(
+    r"\b(?:before|until|unless|if|whether|once|should)\s+(?:i|we)\b[^.!?;]*",
+    re.I,
+)
+
+
 def typed_accept(text: str) -> bool:
     """The player's line takes a job: the job words, signing for it, or a plain "we'll take it"."""
-    line = str(text or "")
+    line = CONDITIONAL_CLAUSE_RE.sub(" ", str(text or ""))
     return bool(_ACCEPT_RE.search(line) or SIGN_ON_RE.search(line) or _PLAIN_ACCEPT_RE.search(line))
 
 

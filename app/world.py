@@ -16656,8 +16656,11 @@ def _filter_inventory_changes(
         # from the counter" grew the guild key to x4 over two turns (8B run 149,
         # T17-T18). A thing owned, taken by the player, with no other one named
         # and nobody handing one over, is the same thing picked up again.
+        # Asked to pick one's own thing back up, with the prose only holding it:
+        # "I pick the crustacean back up" with "the crustacean in your hands"
+        # made it x2 (8B run 150, T36).
         if (
-            grounded and existing and outcome == "gain" and by_player
+            grounded and existing and ((outcome == "gain" and by_player) or (outcome is None and acquire_intent and line_names_it))
             and not _another_of_named(final_text, name_l, tokens)
             and not _found_in_item_sentences(final_text, name_l, tokens)
             and not _prose_item_handed_over(final_text, name_l, tokens, owned=True)
@@ -20003,6 +20006,17 @@ def _ensure_npcs_from_narration(
                 re.search(rf"\b{re.escape(name.split()[0])}\b", near) for name in listed if name.split()
             ):
                 turn_ledger.note("npc", "figure_is_listed_person", hint=h)
+                seen_at.add(at)
+                continue
+            # A hint whose sentence opens on he/she points back to the person
+            # the sentence before names: "Rafe ... watches from the corner. He's
+            # a man who speaks with actions, not promises" seeded a drawn "Eadric
+            # Joliffe, eel trapper" for "a man" (8B run 150, T34).
+            if at > 0 and re.match(r"^(?:He|She|They)\b", flat_sentences[at].strip()) and any(
+                re.search(rf"\b{re.escape(name.split()[0])}\b", flat_sentences[at - 1])
+                for name in known_names + listed if name.split()
+            ):
+                turn_ledger.note("npc", "figure_is_known_person", hint=h)
                 seen_at.add(at)
                 continue
             seen_at.add(at)
