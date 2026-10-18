@@ -44,8 +44,8 @@ def _pack(*names):
     init_db()
     with connect() as conn:
         conn.execute("DELETE FROM inventory")
-        for name, qty in names:
-            conn.execute("INSERT INTO inventory (name, quantity) VALUES (?, ?)", (name, qty))
+        for index, (name, qty) in enumerate(names):
+            conn.execute("INSERT INTO inventory (code, name, quantity) VALUES (?, ?, ?)", (f"T{index + 1}", name, qty))
 
 
 def _rows():
@@ -101,6 +101,16 @@ class AGrantUnderAnArticle(unittest.TestCase):
         with connect() as conn:
             world._apply_inventory(conn, [{"name": "rope", "quantity_delta": 1}])
         self.assertEqual(_rows(), {"a coil of rope": 2})
+
+    def test_the_plural_is_the_same_row(self):
+        # 8B run 149, T9: TAKE "brass keys" beside the "brass key" carried made a new "brass keys x1".
+        from app import world
+        from app.db import connect
+
+        _pack(("brass key", 1), ("arrow", 2))
+        with connect() as conn:
+            world._apply_inventory(conn, [{"name": "brass keys", "quantity_delta": -1}, {"name": "arrows", "quantity_delta": 1}])
+        self.assertEqual(_rows(), {"arrow": 3})
 
     def test_another_thing_is_not_matched(self):
         from app import world
