@@ -81,12 +81,23 @@ Size is the open question: a CPU-only llama-cpp wheel would make the zip about 7
 8B model needs the GPU. Options: ship the CUDA build as is; two Windows builds (cpu / cuda);
 or download the llama-cpp wheel on first use into `data/`. Stell's call.
 
+## First Linux build (2026-10-18, Alpine WSL, musl, Python 3.12)
+
+`packaging/build.sh` from a clean `git archive` of HEAD in `/tmp`, without llama-cpp-python
+(no musl wheel; the spec builds without it) and without pywebview: 126 MB folder, 57 MB tarball.
+`./Morkyn --run-code`, `--run-module app.model_limits --context` and `--serve` all work; the
+page, `/static/app.js`, `/api/model-status` and `/api/state` answer; `data/` lands beside the
+binary. PyInstaller's dependency scan prints "Error loading shared library libgcc_s..." for the
+manylinux wheels' bundled libraries on musl; the build still runs. A glibc build (CI's
+ubuntu-22.04) is the one to ship; the Alpine run proves the layout.
+
+The in-game updater in a packaged build says so and compares the running version to the
+newest GitHub release instead of offering a git pull (`app/updates.py`, the Updates panel).
+
 ## Still to do
 
 - Smoke test the rest from the exe: new game on a cloud API and on a local GGUF, pop-outs,
   `--browser`, `lan`.
-- Run `packaging/build.sh` on Alpine WSL (musl) and on a glibc distribution; macOS only via CI.
-- The in-game updater (`app/updates.py`) is a git checkout feature; the packaged build should
-  show "download the next build" instead of offering an update.
+- A glibc Linux build and the macOS build, via the workflow on the next tag.
 - A smaller build: drop the CUDA llama-cpp wheel from the Windows package in favour of a
   download on first use, if the zip is too large for itch.
