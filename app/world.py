@@ -14328,6 +14328,30 @@ def _place_new_people_at_arrival(
         if (code and code in listed) or name.lower() in listed:
             continue
         if (code and f"[[{code}]]" in after) or (name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", after)):
+            # Mentioned is not shown: "Mabel's words linger in your mind—the
+            # reeve's got a boat tied up at the dock" carried Mabel from the
+            # tally house to the dock (8B run 150, T6). Her words, voice or
+            # warning recalled, or a memory of her, is not her here.
+            who = r"(?:" + (re.escape(name) if name else r"(?!x)x") + (r"|\[\[" + re.escape(code) + r"\]\]" if code else "") + r")"
+            recalled = re.search(
+                who + r"(?:\s*\[\[[A-Z0-9]+\]\])?['’]s\s+(?:words?|voice|warning|advice|face|name|instructions?|directions?)\b"
+                r"|\b(?:memory|memories|remember\w*|recall\w*|thought\s+of)\b[^.!?]{0,40}" + who
+                + r"|" + who + r"[^.!?]{0,60}\bin\s+your\s+mind\b",
+                after, re.I,
+            )
+            recalled_re = re.compile(
+                who + r"(?:\s*\[\[[A-Z0-9]+\]\])?['’]s\s+(?:words?|voice|warning|advice|face|name|instructions?|directions?)\b"
+                r"|\b(?:memory|memories|remember\w*|recall\w*|thought\s+of)\b[^.!?]{0,40}" + who
+                + r"|" + who + r"[^.!?]{0,60}\bin\s+your\s+mind\b", re.I)
+            # Shown in another sentence, they are here after all.
+            present = any(
+                _named_as_present(s, r"(?<!\w)" + re.escape(name) + r"(?!\w)", flags=re.I) or (code and f"[[{code}]]" in s)
+                for s in re.split(r"(?<=[.!?])\s+", after)
+                if re.search(who, s) and not recalled_re.search(s)
+            ) if (name or code) else False
+            if recalled and not present:
+                turn_ledger.note("npc", "recalled_not_shown", name=name)
+                continue
             conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(dest["id"]), int(row["id"])))
             turn_ledger.note("npc", "placed_at_arrival", name=name, place=str(dest["name"] or ""), via="shown_after_arrival")
 
@@ -19541,7 +19565,14 @@ def _hint_sentence(text: str, hint: str) -> str:
     """The prose's own sentence about a seeded face, codes stripped."""
     flat = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))
     flat = re.sub(r"\s+", " ", flat).strip()
-    for sentence in re.split(r"(?<=[.!?])\s+", flat):
+    sentences = re.split(r"(?<=[.!?])\s+", flat)
+    # The hint's own sentence first, as written: "A man in a soot-stained coat
+    # is at the counter" after "a man in a soot-stained tunic" at a stall passed
+    # (8B run 112, T1) used to return the stall.
+    for sentence in sentences:
+        if hint and hint in sentence:
+            return sentence.strip()[:300]
+    for sentence in sentences:
         if hint and hint.lower() in sentence.lower():
             return sentence.strip()[:300]
     if not hint:
