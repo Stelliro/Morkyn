@@ -95,6 +95,18 @@ class CoinSetDownForWords(unittest.TestCase):
         result = {"player": {"gold_delta": -3}, "_dsl": {"grants": ["clue"]}}
         self.assertTrue(_void_unbought_spend(result, ["clue"], [], None, "I put three gold on the bar for the story.", prose))
 
+    def test_a_bed_and_a_meal_bought_are_a_spend(self):
+        # 8B run 149, T42: twenty gold for a meal and a bed were voided once the bed and meal grants were refused as fixtures.
+        from app.world import _void_unbought_spend
+
+        prose = ("\"A meal and a bed,\" she said. \"That'll be twenty gold, plus a coin for the chamber pot.\" You handed over the "
+                 "coins, and she nodded, setting the change on the counter. As you settled into the bed, the weight of the day pressed down.")
+        result = {"player": {"gold_delta": -20}, "_dsl": {"grants": ["bed", "meal"]}}
+        voided = _void_unbought_spend(result, ["bed", "meal"], [], None,
+                                      "I ask the innkeeper for a hot meal and a bed for the night, and pay what she asks.", prose)
+        self.assertFalse(voided)
+        self.assertEqual(result["player"]["gold_delta"], -20)
+
     def test_a_purchase_of_nothing_is_still_voided(self):
         from app.world import _void_unbought_spend
 

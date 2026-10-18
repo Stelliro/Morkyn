@@ -167,6 +167,15 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
         note = _settle_stated_gold(result, "I go to the crates and take a coil of rope and a mallet, then ask the scarred man his name and his price.")
         self.assertEqual(result["player"].get("gold_delta"), -10, note)
 
+    def test_a_sum_said_as_the_coin_is_handed_over_beats_the_band(self):
+        # 8B run 149, T37: "tosses it to you. 'Forty-five gold,' she says" with GOLD +moderate paid a rolled 41.
+        prose = ("She pulls a small pouch from her belt and tosses it to you. \"Forty-five gold,\" she says, her tone flat. "
+                 "\"That’s for the first.\" You catch the pouch, the coins clinking inside.")
+        result = {"narration": prose, "player": {"gold_band": "moderate"}}
+        note = _settle_stated_gold(result, "\"Salvage, then. Hand over what the guild offers for the two boxes, Lettice.\"")
+        self.assertEqual(result["player"].get("gold_delta"), 45, note)
+        self.assertNotIn("gold_band", result["player"])
+
     def test_a_named_price_on_a_purchase_is_the_spend(self):
         prose = ("\"Two gold for the bed,\" the innkeeper says. You pay for the bed and climb the stairs.")
         result = {"narration": prose, "player": {"gold_delta": 30}}
