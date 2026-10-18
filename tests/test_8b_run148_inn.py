@@ -125,6 +125,14 @@ class AQualityOfAMan(unittest.TestCase):
 
         self.assertEqual([h for h in _figure_hints(self.PROSE, ["Eldric"]) if "man" in h.lower()], [])
 
+    def test_a_man_in_a_memory_is_not_here(self):
+        # 8B run 149, T56: "the memory of a man you once saw in the Docks" minted Elias Vane at the yard.
+        from app.world import _figure_hints
+
+        prose = ("A name catches your eye—Elias Vane—and the memory of a man you once saw in the Docks flickers to life. "
+                 "You flip through the pages.")
+        self.assertEqual([h for h in _figure_hints(prose, []) if "man" in h.lower()], [])
+
     def test_a_man_who_acts_is_still_shown(self):
         from app.world import _figure_hints
 
