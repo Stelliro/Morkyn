@@ -391,6 +391,23 @@ def build_fill_prompt(
     return _FILL_SYSTEM, json.dumps(payload, ensure_ascii=True)
 
 
+def _whole_words(text: str, limit: int) -> str:
+    """The first sentence when it fits, else whole words up to ``limit``.
+
+    A cut mid-word ("without a bit of pr") went into the job's step, the
+    narrator saw it every turn and its people began speaking in cut words ("you
+    need a name, a reco.", 8B run 152c, T3).
+    """
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    first = re.match(r"(.+?[.!?])(?:\s|$)", text)
+    if first and len(first.group(1)) <= limit:
+        return first.group(1)
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    return cut or text[:limit]
+
+
 def parse_fill(raw: Any) -> dict[str, Any] | None:
     """The filled card, or None when the line offers no work or the reply is unusable."""
     data = raw if isinstance(raw, dict) else None
@@ -413,7 +430,7 @@ def parse_fill(raw: Any) -> dict[str, Any] | None:
     return {
         "task": task[:400],
         "title": (title or task)[:80],
-        "steps": [(task or title)[:120]],
+        "steps": [_whole_words(task or title, 120)],
         "place": re.sub(r"\s+", " ", str(data.get("place") or "")).strip()[:100],
         "pay": re.sub(r"\s+", " ", str(data.get("pay") or "")).strip()[:200],
         "gold": max(0, gold),

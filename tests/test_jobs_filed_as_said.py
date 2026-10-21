@@ -328,6 +328,16 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertFalse(qo.requirement_not_task("You need to haul the nets in before the tide."))
         self.assertFalse(qo.requirement_not_task("Bring the crate to the shipwrights."))
 
+    def test_the_step_is_never_cut_mid_word(self):
+        # 8B run 152c, T3: the step "... without a bit of pr" reached the narrator, which then wrote "a reco.".
+        task = ("Carry the guild's three crates of salvaged tools down to the shipwrights before the tide turns. "
+                "You're not the kind they'd trust without a bit of proof, so mind the crates and mind the tide.")
+        step = qo.parse_fill({"task": task, "title": "Carry the crates"})["steps"][0]
+        self.assertEqual(step, "Carry the guild's three crates of salvaged tools down to the shipwrights before the tide turns.")
+        long_one = "Carry " + " ".join(["the crate"] * 30)
+        self.assertTrue(long_one.startswith(qo.parse_fill({"task": long_one, "title": "t"})["steps"][0]))
+        self.assertTrue(qo.parse_fill({"task": long_one, "title": "t"})["steps"][0].endswith("crate"))
+
     def test_closing_the_job_pays_once_and_settles(self):
         qid = _file_crates_job(self.conn)
         before = _gold(self.conn)
