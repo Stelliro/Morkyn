@@ -335,8 +335,8 @@ class PayIsAnEngineLedger(unittest.TestCase):
         step = qo.parse_fill({"task": task, "title": "Carry the crates"})["steps"][0]
         self.assertEqual(step, "Carry the guild's three crates of salvaged tools down to the shipwrights before the tide turns.")
         long_one = "Carry " + " ".join(["the crate"] * 30)
-        self.assertTrue(long_one.startswith(qo.parse_fill({"task": long_one, "title": "t"})["steps"][0]))
-        self.assertTrue(qo.parse_fill({"task": long_one, "title": "t"})["steps"][0].endswith("crate"))
+        cut = qo.parse_fill({"task": long_one, "title": "t"})["steps"][0]
+        self.assertTrue(long_one.startswith(cut) and long_one[len(cut)] == " ", cut)
 
     def test_closing_the_job_pays_once_and_settles(self):
         qid = _file_crates_job(self.conn)
