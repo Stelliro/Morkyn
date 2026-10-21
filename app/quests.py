@@ -135,6 +135,10 @@ def create_quest(
         # reached yet still creates quests (db._migrate_columns adds it).
         conn.execute("UPDATE quests SET reward_karma = ? WHERE id = ?", (max(-25, min(25, int(reward_karma))), quest_id))
 
+    if int(reward_gold or 0) > 0:
+        # The pay ledger: a job with pay is owed from the day it is filed.
+        mark_pay_owed(conn, quest_id)
+
     for i, step in enumerate(steps, 1):
         loc_name = str(step.get("location_name", "") or "")
         # Town snapping: if location_name matches a known settlement, use its coords
@@ -293,6 +297,7 @@ def decline_offered(conn, quest_id: int, *, turn: int = 0) -> dict[str, Any] | N
         "UPDATE quests SET status = 'declined', failed_turn = ? WHERE id = ? AND status = 'offered'",
         (int(turn), int(quest_id)),
     )
+    void_pay(conn, int(quest_id), turn=turn)
     _offer_journal(conn, turn, f"Turned down: {quest['title']}{_giver_suffix(conn, quest)}")
     quest["status"] = "declined"
     return quest
@@ -374,6 +379,14 @@ def pay_quest_reward(
     if not quest:
         paid["errors"] = ["quest_not_found"]
         return paid
+    if str(quest.get("pay_status") or "") == "settled":
+        # The pay ledger already shows this job paid: never pay twice.
+        from app import turn_ledger
+
+        turn_ledger.note("quest", "pay_already_settled", quest=quest.get("code") or f"Q{quest_id}",
+                         settled=int(quest.get("pay_settled") or 0))
+        paid["already_settled"] = True
+        return paid
     errors: list[str] = []
     try:
         paid.update(quest_reward_amounts(conn, quest, units=units))
@@ -435,11 +448,145 @@ def pay_quest_reward(
     paid["text"] = reward_text(paid)
     line = f"Quest complete: {quest['title']}{_giver_suffix(conn, quest)}"
     _offer_journal(conn, turn, f"{line}: {paid['text']}" if paid["text"] else line)
+    # Settle the ledger: what this job paid in all, coin handed over in the
+    # story and ahead of the work included.
+    from app.quest_parser import advance_paid
+
+    settled = int(paid["gold"] or 0) + int(gold_paid_in_story or 0) + advance_paid(quest)
+    paid["settled"] = settled
+    settle_pay(conn, int(quest_id), amount=settled, turn=turn)
     if source:
         paid["source"] = str(source)[:40]
     if errors:
         paid["errors"] = errors
     return paid
+
+
+# ---------------------------------------------------------------------------
+# The pay ledger (2026-10-22)
+# ---------------------------------------------------------------------------
+# A job's pay is recorded on its row from the day it is filed: owed (the giver
+# is the job's giver_npc_id, the amount its reward_gold, which agreed terms and
+# coin paid ahead keep current), settled when the job closes and pays, void
+# when it is turned down, failed or abandoned. pay_quest_reward reads it, so a
+# job is never paid twice whichever completion path closes it.
+PAY_OWED, PAY_SETTLED, PAY_VOID = "owed", "settled", "void"
+
+
+def mark_pay_owed(conn, quest_id: int) -> bool:
+    """Record the job's pay as owed (unless it is already settled or void). True when written."""
+    try:
+        cur = conn.execute(
+            "UPDATE quests SET pay_status = ? WHERE id = ? AND COALESCE(pay_status, '') = ''",
+            (PAY_OWED, int(quest_id)),
+        )
+        return bool(cur.rowcount)
+    except Exception as exc:  # a save the column has not reached yet
+        from app import turn_ledger
+
+        turn_ledger.note("quest", "pay_ledger_unwritten", quest=f"Q{quest_id}", error=f"{type(exc).__name__}: {exc}"[:160])
+        return False
+
+
+def settle_pay(conn, quest_id: int, *, amount: int, turn: int = 0) -> None:
+    """The job closed and paid ``amount`` in all: the ledger shows it settled."""
+    try:
+        conn.execute(
+            "UPDATE quests SET pay_status = ?, pay_settled = ?, pay_turn = ? WHERE id = ?",
+            (PAY_SETTLED, max(0, int(amount)), int(turn), int(quest_id)),
+        )
+    except Exception:
+        pass
+
+
+def void_pay(conn, quest_id: int, *, turn: int = 0) -> bool:
+    """A job turned down, failed or abandoned pays nothing: owed pay becomes void. True when written."""
+    try:
+        cur = conn.execute(
+            "UPDATE quests SET pay_status = ?, pay_turn = ? WHERE id = ? AND pay_status = ?",
+            (PAY_VOID, int(turn), int(quest_id), PAY_OWED),
+        )
+        return bool(cur.rowcount)
+    except Exception:
+        return False
+
+
+def pay_owed(quest: dict[str, Any] | None) -> int:
+    """Gold the job still owes the player: its reward while the ledger says owed, else 0."""
+    if not isinstance(quest, dict) or str(quest.get("pay_status") or "") != PAY_OWED:
+        return 0
+    return max(0, int(quest.get("reward_gold") or 0))
+
+
+# ---------------------------------------------------------------------------
+# Steps written as play happens (2026-10-22)
+# ---------------------------------------------------------------------------
+# A job filed from a spoken offer holds only what the line said: its one open
+# step is the task in the giver's words. What the player does on it is written
+# in as play happens, each deed a done step before the open task, so the step
+# list is the job's own history, not steps the model guessed at offer time
+# (8B run 150, T39: "Loading the Cargo Crates" with four invented steps).
+STEPS_FROM_PLAY_NOTE = "steps:from_play"
+MAX_PROGRESS_STEPS = 8
+
+
+def steps_from_play(quest: dict[str, Any] | None) -> bool:
+    return STEPS_FROM_PLAY_NOTE in str((quest or {}).get("notes") or "")
+
+
+def _deed_text(text: str) -> str:
+    flat = re.sub(r"\s+", " ", str(text or "")).strip().strip("\"“”")
+    flat = re.sub(r"\s*\[\[?[A-Z]{1,3}\d{0,3}\]\]?", "", flat)
+    if len(flat) > 120:
+        cut = flat[:120].rsplit(" ", 1)[0]
+        flat = f"{cut}…"
+    return flat
+
+
+def log_job_progress(
+    conn, quest_id: int, deed: str, *, turn: int = 0, source: str = "", done: bool = True
+) -> dict[str, Any] | None:
+    """
+    Write one deed into a from-play job's steps: a done step before its open
+    task, and a journal line. Returns {"code", "deed", "step"} or None when the
+    job is not an active from-play job, the deed is empty, or this job already
+    logged a deed this turn. ``done`` False (the act failed) journals only.
+    """
+    quest = get_quest(conn, int(quest_id))
+    deed = _deed_text(deed)
+    if not quest or str(quest.get("status") or "") != "active" or not steps_from_play(quest) or len(deed) < 3:
+        return None
+    code = str(quest.get("code") or f"Q{quest_id}")
+    marker = f"progress:t{int(turn)}"
+    if any(marker in str(s.get("notes") or "") for s in quest.get("steps") or []):
+        return None
+    if conn.execute(
+        "SELECT 1 FROM journal WHERE turn = ? AND kind = 'quest' AND content LIKE ? LIMIT 1",
+        (int(turn), f"Job progress: {quest['title']}:%"),
+    ).fetchone():
+        return None
+    current = int(quest.get("current_step") or 1)
+    total = int(quest.get("total_steps") or 1)
+    logged = sum(1 for s in quest.get("steps") or [] if "progress:" in str(s.get("notes") or ""))
+    out = {"code": code, "deed": deed, "step": 0, "source": str(source or "")[:40]}
+    if done and logged < MAX_PROGRESS_STEPS and current == total:
+        # The open task is the last step: it moves down one and the deed takes its place.
+        conn.execute(
+            "UPDATE quest_steps SET step_number = ? WHERE quest_id = ? AND step_number = ?",
+            (current + 1, int(quest_id), current),
+        )
+        conn.execute(
+            "INSERT INTO quest_steps (quest_id, step_number, title, description, location_code, location_name, "
+            "location_coords, status, hidden, revealed_at_step, completed_turn, notes) "
+            "VALUES (?, ?, ?, ?, '', '', '', 'completed', 0, 0, ?, ?)",
+            (int(quest_id), current, deed, f"Turn {int(turn)}: {deed}", int(turn), f"{marker}; {source}"[:200]),
+        )
+        conn.execute(
+            "UPDATE quests SET current_step = ?, total_steps = ? WHERE id = ?", (current + 1, total + 1, int(quest_id))
+        )
+        out["step"] = current
+    _offer_journal(conn, turn, f"Job progress: {quest['title']}: {deed}" + ("" if done else " (not done yet)"))
+    return out
 
 
 def pay_quest_completion(conn, quest_id: int, result: dict[str, Any], *, turn: int = 0, source: str = "") -> dict[str, Any] | None:
@@ -780,6 +927,7 @@ def fail_quest(conn, quest_id: int, *, turn: int = 0, reason: str = "") -> None:
         "UPDATE quests SET status = 'failed', failed_turn = ?, notes = ? WHERE id = ?",
         (int(turn), str(reason), quest_id),
     )
+    void_pay(conn, int(quest_id), turn=turn)
 
 
 def tick_quest_timers(conn, *, turn: int = 0) -> list[int]:

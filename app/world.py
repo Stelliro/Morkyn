@@ -24297,6 +24297,22 @@ def apply_turn(
                         engine_row["error"] = str(done.get("error") or "")[:200]
                 except Exception as exc:
                     engine_row["error"] = f"{type(exc).__name__}: {exc}"[:200]
+            elif str(quest_attempt.get("outcome") or "") != "blocked":
+                # Work on a job filed with only its task: the deed is written
+                # into its steps as play happens (quests.log_job_progress); a
+                # partial job is a done step, a failed act a journal line.
+                try:
+                    from app.quests import log_job_progress
+
+                    own_act = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", re.split(r"\n\s*\n", _player_line(player_input), maxsplit=1)[0])
+                    logged = log_job_progress(
+                        conn, int(quest_attempt["quest_id"]), own_act, turn=turn, source="engine",
+                        done=str(quest_attempt.get("outcome") or "") == "partial",
+                    )
+                    if logged:
+                        engine_row["progress"] = logged
+                except Exception as exc:
+                    engine_row["error"] = f"{type(exc).__name__}: {exc}"[:200]
             engine_quest_rows.append(engine_row)
         if (quest_changes or quest_marks) and _play_system_enabled(conn, "quests_enabled", True):
             try:

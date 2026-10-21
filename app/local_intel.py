@@ -968,10 +968,14 @@ def _quest_is_taken(conn, quest_id: int) -> bool:
 
 def expire_offered_quest(conn, quest_id: int) -> None:
     """Only an untaken offer lapses. An accepted quest stays active."""
-    conn.execute(
+    cur = conn.execute(
         "UPDATE quests SET status = 'expired' WHERE id = ? AND status = 'offered'",
         (int(quest_id),),
     )
+    if cur.rowcount:
+        from app.quests import void_pay
+
+        void_pay(conn, int(quest_id))
 
 
 def _post_offer(conn, key: str, *, day: int, npc_id: int | None, place: str, x: int | None, y: int | None) -> int:
