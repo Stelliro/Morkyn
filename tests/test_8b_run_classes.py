@@ -1581,6 +1581,19 @@ class AMarkWithNoOfferAndNoGiverIsNoJob(unittest.TestCase):
         self.assertEqual(len(accepted.get("new") or []), 1)
 
 
+class APlaceNameInsideALongerNoun(unittest.TestCase):
+    """8B run 152e, T4/T7: "The Harbour [[L3]] Reeve's desk" and "The Dock [[L2]] hand"."""
+
+    def test_no_place_code_inside_a_compound_or_a_longer_name(self):
+        from app.llm import _inject_entity_codes_for_known_names as inject
+
+        out = inject("The dock hand lowers his head. You sit at the Harbour Reeve's desk. You walk back along the dock.",
+                     {"L2": "The Dock", "L3": "The Harbour"})
+        self.assertIn("The dock hand lowers", out)
+        self.assertNotIn("[[L3]] Reeve", out)
+        self.assertIn("[[L2]]", out.split("You walk back")[1])
+
+
 class HerTunicIsNotYours(unittest.TestCase):
     """8B run 36, T0: "a woman in a patched tunic [[I2]]" linked her tunic to the player's."""
 

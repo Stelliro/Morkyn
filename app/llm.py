@@ -11334,6 +11334,16 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
                 m.string[m.end():],
             ):
                 return _hold(m.group(1))
+            # Any capitalised word after a place's name continues a longer name
+            # ("The Harbour Reeve's desk" read "The Harbour [[L3]] Reeve's",
+            # 8B run 152e, T4), and a person or part noun makes it a compound
+            # ("the dock hand" read "The Dock [[L2]] hand", T7).
+            if re.fullmatch(r"L\d+", _code) and re.match(
+                r"\s+(?:(?-i:[A-Z][a-z])|(?:hand|hands|worker|workers|master|masters|keeper|keepers|rat|rats|boy|boys|"
+                r"man|men|folk|side|ward|wards|hound|hounds|crew|crews|watch|guard|guards|boss|front|road|gate)\b)",
+                m.string[m.end():],
+            ):
+                return _hold(m.group(1))
             # An item code is the player's thing: "She wears a patched tunic
             # [[I2]], the same as yours" linked her tunic to the player's (8B
             # run 4, T0). Another's (his/her/their/a/an X) gets no code.
