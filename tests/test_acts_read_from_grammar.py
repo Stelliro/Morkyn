@@ -84,6 +84,14 @@ class AClauseIsJudgedByItsForm(unittest.TestCase):
         self.assertNotIn("fix", _now("I read the name aloud to fix it in my memory."))
         self.assertNotIn("commit", _now("I commit the name to memory and leave."))
 
+    def test_a_gerund_that_describes_a_thing_is_no_act(self):
+        # 8B run 152e, T8: "anything worth hauling back" rolled athletics for "hauling back".
+        out = _now("I climb into the cracked hull of the wrecked boat and search the hold for anything worth hauling back.")
+        self.assertNotIn("hauling", out)
+        self.assertIn("search the hold", out)
+        self.assertNotIn("waking", _now("I slip past the sleeping guard without waking him."))
+        self.assertIn("go fishing", _now("I go fishing off the pier."))
+
     def test_a_narrated_question_and_a_denied_clause_are_not_done(self):
         out = _now("I stop where I am and look around: is this the reeve's office?")
         self.assertIn("look around", out)
