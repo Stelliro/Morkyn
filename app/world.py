@@ -25540,7 +25540,6 @@ def _ability_risk_tier(context: dict[str, Any], player_line: str) -> int:
     return 2 if _CONTEST_WORDS.search(player_line or "") else 1
 
 
-@turn_ledger.recorded("turn")
 def _rate_persuasion_asks(
     pending: list[Any], context: dict[str, Any], line: str, ask: Any = None
 ) -> dict[int, dict[str, Any]]:
@@ -25591,6 +25590,7 @@ def _rate_persuasion_asks(
     return out
 
 
+@turn_ledger.recorded("turn")
 def play_turn(
     player_input: str,
     input_kind: str = "player",
