@@ -101,5 +101,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release view runtime-packs >/dev/null 2>&1 || gh release create runtime-packs --title "Runtime packs" --notes "The llama.cpp engine packs Mørkyn downloads for your hardware (Versions & engine in the game). One per accelerator, platform and Python tag; the app picks the one that fits." --prerelease
+          # The pack jobs run at once: another job may create the release between the view and the create.
+          gh release view runtime-packs >/dev/null 2>&1 || gh release create runtime-packs --title "Runtime packs" --notes "The llama.cpp engine packs Mørkyn downloads for your hardware (Versions & engine in the game). One per accelerator, platform and Python tag; the app picks the one that fits." --prerelease \
+            || gh release view runtime-packs >/dev/null
           gh release upload runtime-packs dist/packs/*.zip --clobber
