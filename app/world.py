@@ -25123,6 +25123,56 @@ def _ability_risk_tier(context: dict[str, Any], player_line: str) -> int:
 
 
 @turn_ledger.recorded("turn")
+def _rate_persuasion_asks(
+    pending: list[Any], context: dict[str, Any], line: str, ask: Any = None
+) -> dict[int, dict[str, Any]]:
+    """Set each persuasion check's difficulty from what the line asks of its person (app/ask_weight).
+
+    Only the first four checks (the ones the turn rolls), only persuasion, and
+    never a check that already carries a difficulty or an explicit DC (a job's
+    act, a trade). Returns {index in pending: rating}; every rating and every
+    failed ask is noted in the turn ledger. One ask per turn at most: the line
+    is the same for every check it makes.
+    """
+    from app import ask_weight
+    from app.skill_checks import _npc_pool_from_context
+
+    targets = [
+        (index, item) for index, item in enumerate(pending[:4])
+        if isinstance(item, dict) and str(item.get("skill_code") or "") == "persuasion"
+        and not item.get("difficulty") and item.get("dc") is None and not item.get("act")
+    ]
+    if not targets or not str(line or "").strip():
+        return {}
+    try:
+        pool = _npc_pool_from_context(context) or []
+    except Exception:
+        pool = []
+    first = targets[0][1]
+    ref = first.get("npc_ref") if isinstance(first.get("npc_ref"), dict) else {}
+    opp = first.get("opposition") if isinstance(first.get("opposition"), dict) else {}
+    code = str(ref.get("code") or "")
+    name = str(ref.get("name") or opp.get("name") or "")
+    person = next(
+        (n for n in pool if isinstance(n, dict) and ((code and str(n.get("code") or "") == code)
+                                                     or (name and str(n.get("name") or "") == name))),
+        None,
+    ) or ({"name": name} if name else None)
+    rating = ask_weight.rate(line, person, ask or ask_weight.model_ask())
+    if not rating.get("difficulty"):
+        turn_ledger.note("check", "ask_weight_unrated", error=str(rating.get("error") or "")[:200],
+                         raw=str(rating.get("raw") or "")[:200])
+        return {}
+    out: dict[int, dict[str, Any]] = {}
+    for index, item in targets:
+        item["difficulty"] = rating["difficulty"]
+        out[index] = rating
+    turn_ledger.note("check", "ask_weight_rated", weight=rating["weight"], difficulty=rating["difficulty"],
+                     attitude=rating.get("attitude") or "", person=str((person or {}).get("name") or ""),
+                     why=str(rating.get("why") or "")[:200])
+    return out
+
+
 def play_turn(
     player_input: str,
     input_kind: str = "player",
@@ -25566,6 +25616,11 @@ def play_turn(
                     item for item in pending
                     if isinstance(item, dict) and item.get("social") and not item.get("act")
                 ]
+            # How much the line asks of the person sets the persuasion mark
+            # (Stell, 2026-10-21): a question anyone would answer is easier
+            # than a favour against their interest. The engine found the check
+            # and its person; one small ask rates the request (app/ask_weight).
+            ask_ratings = _rate_persuasion_asks(pending, context, _player_line(player_input))
             # The d20 is seeded like every other server roll: an unseeded
             # Random() made a rewind + regenerate of the same input roll a
             # different check (and apply a different injury) while every band
@@ -25603,6 +25658,9 @@ def play_turn(
                     routine=bool(item.get("routine")),
                     home=home,
                 )
+                rating = ask_ratings.get(index)
+                if rating and resolved.get("enabled") is not False:
+                    resolved["ask_weight"] = {k: rating.get(k) for k in ("weight", "difficulty", "why", "attitude")}
                 # The declared act this roll decides (playtest #85a): the draft
                 # is told its outcome, the next turn reads it back, and practice
                 # counts it.
