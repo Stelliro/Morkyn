@@ -120,5 +120,17 @@ class TheTurnHook(unittest.TestCase):
         self.assertNotIn("difficulty", pending[0])
 
 
+class TheTurnKeepsItsLedger(unittest.TestCase):
+    """The helper was once inserted under play_turn's decorator: the turn lost its ledger (run 152 T1)."""
+
+    def test_every_turn_entry_point_opens_a_ledger_and_the_helper_does_not(self):
+        from app import world
+
+        for name in ("play_turn", "regenerate_last_turn", "play_opening_turn", "play_continue_turn",
+                     "play_world_event_turn", "initiate_fight", "play_wait_turn", "start_playthrough_with_opening"):
+            self.assertTrue(hasattr(getattr(world, name), "__wrapped__"), name)
+        self.assertFalse(hasattr(world._rate_persuasion_asks, "__wrapped__"))
+
+
 if __name__ == "__main__":
     unittest.main()
