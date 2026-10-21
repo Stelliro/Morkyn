@@ -11187,6 +11187,13 @@ def _venue_requested_and_reached(conn, player_input: str, narration: str, curren
         named = _named_building_requested(conn, parent_id, wanted, narration)
         if named:
             return named
+        # A building whose name holds an open-ground word is the building: "head
+        # over to the Harbour Reeve's office" made "The Harbour" and replaced the
+        # model's own "Harbour Reeve's Offices" (8B run 152e, T3).
+        if _ends_on_a_building_word(wanted):
+            building = _civic_building_requested(conn, parent_id, wanted, narration)
+            if building:
+                return building
         # An open part of the town ("walk down to the edge of the mudflats", 7B run 10 T8).
         area = _outdoor_area_requested(conn, parent_id, wanted, narration)
         if area:
@@ -11400,6 +11407,12 @@ def _named_building_requested(conn, parent_id: int, wanted: str, narration: str)
     if not match:
         return ""
     proper = match.group(1).strip()
+    # The building word after the proper name is part of it: "the Harbour
+    # Reeve's office" made "The Harbour Reeve's" (8B run 152e, T3).
+    words = "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True))
+    tail = re.match(rf"\s+({words})s?\b", wanted[match.end(1):], re.I)
+    if tail:
+        proper = f"{proper} {' '.join(w[:1].upper() + w[1:] for w in tail.group(1).split())}"
     people = {str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
     first_names = {p.split()[0] for p in people if p}
     if proper.lower() in people or proper.lower() in first_names:
@@ -11530,6 +11543,15 @@ def _room_requested(conn, here, wanted: str, narration: str) -> str:
     conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (int(here["id"]), int(new_id)))
     turn_ledger.note("movement", "room_requested", place=name, building=str(here["name"] or ""))
     return name
+
+
+def _ends_on_a_building_word(wanted: str) -> bool:
+    """The phrase the line goes "to" ends on a building word ("to the Harbour Reeve's office")."""
+    words = "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True))
+    return bool(re.search(
+        rf"\b(?:to|toward|towards|into|for)\s+the\s+(?:[\w'’-]+\s+){{1,4}}?(?:{words})s?\b(?!\s+(?:of|on|at|in)\b)",
+        str(wanted or ""), re.I,
+    ))
 
 
 def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str) -> str:
