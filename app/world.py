@@ -9222,6 +9222,38 @@ def ground_acquisitions(
     return granted
 
 
+_YOU_ARE_A_RE = re.compile(
+    r"\b(?P<lead>you(?:['’]re|\s+are|\s+were|\s+look|\s+seem|\s+sound)?(?:\s+not)?(?:\s+(?:like|more\s+like))?\s+"
+    r"(?:a|an|the|no|some)\s+(?:(?:kind|sort|type)\s+of\s+)?(?:[\w'’-]+\s+){0,2}?)(?P<noun>man|men|lad|boy|fellow|woman|lass|girl)\b",
+    re.I,
+)
+_SEX_NOUNS = {
+    "she": {"man": "woman", "lad": "lass", "boy": "girl", "fellow": "woman"},
+    "he": {"woman": "man", "lass": "lad", "girl": "boy"},
+    "they": {"man": "person", "woman": "person", "lad": "youngster", "lass": "youngster", "boy": "youngster",
+             "girl": "youngster", "fellow": "person"},
+}
+
+
+def _repair_player_sex_nouns(text: str, subject: str) -> tuple[str, list[str]]:
+    """Swap a sexed noun predicated of "you" for the one the player's pronouns take."""
+    table = _SEX_NOUNS.get(str(subject or "").lower())
+    if not table:
+        return text, []
+    fixed: list[str] = []
+
+    def _swap(match: re.Match[str]) -> str:
+        noun = match.group("noun")
+        new = table.get(noun.lower())
+        if not new:
+            return match.group(0)
+        new = new[:1].upper() + new[1:] if noun[:1].isupper() else new
+        fixed.append(f"{noun}->{new}")
+        return match.group("lead") + new
+
+    return _YOU_ARE_A_RE.sub(_swap, str(text or "")), fixed
+
+
 def check_narrative_voice(narration: str, state: dict[str, Any]) -> dict[str, Any]:
     """
     Measure point-of-view drift on a finished narration.
@@ -23642,6 +23674,19 @@ def _reconcile_prose_with_state(
     except Exception:
         pass
 
+    # A sexed noun said of "you" follows the player's own: "You look like a man
+    # who's been running flat" and "the kind of man they'd trust" for Isk, who
+    # is she (8B runs 152c T2, 152d T3, 152e T2). Only a noun predicated of
+    # "you"; pronouns of the cast are never read here.
+    try:
+        row = conn.execute("SELECT sex FROM player WHERE id = 1").fetchone()
+        subject = str(player_pronouns(str(row[0] if row else "")).get("subject") or "")
+        text, fixed = _repair_player_sex_nouns(text, subject)
+        if fixed:
+            report["trimmed"].append({"why": "player_sex_noun", "fixed": fixed})
+            turn_ledger.note("prose", "player_sex_noun_repaired", fixed=fixed)
+    except Exception:
+        pass
     # Op, packet and status text in the prose (7B run 5, #131, #83): only the
     # exact engine shapes are repaired; the rest of the scene stays as written.
     try:

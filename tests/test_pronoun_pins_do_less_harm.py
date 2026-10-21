@@ -87,5 +87,27 @@ class TheRepairOnlyMendsWhatIsCertain(unittest.TestCase):
         self.assertEqual(len(notes), 2)
 
 
+class ThePlayersOwnSexNoun(unittest.TestCase):
+    """8B runs 152c T2, 152d T3, 152e T2: NPCs called Isk (she) "a man"."""
+
+    def test_a_noun_said_of_you_follows_the_players_pronouns(self):
+        from app.world import _repair_player_sex_nouns
+
+        text, fixed = _repair_player_sex_nouns(
+            "\"You look like a man who's been running flat for a long time,\" he says. \"You're not the kind of man they'd trust.\"",
+            "she",
+        )
+        self.assertIn("You look like a woman who's", text)
+        self.assertIn("not the kind of woman they'd", text)
+        self.assertEqual(len(fixed), 2)
+
+    def test_other_people_and_other_nouns_are_left_alone(self):
+        from app.world import _repair_player_sex_nouns
+
+        prose = "A man with a scar looks up. \"He's a hard man,\" she says. You nod to the old man."
+        self.assertEqual(_repair_player_sex_nouns(prose, "she"), (prose, []))
+        self.assertEqual(_repair_player_sex_nouns("You look like a man.", "he")[1], [])
+
+
 if __name__ == "__main__":
     unittest.main()
