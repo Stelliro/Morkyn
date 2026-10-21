@@ -808,6 +808,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         # 1 once the player has told this person their name (playtest #78):
         # until then nobody in the fiction calls the player by it.
         ("knows_player_name", "INTEGER NOT NULL DEFAULT 0"),
+        # People pencilled in (app/sketches.py): the turn a person was made on,
+        # until a later turn brings them back; 0 = a known person.
+        ("sketch_turn", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
