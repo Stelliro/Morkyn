@@ -106,6 +106,15 @@ _MENTAL_RE = re.compile(
     re.I,
 )
 
+# A gerund that describes a thing or a time is no act now: "search the hold for
+# anything worth hauling back" rolled athletics for "hauling back" (8B run 152e,
+# T8). Not "for": "I head out for fishing" is the act.
+_GERUND_COMPLEMENT_RE = re.compile(
+    r"\b(?:worth|without|instead\s+of|besides|before|after)\s+[\w'’-]+ing\b"
+    r"(?:\s+(?:back|up|out|down|off|away|over|in|on|home))?",
+    re.I,
+)
+
 NOW = "now"
 SOFT_FUTURE = "soft_future"
 
@@ -293,6 +302,8 @@ def acts_now(
     for m in _LET_ME_KNOW_RE.finditer(masked_out):
         spans.append((m.start(), _clause_end(masked_out, m.start())))
     for m in _MENTAL_RE.finditer(masked_out):
+        spans.append((m.start(), m.end()))
+    for m in _GERUND_COMPLEMENT_RE.finditer(masked_out):
         spans.append((m.start(), m.end()))
     spans.extend(_negated_spans(masked_out))
     chars = list(out)
