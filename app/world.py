@@ -23795,8 +23795,18 @@ def apply_turn(
             _place_talked_to_in_scene(conn, collected_npcs, result)
         except Exception:
             pass
+        # Who this turn's ops landed on, and the figure each was bound to: a
+        # sketch the ops bring back is confirmed; two new ones bound to one
+        # figure are one person (app/sketches.py).
+        touched_npc_ids: set[int] = set()
+        bound_npc_hints: dict[int, str] = {}
         for npc in collected_npcs:
-            _store_figure_aliases(conn, npc, _upsert_npc(conn, npc))
+            upserted_id = _upsert_npc(conn, npc)
+            _store_figure_aliases(conn, npc, upserted_id)
+            if upserted_id:
+                touched_npc_ids.add(int(upserted_id))
+                if isinstance(npc, dict) and str(npc.get("_bound_hint") or "").strip():
+                    bound_npc_hints.setdefault(int(upserted_id), str(npc.get("_bound_hint")))
 
         # Pin one keeper per venue. Without this the model reinvented whoever was
         # behind the counter on every visit -- the same apothecary was staffed by
@@ -24379,6 +24389,35 @@ def apply_turn(
                     if quest_report.get("status") in {"skipped", "empty", "rejected"}:
                         quest_report["status"] = "applied"
         result["quest_report"] = quest_report
+        # People pencilled in (app/sketches.py): everyone made this turn is a
+        # sketch until a later turn brings them back; at that point one small
+        # ask settles whether they are someone already known. A sketch never
+        # brought back fades. After the quests, so a job's giver is kept.
+        try:
+            from app import sketches
+
+            sketch_report = sketches.settle(
+                conn,
+                turn=turn,
+                max_id_before=max_npc_before,
+                narration=_narration_text(result) or narration,
+                player_line=_player_line(player_input) if input_kind == "player" else "",
+                touched_ids=touched_npc_ids,
+                bound_hints=bound_npc_hints,
+                ask=None if not used_fallback else (lambda *a, **k: None),
+            )
+            renames = sketch_report.get("renames") or {}
+            if renames:
+                # The turn's own code tags follow the person a sketch became.
+                text_now = _narration_text(result)
+                fixed = re.sub(
+                    r"\[\[([A-Z]{1,3})\]\]", lambda m: "[[" + renames.get(m.group(1), m.group(1)) + "]]", text_now
+                )
+                if fixed != text_now:
+                    _set_narration_text(result, fixed)
+                    narration = _narration_text(result)
+        except Exception as exc:
+            turn_ledger.note("npc", "sketch_pass_error", error=f"{type(exc).__name__}: {exc}"[:200])
         # The scene thread after this turn (playtest #20): a quest taken or
         # finished, who came along, where it now is. After the quest and the
         # move, before the snapshot is read back on a rewind.
