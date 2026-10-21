@@ -340,6 +340,9 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertEqual(qo._code_veto("The guild has work for you. I've a job for you too: the nets.", asked_for_work=True), "")
         self.assertFalse(qp.player_accepts("I walk down to the dock and ask the nearest worker where a flat-runner signs on for salvage work."))
         self.assertTrue(qp.player_accepts("I sign on for the salvage work."))
+        # 8B run 152e, T4: a clause saying where the player would sign on.
+        self.assertFalse(qp.player_accepts("\"I'm told this is where I sign on for salvage work. What's on offer?\""))
+        self.assertTrue(qp.player_accepts("\"That's what I came for. I'll sign on.\""))
 
     def test_a_new_figure_speaks_for_themselves_not_for_the_last_one_named(self):
         # 8B run 152d, T2: the scarred man's "New blood?" was credited to Wystan, named a paragraph before.
