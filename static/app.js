@@ -12420,8 +12420,12 @@ function npcPartyExtra(npc) {
 }
 
 function renderNpcs() {
+  // A person pencilled in this turn (sketch_turn > 0, app/sketches.py) is not
+  // a known person until the story brings them back; the prose links to them still work.
   const npcs = (state.locations || []).flatMap((location) =>
-    (location.npcs || []).map((npc) => ({ ...npc, place: `${location.code} ${location.name}` })),
+    (location.npcs || [])
+      .filter((npc) => !(Number(npc.sketch_turn) > 0))
+      .map((npc) => ({ ...npc, place: `${location.code} ${location.name}` })),
   );
   return npcs.length
     ? npcs
