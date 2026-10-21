@@ -521,9 +521,18 @@ _REQUIREMENT_RE = re.compile(
 )
 
 
+# Proving one's worth is the gate to work, not work: "prove they're worth the
+# trouble" was filed as "Prove Your Worth" (8B run 152d, T2).
+_PROVING_TASK_RE = re.compile(
+    r"^\W*(?:(?:you(?:['’]ll|\s+will)?\s+)?(?:have\s+to|need\s+to|must|got\s+to)\s+)?(?:prove|show)\s+(?:me\s+|us\s+|them\s+)?"
+    r"(?:yourself|your\s+(?:worth|mettle)|(?:you|they|he|she)(?:['’]re|\s+are|['’]s|\s+is)\s+worth|(?:that\s+)?you\s+can\b)",
+    re.I,
+)
+
+
 def requirement_not_task(task: str) -> bool:
-    """The card's task only says what the player must have (a name, coin, proof)."""
-    return bool(_REQUIREMENT_RE.search(task or ""))
+    """The card's task only says what the player must have (a name, coin, proof) or must prove."""
+    return bool(_REQUIREMENT_RE.search(task or "") or _PROVING_TASK_RE.search(task or ""))
 
 
 def names_a_task(card: dict[str, Any], candidate: dict[str, Any]) -> list[str]:

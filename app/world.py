@@ -9581,7 +9581,18 @@ def _destination_text(player_input: str) -> str:
                 kept.append(piece)
             continue
         kept.append(_LEFT_PLACE_RE.sub(" ", _DENIED_PLACE_RE.sub(" ", piece)))
-    return " ".join(kept)
+    # Where the destination stands is not where the line goes: "walk to the
+    # guild hall at the end of the dock" moved the player to the dock (8B run
+    # 152d, T2).
+    return _DESTINATION_POSITION_RE.sub(r"\1", " ".join(kept))
+
+
+_DESTINATION_POSITION_RE = re.compile(
+    r"(\b(?:to|into|toward|towards|for)\s+the\s+(?:[\w'’-]+\s+){0,3}?[\w'’-]+)"
+    r"\s+(?:at\s+the\s+(?:far\s+)?(?:end|edge|foot|top|head|back|corner|mouth)\s+of|beside|next\s+to|behind|near|"
+    r"by|across\s+from|opposite|on\s+the\s+(?:far\s+)?side\s+of|past|beyond|overlooking)\s+the\s+[\w'’-]+(?:\s+[\w'’-]+)?",
+    re.I,
+)
 
 
 # Where the player leaves someone or something, or the place left, is not

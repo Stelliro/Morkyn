@@ -327,6 +327,10 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertTrue(qo.requirement_not_task("You need a name, a record, and a bit of coin to get started."))
         self.assertFalse(qo.requirement_not_task("You need to haul the nets in before the tide."))
         self.assertFalse(qo.requirement_not_task("Bring the crate to the shipwrights."))
+        # 8B run 152d, T2: "prove they're worth the trouble" filed as "Prove Your Worth".
+        self.assertTrue(qo.requirement_not_task("prove they're worth the trouble"))
+        self.assertTrue(qo.requirement_not_task("Show me you can swim."))
+        self.assertFalse(qo.requirement_not_task("Show the reeve the ledger before noon."))
 
     def test_work_someone_else_holds_is_no_offer_and_a_reported_question_is_no_yes(self):
         # 8B run 152d, T1: "That's the guild hall. They'll have work for you, if you can prove you're worth the
