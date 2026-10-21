@@ -6882,7 +6882,14 @@ def _stands_beside(conn, player_location_id: Any, parent_id: int) -> bool:
     """The player stands in another place inside the same parent: next door,
     not across the map (Saltmarrow #76: the tally house to the chandlery)."""
     here = _location_row(conn, int(player_location_id or 0)) if player_location_id else None
-    return here is not None and int(venues._field(here, "parent_id", 0) or 0) == int(parent_id or 0)
+    if here is None:
+        return False
+    if int(venues._field(here, "parent_id", 0) or 0) == int(parent_id or 0):
+        return True
+    # Or in a part of a place next door: the hold of a ship at the wharf is
+    # still beside the tally house on that wharf.
+    up = int(venues._field(here, "parent_id", 0) or 0)
+    return bool(up and parent_id and _within(conn, up, int(parent_id)))
 
 
 def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute: int | None = None) -> dict[str, Any]:
@@ -6908,6 +6915,17 @@ def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute:
     # hauled at the chest (8B run 148, T79). A child with no kind, no keeper
     # and no building word in its name is reached by the walk itself.
     name = str(venues._field(venue_row, "name", "") or "")
+    # A part of a place (its hold, a corner, its cellar) is entered from inside
+    # that place, never from across the town.
+    if not kind and parent_id and _part_head(name):
+        if _within(conn, int(player_location_id or 0), parent_id):
+            return {"ok": True, "reason": ""}
+        return {
+            "ok": False,
+            "reason": "unreachable",
+            "redirect_to": parent_id,
+            "detail": "a part of a place is entered from that place",
+        }
     if (
         not kind and parent_id and not int(venues._field(venue_row, "keeper_npc_id", 0) or 0)
         and not str(venues._field(venue_row, "plot_id", "") or "") and name and not _BUILDING_HEAD_RE.search(name)
@@ -9761,6 +9779,14 @@ def _movement_destination_from_input(rows: list[Any], player_input: str, current
     return max((f for f in found if f[0] >= last_at - 1 or f[0] == last_at), key=lambda f: f[1])[2]
 
 
+# A line that sets out on a journey, not a walk about the place stood in.
+_JOURNEY_LINE_RE = re.compile(
+    r"\b(?:sail\w*|ride|rode|riding|row(?:s|ed|ing)?\s+(?:out|across|over)|voyage|journey\w*|travel\w*|"
+    r"set(?:s|ting)?\s+(?:off|out)\s+for|days?|leagues?|miles?)\b",
+    re.I,
+)
+
+
 def _adopt_new_place_into_town(conn, from_id: int, max_place_before: int, player_input: str = "") -> None:
     """A place made this turn and reached on foot from inside a town is part of that town.
 
@@ -9770,10 +9796,7 @@ def _adopt_new_place_into_town(conn, from_id: int, max_place_before: int, player
     place only named (not reached), or reached from outside any town, is left.
     """
     line = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input))
-    if not _OUTDOOR_WALK_VERB_RE.search(line) or re.search(
-        r"\b(?:sail\w*|ride|rode|riding|row(?:s|ed|ing)?\s+(?:out|across|over)|voyage|journey\w*|travel\w*|"
-        r"set(?:s|ting)?\s+(?:off|out)\s+for|days?|leagues?|miles?)\b", line, re.I
-    ):
+    if not _OUTDOOR_WALK_VERB_RE.search(line) or _JOURNEY_LINE_RE.search(line):
         return
     row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     now_id = int(row[0] or 0) if row else 0
@@ -9833,6 +9856,12 @@ def gate_venue_move(conn, from_location_id: int, to_location_id: int, *, via: in
         parent = _location_row(conn, parent_id)
         parent_name = str(venues._field(parent, "name", "") or "") if parent is not None else ""
         if parent_id and parent_id != from_id:
+            # The place a part stands in has its own door and hours: the hold
+            # of a closed warehouse across town lands in the street outside.
+            if parent is not None and (venues._field(parent, "kind", "") or venues._field(parent, "parent_id", 0)):
+                inner = gate_venue_move(conn, from_id, parent_id)
+                if inner.get("note"):
+                    return inner
             return {
                 "location_id": parent_id,
                 "note": {
@@ -9918,17 +9947,28 @@ def _player_departs(text: str) -> bool:
 _PERFECT_TENSE_RE = re.compile(r"\byou(?:['\u2019](?:ve|d)|\s+ha(?:ve|d))\s+(?:\w+\s+)?\w+$", re.I)
 
 
+def _place_spelling_key(text: str) -> str:
+    """A place name lower case, one apostrophe shape, no leading "the"."""
+    text = str(text or "").strip().lower().replace("’", "'").replace("‘", "'")
+    return re.sub(r"^the\s+", "", re.sub(r"\s+", " ", text))
+
+
+def _place_name_key(text: str) -> str:
+    """The words two spellings of one place share.
+
+    "Reeves' Office", "Reeves’ Office", "the Reeve's Office" and "Reeves
+    Office" are one building (8B runs 148 T30, 149 T96), and "The Docks" is
+    "The Dock" (8B run 150, T92): apostrophe shape, possessives, a plural s and
+    a leading "the" fall away.
+    """
+    words = re.findall(r"[a-z]+", re.sub(r"'s?\b", "", _place_spelling_key(text)))
+    return " ".join(w[:-1] if len(w) >= 5 and w.endswith("s") and not w.endswith("ss") else w for w in words)
+
+
 def _same_place_name(a: str, b: str) -> bool:
     """One place by two spellings: "the Salvage Guild’s Tally House" is "The Salvage Guild's Tally House" (8B run 30, T2)."""
-    def key(text: str) -> str:
-        text = str(text or "").strip().lower().replace("’", "'").replace("‘", "'")
-        return re.sub(r"^the\s+", "", re.sub(r"\s+", " ", text))
-
-    def owner_key(text: str) -> str:
-        # "Reeves' Office", "the Reeve's Office" and "Reeves Office" are one
-        # building (8B run 148, T30): possessives and a plural s fall away.
-        words = re.findall(r"[a-z]+", re.sub(r"['’]s?\b", "", key(text)))
-        return " ".join(w[:-1] if len(w) >= 5 and w.endswith("s") and not w.endswith("ss") else w for w in words)
+    key = _place_spelling_key
+    owner_key = _place_name_key
     if not key(a):
         return False
     if key(a) == key(b):
@@ -12968,7 +13008,24 @@ def _match_location_by_name(conn, name: str):
         "SELECT id, summary FROM locations WHERE name LIKE ? COLLATE NOCASE OR name LIKE ? COLLATE NOCASE",
         (f"{value} at %", f"{value} of %"),
     ).fetchall()
-    return rows[0] if len(rows) == 1 else None
+    if len(rows) == 1:
+        return rows[0]
+    # The same name under another spelling: a curly apostrophe, a possessive,
+    # a plural ("Reeves' Office" and "Reeves’ Office" minted in one turn, 8B
+    # run 149 T96; "The Docks" beside "The Dock", run 150 T92). Each new name
+    # is stored before the next is looked up, so this also folds one turn's
+    # own new names together. Only one known place may share the key.
+    wanted = _place_name_key(value)
+    if not wanted:
+        return None
+    same = [
+        row for row in conn.execute("SELECT id, name, summary FROM locations ORDER BY id").fetchall()
+        if _place_name_key(str(row["name"] or "")) == wanted
+    ]
+    if len(same) == 1:
+        turn_ledger.note("place", "same_name_other_spelling", name=value, known=str(same[0]["name"] or ""))
+        return same[0]
+    return None
 
 
 # Generic tail nouns a model bolts onto a name it already used. A live run
@@ -13253,6 +13310,15 @@ def _venue_parent_for_new_place(conn, kind: str) -> int:
     if here is None:
         return 0
     parent_of_here = int(venues._field(here, "parent_id", 0) or 0)
+    # In a part of a venue (the hold, the back room), the street is further up.
+    seen = {here_id}
+    while parent_of_here and parent_of_here not in seen and len(seen) < 8:
+        up = _location_row(conn, parent_of_here)
+        above = int(venues._field(up, "parent_id", 0) or 0) if up is not None else 0
+        if not above:
+            break
+        seen.add(parent_of_here)
+        parent_of_here = above
     return parent_of_here or here_id
 
 
@@ -13264,9 +13330,16 @@ def _upsert_location(
     parent_id: int | None = None,
     kind: str | None = None,
     refusal: dict[str, Any] | None = None,
+    here_line: str | None = None,
+    move_to: str = "",
 ) -> int:
     """Find or create a place. ``refusal``, when given, is filled in when the
-    name is refused and another place id is handed back instead (playtest #46)."""
+    name is refused and another place id is handed back instead (playtest #46).
+
+    ``here_line`` is the player's line on a turn path that knows it; with it a
+    new place named by a part of a structure (a hold, a corner, a cellar, a
+    passage) is made a part of the place it belongs to (``_part_anchor``).
+    ``move_to`` is the turn's move, when the name is not its destination."""
     name = humanize_place_name(name)
     if not name:
         raise ValueError("Location name is required.")
@@ -13303,6 +13376,21 @@ def _upsert_location(
                 merged = f"{existing['summary']} {short}".strip()[:1400]
                 conn.execute("UPDATE locations SET summary = ? WHERE id = ?", (merged, existing["id"]))
         return int(existing["id"])
+    # Places have insides: a hold, a corner, a cellar or a passage found on a
+    # turn is a part of the place it belongs to, not a new place beside it in
+    # the town (8B run 150: "The Hold" at T49, "The Hidden Passage" from a
+    # search of the Hold at T85).
+    if here_line is not None and kind is None and parent_id is None:
+        anchor = _part_anchor(conn, name, summary, here_line, move_to)
+        if anchor:
+            cursor = conn.execute(
+                "INSERT INTO locations (code, name, summary, visit_count, parent_id) VALUES (?, ?, ?, 0, ?)",
+                (_next_code(conn, "locations", "L"), name, summary[:1400] if len(summary or "") < 500 else summary[:200], anchor),
+            )
+            anchor_row = _location_row(conn, anchor)
+            turn_ledger.note("place", "part_of_place", name=name,
+                             parent=str(anchor_row["name"] or "") if anchor_row is not None else anchor)
+            return int(cursor.lastrowid)
     # A place whose name says "apothecary" is an interior, not a second town.
     resolved_kind = venues.venue_kind_from_name(name) if kind is None else (kind or "")
     resolved_parent = 0
@@ -13581,6 +13669,65 @@ def _is_outbuilding_name(name: str) -> bool:
     return bool(words) and words[-1] in _OUTBUILDING_WORDS
 
 
+# Parts of a vessel or a building: a name ending in one is somewhere inside a
+# place, never a place of its own beside it in the town.
+_PART_WORDS = frozenset({
+    "hold", "holds", "deck", "decks", "cabin", "cabins", "gangplank", "gangway", "galley", "bilge", "bilges",
+    "forecastle", "quarterdeck", "hatch", "corner", "nook", "alcove", "room", "backroom", "cellar", "cellars",
+    "basement", "undercroft", "passage", "passageway", "corridor", "hallway", "stairwell", "crawlspace",
+    "attic", "loft", "pantry", "storeroom", "chamber", "vault", "tunnel",
+})
+
+
+def _part_head(name: str) -> str:
+    """The part word a place name ends in ("The Hidden Passage": "passage"), or ""."""
+    words = re.findall(r"[a-z]+", humanize_place_name(name).lower().replace("’", "'"))
+    return words[-1] if words and words[-1] in _PART_WORDS else ""
+
+
+def _part_anchor(conn, name: str, summary: str, player_input: str, move_to: str = "") -> int:
+    """The place a new part-of-a-structure place belongs to, or 0 to mint it as before.
+
+    Decided from engine facts, not phrasing: the name's last word is a part
+    of a vessel or building; the owner the name gives ("The Mistral's Hold")
+    when that is a known place; else the turn's known destination when the
+    turn moves elsewhere; else where the player stands. A line that sets out
+    on a journey, or a summary that puts the place far off, keeps the old way.
+    """
+    head = _part_head(name)
+    if not head:
+        return 0
+    words = re.findall(r"[A-Za-z'’]+", humanize_place_name(name))
+    owner = " ".join(words[:-1]).strip()
+    owner = re.sub(r"['’]s?$", "", owner).strip()
+    if owner and re.sub(r"^(?:the|a|an)\b\s*", "", owner, flags=re.I):
+        known = _lookup_place_id(conn, owner)
+        if known:
+            return known
+    acts = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input))
+    if _JOURNEY_LINE_RE.search(acts) or _FAR_SUMMARY_RE.search(summary or ""):
+        return 0
+    if move_to and not _same_place_name(move_to, name):
+        return _lookup_place_id(conn, move_to)
+    try:
+        row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    except Exception:
+        return 0
+    return int((row[0] if row else 0) or 0)
+
+
+def _within(conn, place_id: int, ancestor_id: int) -> bool:
+    """``place_id`` is ``ancestor_id`` or stands somewhere inside it (a part of a part)."""
+    cur, seen = int(place_id or 0), set()
+    while cur and cur not in seen and len(seen) < 8:
+        if cur == int(ancestor_id or 0):
+            return True
+        seen.add(cur)
+        row = _location_row(conn, cur)
+        cur = int(venues._field(row, "parent_id", 0) or 0) if row is not None else 0
+    return False
+
+
 _HERE_SUMMARY_RE = re.compile(
     r"\b(?:beside|next\s+to|behind|above|below|beneath|under|opposite|across\s+from|off\s+the|by\s+the|"
     r"at\s+the\s+(?:end|foot|top|back|corner|edge)\s+of|on\s+the\s+(?:\w+\s+){0,2}"
@@ -13653,7 +13800,66 @@ def _settle_place_named_in_passing(
         conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (parent, place_id))
 
 
-def _find_location_id(conn, name_or_code: str | None, *, refusal: dict[str, Any] | None = None) -> int:
+def _unstore_minted_place(conn, place_id: int) -> bool:
+    """Remove a place made this turn that nothing stands in or points at; True when removed."""
+    place_id = int(place_id or 0)
+    if not place_id:
+        return False
+    try:
+        player = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        if player is not None and int(player[0] or 0) == place_id:
+            return False
+        for sql in (
+            "SELECT 1 FROM locations WHERE parent_id = ? LIMIT 1",
+            "SELECT 1 FROM npcs WHERE location_id = ? LIMIT 1",
+            "SELECT 1 FROM events WHERE location_id = ? LIMIT 1",
+            "SELECT 1 FROM gm_events WHERE location_id = ? LIMIT 1",
+            "SELECT 1 FROM quests WHERE target_location_id = ? LIMIT 1",
+        ):
+            try:
+                if conn.execute(sql, (place_id,)).fetchone():
+                    return False
+            except sqlite3.OperationalError:
+                continue  # an older save without that table or column
+        conn.execute("DELETE FROM locations WHERE id = ?", (place_id,))
+    except Exception:
+        return False
+    return True
+
+
+def _unstore_dropped_move_places(conn, max_place_at_start: int, model_move: str) -> list[str]:
+    """Places this turn made under the name of a MOVE the turn did not make; their names.
+
+    A move judged unasked and unshown is dropped, and the place it named was
+    never reached: it is not stored either (8B run 149, T99: MOVE "Saltmarrow
+    Bakehouse" dropped, the bakehouse left on the map as L15). Whatever path
+    made the row first, it goes when nothing stands in it or points at it.
+    """
+    move = str(model_move or "").strip()
+    if not move or _is_place_or_item_code(move):
+        return []
+    try:
+        here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        here_row = _location_row(conn, int((here[0] if here else 0) or 0))
+        if here_row is not None and _same_place_name(str(here_row["name"] or ""), move):
+            return []
+        rows = conn.execute(
+            "SELECT id, name FROM locations WHERE id > ? ORDER BY id", (int(max_place_at_start or 0),)
+        ).fetchall()
+    except Exception:
+        return []
+    gone = []
+    for row in rows:
+        name = str(row["name"] or "")
+        if _same_place_name(name, move) and _unstore_minted_place(conn, int(row["id"])):
+            turn_ledger.note("place", "dropped_move_place_unstored", name=name)
+            gone.append(name)
+    return gone
+
+
+def _find_location_id(
+    conn, name_or_code: str | None, *, refusal: dict[str, Any] | None = None, here_line: str | None = None
+) -> int:
     if name_or_code:
         # Slugs must resolve to the same row as their readable form, or
         # "east_road" and "East Road" become two locations.
@@ -13709,7 +13915,7 @@ def _find_location_id(conn, name_or_code: str | None, *, refusal: dict[str, Any]
             if player and player["current_location_id"]:
                 return int(player["current_location_id"])
             value = "Nearby street"
-        return _upsert_location(conn, value, refusal=refusal)
+        return _upsert_location(conn, value, refusal=refusal, here_line=here_line)
     player = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     return int(player["current_location_id"])
 
@@ -14536,6 +14742,63 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
             continue
         conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(here_row["id"]), int(row["id"])))
         turn_ledger.note("npc", "talked_to_and_shown_here", name=str(row["name"] or ""), place=str(here["code"] or ""))
+
+
+# A sentence that passes on what was heard, not what the player sees.
+_HEARSAY_RE = re.compile(
+    r"\b(?:heard|hear(?:s|ing)?|whisper\w*|rumou?r\w*|gossip\w*|tales?\s+of|stories\s+of|talk\s+of|word\s+of|spoken\s+of)\b",
+    re.I,
+)
+
+
+def _file_people_at_unshown_places(conn, npcs: list[Any], narration: str, player_input: str) -> None:
+    """A person's place that the world does not know and the turn only speaks of is not made.
+
+    "A name you'd heard whispered in the docks" filed Veyra at a new "The
+    Docks" (8B run 150, T92). A place named only in speech or hearsay is not
+    a place found: the person is filed in the town the player is in, as a
+    placeholder place is (8B run 118, T3), and the place waits to be visited.
+    """
+    shown_in = [
+        s for s in re.split(r"(?<=[.!?])\s+", _unspoken(str(narration or ""))) if not _HEARSAY_RE.search(s)
+    ]
+    def plain(text: str) -> str:  # "Smugglers' Den", "Reeve's Office": the words _place_words keeps
+        return re.sub(r"['’]", "", re.sub(r"['’]s\b", "", text.lower()))
+
+    prose = plain(" ".join(shown_in))
+    line = plain(_QUOTED_SPEECH_RE.sub(" ", _player_line(str(player_input or ""))))
+    town = 0
+    for npc in npcs or []:
+        if not isinstance(npc, dict):
+            continue
+        key = next((k for k in ("location", "location_code", "place") if str(npc.get(k) or "").strip()), "")
+        ref = str(npc.get(key) or "").strip() if key else ""
+        if not ref or _is_place_or_item_code(ref) or _lookup_place_id(conn, ref):
+            continue
+        words = _place_words(ref)
+        if not words or _line_names_place(prose, words) or _line_names_place(line, words):
+            continue
+        # Someone already known stays where they are (_known_person_place).
+        code = str(npc.get("code") or "").strip()
+        name = str(npc.get("name") or "").strip()
+        if (code and re.fullmatch(r"[A-Za-z]{1,3}", code)
+                and conn.execute("SELECT 1 FROM npcs WHERE code = ?", (code,)).fetchone()) or (
+                name and conn.execute("SELECT 1 FROM npcs WHERE name = ? COLLATE NOCASE", (name,)).fetchone()):
+            continue
+        if not town:
+            here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+            town = int((here[0] if here else 0) or 0)
+            for _ in range(8):
+                row = _location_row(conn, town)
+                up = int(venues._field(row, "parent_id", 0) or 0) if row is not None else 0
+                if not up:
+                    break
+                town = up
+        town_row = _location_row(conn, town)
+        if town_row is None:
+            return
+        npc[key] = str(town_row["code"] or "")
+        turn_ledger.note("place", "place_only_spoken_of", place=ref, person=str(npc.get("name") or npc.get("code") or ""))
 
 
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
@@ -17837,12 +18100,26 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     move_to = player_patch.get("move_to_location") or player_patch.get("move_to_location_code")
     venue_note: dict[str, Any] | None = None
     via = int(player_patch.pop("_enter_via", 0) or 0)
+    turn_line = player_patch.pop("_turn_line", None)
     if move_to:
         refusal: dict[str, Any] = {}
-        location_id = _find_location_id(conn, str(move_to), refusal=refusal)
+        try:
+            top_before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
+        except Exception:
+            top_before = 0
+        location_id = _find_location_id(
+            conn, str(move_to), refusal=refusal, here_line=str(turn_line) if turn_line is not None else None
+        )
         gate = gate_venue_move(conn, previous_location_id, location_id, via=via)
+        minted = int(location_id or 0) if top_before and int(location_id or 0) > top_before else 0
         location_id = int(gate["location_id"] or previous_location_id)
         venue_note = gate.get("note")
+        # A destination this move made and then did not reach is not stored:
+        # the move was refused, so the place it named was never found (8B run
+        # 149, T99: a dropped MOVE left "Saltmarrow Bakehouse" on the map).
+        if minted and location_id == previous_location_id and str((venue_note or {}).get("kind") or "") == "venue_unreachable":
+            if _unstore_minted_place(conn, minted):
+                turn_ledger.note("place", "refused_move_place_unstored", name=str(move_to))
         if refusal and not venue_note:
             # The place was refused (a village has no apothecary). Say so in the
             # journal the way a closed or unreachable venue is (playtest #46).
@@ -23472,6 +23749,15 @@ def apply_turn(
             max_npc_before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
         except Exception:
             max_npc_before = 0
+        # Places that exist before this turn, and the move the model asked for:
+        # a place made under that move's name is not kept if the move is not.
+        try:
+            max_place_at_start = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
+        except Exception:
+            max_place_at_start = 0
+        model_move = str(
+            ((result.get("player") or {}) if isinstance(result.get("player"), dict) else {}).get("move_to_location") or ""
+        )
 
         # A planned workplace the player or the story names becomes a place
         # before movement resolves, so a MOVE there finds it (playtest #27).
@@ -23737,7 +24023,13 @@ def apply_turn(
                         narration = _narration_text(result)
                     turn_ledger.note("place", "misspelling_resolved", name=loc_name, known=known_name)
                     continue
-            new_place_id = _upsert_location(conn, loc_name, str(location.get("summary") or ""))
+            turn_move = str(
+                ((result.get("player") or {}) if isinstance(result.get("player"), dict) else {}).get("move_to_location") or ""
+            )
+            new_place_id = _upsert_location(
+                conn, loc_name, str(location.get("summary") or ""),
+                here_line=str(player_input or "") if input_kind == "player" else None, move_to=turn_move,
+            )
             try:
                 if int(new_place_id or 0) > max_place_before:
                     _settle_place_named_in_passing(
@@ -23795,6 +24087,11 @@ def apply_turn(
             _place_talked_to_in_scene(conn, collected_npcs, result)
         except Exception:
             pass
+        if input_kind == "player":
+            try:
+                _file_people_at_unshown_places(conn, collected_npcs, narration, player_input)
+            except Exception:
+                pass
         # Who this turn's ops landed on, and the figure each was bound to: a
         # sketch the ops bring back is confirmed; two new ones bound to one
         # figure are one person (app/sketches.py).
@@ -23942,6 +24239,8 @@ def apply_turn(
             here_before = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0] or 0)
         except Exception:
             here_before = 0
+        if isinstance(result.get("player"), dict) and input_kind == "player":
+            result["player"]["_turn_line"] = str(player_input or "")
         _apply_player(conn, result.get("player") or {})
         try:
             _adopt_new_place_into_town(conn, here_before, max_place_before, player_input)
@@ -23952,6 +24251,11 @@ def apply_turn(
         except Exception:
             pass
         movement_report = _reconcile_movement_report(movement_report, result.get("player"))
+        if input_kind == "player" and not (isinstance(movement_report, dict) and movement_report.get("landed")):
+            try:
+                _unstore_dropped_move_places(conn, max_place_at_start, model_move)
+            except Exception:
+                pass
         # The gates above refused what they refused; the prose now matches
         # (#55, #75, #76). Before the cast seeding below reads the prose.
         try:
