@@ -140,6 +140,15 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
             self.assertIn("yard", str(report.get("destination") or "").lower(), report)
             conn.rollback()
 
+    def test_where_the_destination_stands_is_not_the_destination(self):
+        # 8B run 152d, T2: "walk to the guild hall at the end of the dock" moved the player to The Dock.
+        from app import world
+
+        text = world._destination_text("I nod my thanks to the worker and walk to the guild hall at the end of the dock.")
+        self.assertIn("guild hall", text)
+        self.assertNotIn("dock", text)
+        self.assertIn("edge of the flats", world._destination_text("I walk out to the edge of the flats."))
+
     def test_leaving_coin_on_a_counter_is_no_journey(self):
         # 8B run 146, T17: "I leave the six gold on his counter ... I turn for the door" kept a MOVE to the wreck.
         from app import world
