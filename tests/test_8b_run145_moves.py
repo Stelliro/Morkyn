@@ -173,6 +173,17 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
         self.assertFalse(world._leaves_something_else(office, "I walk out of the office."))
         self.assertFalse(world._leaves_something_else(office, "I head back out."))
 
+    def test_a_note_of_a_deed_the_player_never_did_is_dropped(self):
+        # 8B run 152e, T1: the event note "You signed on for salvage work at the Harbour Reeve's office" on a
+        # line that only asked where to sign on.
+        from app import world
+
+        asked = "I walk down to the dock and ask the nearest worker where a flat-runner signs on for salvage work."
+        self.assertTrue(world._note_claims_unasked_player_act("You signed on for salvage work at the Harbour Reeve's office.", asked))
+        self.assertFalse(world._note_claims_unasked_player_act("You asked the dockworker about salvage work.", asked))
+        self.assertFalse(world._note_claims_unasked_player_act("You learned the reeve hires runners.", asked))
+        self.assertFalse(world._note_claims_unasked_player_act("The reeve hires runners.", asked))
+
     def test_where_the_destination_stands_is_not_the_destination(self):
         # 8B run 152d, T2: "walk to the guild hall at the end of the dock" moved the player to The Dock.
         from app import world
