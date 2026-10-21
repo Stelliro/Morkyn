@@ -130,6 +130,14 @@ belong to, with the date).
   `@A`, `#L1`, `!I1`, `&E1`; `Q1` in ops). The offer check is shown the open jobs by code and
   names the one a line tells again; the parser binds that proposal to the referenced quest
   (`retells`) before any title rule. Title similarity is the fallback only.
+- **Persuasion difficulty follows what is asked** (2026-10-21): "we need to give persuasion
+  attempts at simpler questions a boost as people are more likely to answer simpler questions.
+  this likely means we need to assign an agent to specifically clarify the difficulty of the
+  persuasion attempt." A plain question rolling is fine; its difficulty is the fault. Planned: a
+  small ask-weight agent rates the ask, the engine sets the DC from the rating.
+  Same day, on persuasion, invented quest steps, ship parts as places and searches making
+  places: "we should definetly still track them, however, we may need to think outside the box
+  on how to fix them" (new mechanisms, not more rules).
 - **UI comes from the logo** (Media/ key art): black-violet void, one thread of light as a line,
   never a fill, cut-corner shards. Generic dark-fantasy chrome was rejected. Rules in
   docs/UI_RULEBOOK.md.
