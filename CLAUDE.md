@@ -42,6 +42,12 @@ belong to, with the date).
   small ask checks the result against the turn's text (does this appear in the context, does it
   make sense to hand to the player). Only then does the engine act. The narrator's prompt stays
   as it is.
+- **Stop loading the prompts; keep every ask simple and clear** (2026-10-21): "we really need to
+  stop loading on the prompting of the agent however when we edit the promting or ask it
+  something, we need to ensure that both are as simple but understood as possible". Prefer no
+  new prompt text at all. When a prompt is edited or a small ask is written, use the fewest,
+  plainest words that the model still gets right, one question per ask, and check it live on
+  the 8B. Cut a line rather than add one.
 - The player's own words and choices are theirs. The model must not act, speak or decide for the
   player, but it may describe the world reacting freely.
 

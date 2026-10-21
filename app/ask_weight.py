@@ -42,12 +42,12 @@ _HOSTILE = {"hostile", "angry", "suspicious", "wary", "distrustful", "resentful"
 # questions rated everything "free". "How many would refuse" is the simpler
 # judgment (CLAUDE.md: a task the model gets wrong is made simpler).
 _REFUSE_TO_WEIGHT = {"none": "free", "few": "ordinary", "many": "personal", "most": "against"}
+# Kept short on purpose (Stell, 2026-10-21: prompts "as simple but understood as possible").
 _SYSTEM = (
-    "You judge one request in a role-playing game. Read what the player says or does and who it is aimed at. "
-    "Picture a hundred ordinary people in that person's place, with their job and their loyalties, meeting a "
-    "stranger. How many of them would refuse? Judge the request itself, not how politely it is put. "
-    "Answer one word: none, few, many or most. Answer only JSON: {\"refuse\": \"...\", \"why\": \"...\"} "
-    "with a short why."
+    "You judge one request in a role-playing game. Read what the player says and who it is aimed at. "
+    "Picture a hundred ordinary people in that person's place, with their job and loyalties. "
+    "How many would refuse? Judge the request, not how politely it is put. "
+    "Answer only JSON: {\"refuse\": \"none|few|many|most\", \"why\": \"short reason\"}"
 )
 
 Ask = Callable[..., Any]
