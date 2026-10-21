@@ -1010,12 +1010,26 @@ def spoken_lines(narration: str, rows: list[dict[str, Any]], player_input: str =
         # A word in scare quotes is not speech: 'the word "aunt" stops it' was
         # stored as Tam's line (T29). Speech ends on punctuation or runs on.
         spans = [s for s in quoted_spans(unit) if _spoken_span(s)]
+        # A new, unnamed figure brought in breaks the pronoun chain: "One of
+        # them, a tall man with a scar ... looks up. 'New blood?' he asks" was
+        # credited to Wystan, named a paragraph earlier (8B run 152d, T2).
+        if not named and _NEW_FIGURE_RE.search(outside):
+            last_named = ""
         if spans and not all(_is_player_line(s, quotes) for s in spans) and not _PLAYER_SPEECH_VERB_RE.search(outside):
             line = re.sub(r"\s*\[\[[^\]]*\]\]", "", " ".join(spans)).strip()
             out.append({"code": named[0] if named else last_named, "line": line, "unit": unit})
         if named:
             last_named = named[-1]
     return out
+
+
+_NEW_FIGURE_RE = re.compile(
+    r"(?:^|[.!?]\s+|,\s+)(?:one\s+of\s+them,?\s+|then\s+)?(?:a|an|another)\s+(?:[\w'’-]+\s+){0,3}?"
+    r"(?:man|woman|figure|stranger|worker|boy|girl|lad|lass|sailor|fisher\w*|clerk|guard|youth|child|elder|crone|"
+    r"dockhand|loader|porter)\b[^.!?]*?\b(?:looks?|steps?|turns?|glances?|says?|asks?|calls?|speaks?|rises?|stands?|"
+    r"approaches?|waves?|nods?|grunts?|leans?)\b",
+    re.I,
+)
 
 
 _OBJECT_LEAD_RE = re.compile(
