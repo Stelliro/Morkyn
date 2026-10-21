@@ -338,8 +338,11 @@ _PROGRESS_SYSTEM = (
     "Answer yes or no from the passage alone. Return JSON only, one object."
 )
 
+# No yes/no in the fill: whether the line offers the work is the check's
+# "offered" question, asked against the passage. The fill's own offers_work
+# flag answered "false" to "There's a job posted for a runner to deliver a
+# crate of salvaged tools to the shipwrights" and lost the job (8B run 152b, T8).
 FILL_SHAPE: dict[str, Any] = {
-    "offers_work": "true only when the speaker asks the player to do a specific piece of work, or agrees to the player doing one",
     "task": "the work itself, in the speaker's own words",
     "title": "three to eight words naming the work",
     "place": "where the work is, when the line says; else empty",
@@ -377,11 +380,7 @@ def build_fill_prompt(
         "player_said": qp._player_own_line(str(player_input or ""))[:300],
         "known_places": places,
         "return": FILL_SHAPE,
-        "rules": [
-            "offers_work is false for a question about what work the player wants, a demand to prove oneself, "
-            "talk about the player's debt, and the player's own plans or wishes.",
-            "Read only the line and what is around it.",
-        ],
+        "rules": ["Read only the line and what is around it."],
     }
     return _FILL_SYSTEM, json.dumps(payload, ensure_ascii=True)
 
@@ -397,12 +396,7 @@ def parse_fill(raw: Any) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
     data = _drop_fill_placeholders(qp._drop_placeholders(data))
-    # Only an explicit no ends the card. A reply that filled every field and
-    # left the flag out lost a real job (the Reeve's chest for forty-five gold,
-    # 8B run 147, T36); the check ask still has to say yes to it.
-    flag = data.get("offers_work")
-    if flag is not None and str(flag).strip() != "" and not _yes(flag):
-        return None
+    # An offers_work flag a reply still carries is not read (see FILL_SHAPE).
     task = re.sub(r"\s+", " ", str(data.get("task") or "")).strip()
     title = re.sub(r"\s+", " ", str(data.get("title") or "")).strip(" .\"'")
     if not task and not title:

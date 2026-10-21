@@ -437,9 +437,13 @@ class AFilledCardWithoutTheFlagStillReachesTheCheck(unittest.TestCase):
         self.assertIsNotNone(card)
         self.assertEqual(card["gold"], 45)
 
-    def test_an_explicit_no_still_ends_it(self):
-        self.assertIsNone(qo.parse_fill({**self.CARD, "offers_work": False}))
-        self.assertIsNone(qo.parse_fill({**self.CARD, "offers_work": "no"}))
+    def test_the_fill_asks_no_yes_or_no_and_a_flag_left_in_is_not_read(self):
+        # 8B run 152b, T8: offers_work "false" for "There's a job posted for a runner to deliver
+        # a crate of salvaged tools to the shipwrights" lost the job. Whether work is offered is
+        # the check's "offered" question, against the passage.
+        self.assertNotIn("offers_work", qo.FILL_SHAPE)
+        self.assertNotIn("offers_work", qo.build_fill_prompt({"line": "There's a job posted.", "kind": "spoken"})[1])
+        self.assertIsNotNone(qo.parse_fill({**self.CARD, "offers_work": "false"}))
 
 
 class ASuggestionIsNoAssignment(unittest.TestCase):
