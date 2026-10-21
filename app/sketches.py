@@ -25,7 +25,14 @@ and can bring them back. Then, once a turn (``settle``):
     person (their rows, aliases and the turn's code tags move over); "new" keeps
     them. Engine first: no one to confuse them with, or the other person named
     beside them in the same prose, needs no ask; the same name needs none either.
-  * Faded: a sketch not brought back within FADE_AFTER turns is removed.
+  * Talked with: a conversation held with a sketch confirms them on the turn
+    they were made (a clerk who gave directions once is a real person).
+  * Faded: a sketch not brought back within FADE_AFTER turns leaves the world
+    (the narrator and the people list no longer see them) but is kept in
+    ``faded_people`` with their aliases and talks. Stell (2026-10-22, on a side
+    note that a once-met person "may be forgotten"): a faded person mentioned
+    again by the same name comes back as themselves, and a new sketch of the
+    same trade at the same place is asked about them like anyone known.
 
 Every decision is a turn_ledger note. Rows the pass changes are added to the
 turn's rewind record first, so a rewind restores a faded or merged sketch.
@@ -39,7 +46,7 @@ from typing import Any, Callable, Iterable
 
 from app import turn_ledger
 
-FADE_AFTER = 3  # turns a sketch may go unmentioned before it fades
+FADE_AFTER = 5  # turns a sketch may go unmentioned before it fades
 MAX_CANDIDATES = 5
 PHASE = "sketch_identity"
 MAX_TOKENS = 30
@@ -149,6 +156,7 @@ def settle(
     unspoken = venues.strip_speech(text)
     report["pencilled"] = pencil_in(conn, max_id_before, turn)
     _collapse_twins(conn, turn, report, text, unspoken, bound_hints or {})
+    _revive_by_name(conn, turn, report)
     touched = {int(i) for i in touched_ids or () if i}
     rows = conn.execute("SELECT * FROM npcs WHERE COALESCE(sketch_turn, 0) > 0 ORDER BY id").fetchall()
     for row in rows:
@@ -158,11 +166,22 @@ def settle(
         evidence = _tie(conn, int(row["id"]))
         if not evidence and made < turn:
             evidence = _brought_back(conn, row, turn, narration, unspoken, player_line, touched)
+        elif not evidence and _talked_with(conn, int(row["id"]), turn):
+            evidence = "conversation"
         if evidence:
             _confirm(conn, row, turn, evidence, unspoken, report, ask)
         elif made < turn and turn - made >= FADE_AFTER:
             _fade(conn, row, turn, report)
     return report
+
+
+def _talked_with(conn, npc_id: int, turn: int) -> bool:
+    try:
+        return conn.execute(
+            "SELECT 1 FROM conversations WHERE npc_id = ? AND turn = ? LIMIT 1", (npc_id, int(turn))
+        ).fetchone() is not None
+    except Exception:
+        return False
 
 
 def _tie(conn, npc_id: int) -> str:
@@ -291,6 +310,12 @@ def candidates(conn, row: Any, unspoken: str = "") -> list[Any]:
             same_place.append(other)
         elif trade:
             same_job.append(other)
+    # Faded people of this trade at this place: "a clerk steps in" where the
+    # clerk who once gave directions faded is asked about her too.
+    if jobs:
+        for other in _faded(conn):
+            if int(other.get("location_id") or 0) in places and jobs & _job_words(str(other.get("role") or "")):
+                same_place.append(other)
     return (same_place + same_job)[:MAX_CANDIDATES]
 
 
@@ -352,6 +377,9 @@ def _confirm(conn, row: Any, turn: int, evidence: str, unspoken: str, report: di
         if answer and answer != "new":
             target = next((o for o in others if str(o["code"] or "") == answer), None)
             how = "asked"
+    if isinstance(target, dict) and target.get("_faded_id"):
+        _revive(conn, target, row, turn, report)
+        return
     if target is not None:
         merge_into(conn, row, target, turn, report)
         _keep_for_rewind(conn, turn, "npcs", int(target["id"]))
@@ -501,13 +529,102 @@ def _fade(conn, row: Any, turn: int, report: dict[str, Any]) -> None:
             except Exception:
                 pass
     _drop_clock(conn, npc_id)
+    aliases: list[str] = []
     if code:
+        aliases = [str(r[0]) for r in conn.execute(
+            "SELECT alias FROM aliases WHERE entity_type = 'npc' AND entity_code = ?", (code,)).fetchall()]
         _keep_for_rewind(conn, turn, "aliases", where="entity_type = 'npc' AND entity_code = ?", params=(code,))
         conn.execute("DELETE FROM aliases WHERE entity_type = 'npc' AND entity_code = ?", (code,))
+    _store_faded(conn, row, turn, aliases)
     conn.execute("DELETE FROM npcs WHERE id = ?", (npc_id,))
     report["faded"].append(str(row["name"] or ""))
     turn_ledger.note("npc", "sketch_faded", name=str(row["name"] or ""), made=int(row["sketch_turn"] or 0),
                      unmentioned_turns=turn - int(row["sketch_turn"] or 0))
+
+
+# ------------------------------------------------- faded people come back
+
+
+def _store_faded(conn, row: Any, turn: int, aliases: list[str]) -> None:
+    """Keep a faded person's record, aliases and talks (their talk rows stay, npc_id set to NULL)."""
+    npc_id = int(row["id"])
+    try:
+        talks = [int(r[0]) for r in conn.execute("SELECT id FROM conversations WHERE npc_id = ?", (npc_id,)).fetchall()]
+        conn.execute(
+            "INSERT INTO faded_people (npc_id, name, location_id, turn_faded, record, aliases, conversation_ids) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (npc_id, str(row["name"] or ""), int(row["location_id"] or 0), int(turn),
+             json.dumps({key: row[key] for key in row.keys()}, ensure_ascii=True), json.dumps(aliases), json.dumps(talks)),
+        )
+    except Exception as exc:
+        turn_ledger.note("npc", "sketch_fade_store_failed", name=str(row["name"] or ""), error=f"{type(exc).__name__}: {exc}"[:200])
+
+
+def _faded(conn) -> list[dict[str, Any]]:
+    """Faded people still out of the world (a rewind may have put one back: that entry is dropped)."""
+    out: list[dict[str, Any]] = []
+    try:
+        rows = conn.execute("SELECT * FROM faded_people ORDER BY id DESC").fetchall()
+    except Exception:
+        return out
+    for entry in rows:
+        if conn.execute("SELECT 1 FROM npcs WHERE id = ?", (int(entry["npc_id"]),)).fetchone() is not None:
+            conn.execute("DELETE FROM faded_people WHERE id = ?", (int(entry["id"]),))
+            continue
+        try:
+            record = json.loads(entry["record"] or "{}")
+        except Exception:
+            continue
+        if isinstance(record, dict) and record.get("name"):
+            # The code the ask shows: a digit keeps it apart from the people's letter codes.
+            out.append({**record, "code": f"X{int(entry['id'])}", "_faded_id": int(entry["id"])})
+    return out
+
+
+_KEEP_ON_REVIVE = {"id", "code", "location_id", "sketch_turn"}
+
+
+def _revive(conn, faded: dict[str, Any], row: Any, turn: int, report: dict[str, Any]) -> None:
+    """The sketch ``row`` is the faded person come back: their record, aliases and talks move onto it."""
+    entry = conn.execute("SELECT * FROM faded_people WHERE id = ?", (int(faded["_faded_id"]),)).fetchone()
+    record = json.loads(entry["record"] or "{}")
+    npc_id, code = int(row["id"]), str(row["code"] or "")
+    _keep_for_rewind(conn, turn, "npcs", npc_id)
+    cols = [str(c["name"]) for c in conn.execute("PRAGMA table_info(npcs)").fetchall()]
+    values = {key: record[key] for key in cols if key in record and key not in _KEEP_ON_REVIVE}
+    values["sketch_turn"] = 0
+    try:
+        conn.execute(f"UPDATE npcs SET {', '.join(k + ' = ?' for k in values)} WHERE id = ?", (*values.values(), npc_id))
+    except Exception:
+        # Their name is held by someone else at this place: keep the sketch's name.
+        values.pop("name", None)
+        conn.execute(f"UPDATE npcs SET {', '.join(k + ' = ?' for k in values)} WHERE id = ?", (*values.values(), npc_id))
+    sketch_name = str(row["name"] or "").strip()
+    for alias in json.loads(entry["aliases"] or "[]") + ([sketch_name] if sketch_name.lower() != str(record.get("name") or "").strip().lower() else []):
+        conn.execute("INSERT OR IGNORE INTO aliases (alias, entity_type, entity_code) VALUES (?, 'npc', ?)", (alias, code))
+    talks = [int(t) for t in json.loads(entry["conversation_ids"] or "[]")]
+    if talks:
+        conn.execute(f"UPDATE conversations SET npc_id = ? WHERE npc_id IS NULL AND id IN ({','.join('?' * len(talks))})",
+                     (npc_id, *talks))
+    conn.execute("DELETE FROM faded_people WHERE id = ?", (int(entry["id"]),))
+    report["confirmed"].append(str(record.get("name") or sketch_name))
+    turn_ledger.note("npc", "faded_person_back", name=str(record.get("name") or ""), as_sketch=sketch_name,
+                     faded_on=int(entry["turn_faded"] or 0))
+
+
+def _revive_by_name(conn, turn: int, report: dict[str, Any]) -> None:
+    """A sketch made this turn under a faded person's exact name is that person, come back."""
+    fresh = conn.execute("SELECT * FROM npcs WHERE sketch_turn = ? ORDER BY id", (int(turn),)).fetchall()
+    if not fresh:
+        return
+    faded = _faded(conn)
+    for row in fresh:
+        name = str(row["name"] or "").strip().lower()
+        match = [f for f in faded if str(f.get("name") or "").strip().lower() == name]
+        if len(match) != 1:
+            continue
+        _revive(conn, match[0], row, turn, report)
+        faded = [f for f in faded if f is not match[0]]
 
 
 # --------------------------------------------------------- same-turn twins

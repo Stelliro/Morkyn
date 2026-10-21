@@ -65,6 +65,7 @@ def _world():
         conn.execute("INSERT INTO locations (code, name, summary, parent_id) VALUES ('L91', 'The Docks', '', ?)", (town,))
         docks = int(conn.execute("SELECT id FROM locations WHERE code = 'L91'").fetchone()[0])
         conn.execute("DELETE FROM npcs")
+        conn.execute("DELETE FROM faded_people")
         conn.execute(
             "INSERT INTO npcs (code, location_id, name, race, role, summary, attitude) "
             "VALUES ('A', ?, 'Fulk Rooke', 'human', 'wherryman', 'A wiry man with a tarred rope coil.', 'neutral')",
@@ -132,18 +133,89 @@ class AMintIsASketch(unittest.TestCase):
     def test_a_sketch_never_brought_back_fades(self):
         before = _mint("Ingram Fletcher", "porter", self.docks)
         _settle(5, "A porter hauls a crate.", before)
-        for turn in (6, 7):
+        for turn in (6, 7, 8, 9):
             _settle(turn, "The tide turns. Gulls wheel over the pilings.")
             self.assertIn("Ingram Fletcher", _people())
-        report = _settle(8, "The tide turns. Gulls wheel over the pilings.")
+        report = _settle(10, "The tide turns. Gulls wheel over the pilings.")
         self.assertNotIn("Ingram Fletcher", _people())
         self.assertEqual(report["faded"], ["Ingram Fletcher"])
         self.assertIn("Fulk Rooke", _people())
 
+    def test_talking_with_them_confirms_them_on_the_turn_they_were_made(self):
+        from app.db import connect
+
+        before = _mint("Mabel Tull", "tally clerk", self.docks)
+        with connect().closing() as conn:
+            npc_id = int(conn.execute("SELECT id FROM npcs WHERE name = 'Mabel Tull'").fetchone()[0])
+            conn.execute("INSERT INTO conversations (turn, npc_id, topic, summary) VALUES (5, ?, 'the way', 'Up the hill.')",
+                         (npc_id,))
+        _settle(5, "The clerk points up the hill.", before, ask=_asker({"answer": "new"})[0])
+        for turn in (6, 7, 8, 9, 10, 11):
+            _settle(turn, "The tide turns.")
+        self.assertEqual(_people()["Mabel Tull"]["sketch_turn"], 0)
+
+
+class AFadedPersonComesBack(unittest.TestCase):
+    """Stell (2026-10-22): a once-met person must not come back as a stranger."""
+
+    def setUp(self):
+        from app.db import connect
+
+        _, self.docks = _world()
+        before = _mint("Ingram Fletcher", "porter", self.docks, "A stooped man with a hook.")
+        with connect().closing() as conn:
+            row = conn.execute("SELECT id, code FROM npcs WHERE name = 'Ingram Fletcher'").fetchone()
+            self.old_id = int(row["id"])
+            conn.execute("INSERT INTO aliases (alias, entity_type, entity_code) VALUES ('the stooped porter', 'npc', ?)",
+                         (row["code"],))
+        _settle(5, "A porter hauls a crate.", before)
+        for turn in (6, 7, 8, 9, 10):
+            _settle(turn, "The tide turns.")
+
+    def test_fading_keeps_the_record_out_of_the_world(self):
+        from app.db import connect
+
+        self.assertNotIn("Ingram Fletcher", _people())
+        with connect().closing() as conn:
+            entry = conn.execute("SELECT * FROM faded_people WHERE name = 'Ingram Fletcher'").fetchone()
+        self.assertIsNotNone(entry)
+        self.assertIn("the stooped porter", json.loads(entry["aliases"]))
+
+    def test_the_same_name_again_brings_back_the_same_person(self):
+        from app.db import connect
+
+        before = _mint("Ingram Fletcher", "porter", self.docks)
+        report = _settle(14, "Ingram Fletcher sets down his crate.", before)
+        people = _people()
+        self.assertEqual(people["Ingram Fletcher"]["sketch_turn"], 0)
+        self.assertEqual(people["Ingram Fletcher"]["summary"], "A stooped man with a hook.")
+        self.assertIn("Ingram Fletcher", report["confirmed"])
+        with connect().closing() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM faded_people").fetchone()[0], 0)
+            code = conn.execute("SELECT code FROM npcs WHERE name = 'Ingram Fletcher'").fetchone()[0]
+            self.assertIsNotNone(conn.execute(
+                "SELECT 1 FROM aliases WHERE alias = 'the stooped porter' AND entity_code = ?", (code,)).fetchone())
+
+    def test_a_new_face_in_the_same_trade_here_is_asked_about_them(self):
+        before = _mint("Osric Vane", "porter", self.docks)
+        from app.db import connect
+
+        _settle(14, "A porter hauls a crate.", before)
+        with connect().closing() as conn:
+            faded_id = int(conn.execute("SELECT id FROM faded_people WHERE name = 'Ingram Fletcher'").fetchone()[0])
+        ask, calls = _asker({"answer": f"X{faded_id}"})
+        _settle(15, "Osric Vane wipes his brow and nods to you.", ask=ask)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("Ingram Fletcher", calls[0]["user"])
+        people = _people()
+        self.assertNotIn("Osric Vane", people)
+        self.assertEqual(people["Ingram Fletcher"]["summary"], "A stooped man with a hook.")
+        self.assertEqual(people["Ingram Fletcher"]["sketch_turn"], 0)
+
     def test_a_name_said_of_someone_absent_does_not_bring_them_back(self):
         before = _mint("Rolf Joliffe", "fisher", self.docks)
         _settle(5, "Rolf Joliffe waves.", before)
-        for turn in (6, 7, 8):
+        for turn in (6, 7, 8, 9, 10):
             _settle(turn, "There is no sign of Rolf Joliffe. You call out for Rolf Joliffe and no one answers.")
         self.assertNotIn("Rolf Joliffe", _people())
 
@@ -171,7 +243,7 @@ class AMintIsASketch(unittest.TestCase):
     def test_a_title_is_not_a_first_name(self):
         before = _mint("Captain Ysolde Marr", "captain", self.docks)
         _settle(5, "Captain Ysolde Marr studies the tide.", before)
-        for turn in (6, 7, 8):
+        for turn in (6, 7, 8, 9, 10):
             _settle(turn, "Captain Odo shouts from the quay.")
         self.assertNotIn("Captain Ysolde Marr", _people())
 
@@ -349,6 +421,8 @@ class ThroughApplyTurn(unittest.TestCase):
         self._turn("The tide turns. Gulls wheel over the pilings.")
         self._turn("Rain needles the water. The pilings creak.")
         self._turn("Fog rolls in off the harbour mouth.")
+        self._turn("A bell tolls somewhere up the hill.")
+        self._turn("The light goes grey over the water.")
         self.assertNotIn("Bennet Harrow", _people())
         world.rewind_last_turn()
         self.assertIn("Bennet Harrow", _people())
