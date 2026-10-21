@@ -1235,6 +1235,31 @@ def collapse_state(resources: dict[str, Any] | None) -> dict[str, Any]:
 # their minutes (playtest #80): talking in a shop is not exertion.
 LIGHT_ACTION_KINDS = frozenset({"none", "talk", "rest", "wait", "sleep", "meditate"})
 
+# What a free-text act costs per 6-minute beat, before time, fatigue and
+# constitution: (energy, fatigue gain). The day's balance is checked by
+# replaying real runs through apply_action_spend (tools/energy_replay.py).
+ACTION_BASE_COSTS: dict[str, tuple[float, float]] = {
+    "ability": (0.0, 0.0),
+    "combat": (2.0, 1.0),
+    "physical": (2.0, 1.0),
+    "train": (2.0, 1.0),
+    "travel": (0.0, 0.0),
+    "journey": (0.0, 0.0),  # by the minute: JOURNEY_ENERGY_PER_MINUTE
+    # 0.4 -> 0.6 with the journey change below (F153 cont.): replayed over 8B
+    # run 150's second day, an ordinary day of talk, two crates and a few
+    # walks ends near half the pool instead of two thirds, and the day with
+    # the reef dive keeps a quarter.
+    "general": (0.6, 0.0),
+    "investigate": (0.6, 0.0),
+}
+# A typed walk with no town grid pays by the minute, at the walk formula's
+# rate on open ground with an ordinary load (travel_resource_delta: 1.0 x
+# minutes/10 x 0.5). It was a flat point plus time: a six-minute stroll
+# between two buildings cost a whole point, a third of an hour's journey.
+JOURNEY_ENERGY_PER_MINUTE = 0.05
+# Talk and other light beats recover at this share of the waiting rate.
+LIGHT_REGEN_SHARE = 1.0
+
 
 # Saltmarrow #119: "the deep channel" and "power" as nouns made every line on
 # the flats an ability turn; only the verb forms are casting.
@@ -1322,6 +1347,24 @@ def action_kind_from_text(player_input: str) -> str:
     text = (player_input or "").lower().strip()
     if not text or text.startswith("__"):
         return "none"
+    # Only what the player does now is costed (app/act_clauses, fault log
+    # F153/F179): words in quotes are said ('"... and the three gold struck
+    # from the book." I keep my hands at my sides' was a 2-energy fight, 8B
+    # run 150 T43), and a plan, a case, a message or a thing set in the mind
+    # is not done ("fix it in my memory" was craft work, run 151 T13).
+    try:
+        from app.act_clauses import acts_now, is_all_speech
+
+        if is_all_speech(player_input):
+            return "talk"
+        now_line = acts_now(str(player_input or ""))
+    except Exception:
+        now_line = str(player_input or "")
+    if not re.search(r"[a-z]{2,}", now_line, re.I):
+        # Nothing done now: a plan or a wish told is no exertion.
+        return "talk" if re.search(r"[\"“]", text) else "none"
+    player_input = now_line
+    text = now_line.lower().strip()
     # A fighting verb with a direction is motion ("kick back up to the boat",
     # 8B run 145 T24), costed like the rest of the line.
     swung = re.sub(
@@ -1399,29 +1442,32 @@ def action_resource_delta(
     kind_l = str(kind or "general").lower()
     if kind_l in LIGHT_ACTION_KINDS:
         return {"energy": 0, "fatigue": 0, "mana": 0, "energy_exact": 0.0, "fatigue_exact": 0.0, "kind": kind_l}  # type: ignore[dict-item]
-    if kind_l == "ability":
-        # Ability path spends via apply_ability_use; only tiny baseline if unmatched
-        base_e, base_f = 0.0, 0.0
-    elif kind_l == "combat":
-        base_e, base_f = 2.0, 1.0
-    elif kind_l == "physical":
-        base_e, base_f = 2.0, 1.0
-    elif kind_l == "train":
-        base_e, base_f = 2.0, 1.0
-    elif kind_l == "travel":
-        # Movement energy is charged by the walk the engine actually makes
-        # (_spend_travel, docs/TownGrid.md 4.3). Charging the line as well paid
-        # twice, and paid for moves that never happened (playtest #80).
-        base_e, base_f = 0.0, 0.0
-    elif kind_l == "journey":
-        # A typed move outside a town: the legacy MOVE path charges no walk,
-        # so the line pays its old travel point (playtest #80 review).
-        base_e, base_f = 1.0, 0.0
-    else:
-        # investigate / general: looking, handling, small errands. They were a
-        # whole point per 6-minute beat, five times a street walk's rate, and a
-        # morning of them emptied the pool (playtest #80).
-        base_e, base_f = 0.4, 0.0
+    # Ability: spent via apply_ability_use. Travel: charged by the walk the
+    # engine actually makes (_spend_travel, docs/TownGrid.md 4.3); charging the
+    # line as well paid twice, and paid for moves that never happened (#80).
+    # Journey: a typed move with no town grid (the legacy MOVE path charges no
+    # walk), so the line pays it (playtest #80 review). Investigate / general:
+    # looking, handling, small errands (#80: a whole point per beat emptied
+    # the pool by mid-morning).
+    base_e, base_f = ACTION_BASE_COSTS.get(kind_l, ACTION_BASE_COSTS["general"])
+    if kind_l == "journey":
+        # By the minutes walked, at a walk's rate (F153 cont., 8B run 150: a
+        # six-minute stroll between two town buildings cost a whole point,
+        # five times a street walk on the map, and five of them were a third
+        # of the day's pool). A long journey still costs what it did.
+        journey_e = JOURNEY_ENERGY_PER_MINUTE * max(0, _int(minutes, 0))
+        mods_j = attr_mods(stats)
+        con_ease_j = max(0.7, min(1.2, 1.0 - 0.12 * mods_j["con_mod"]))
+        scale_j = max(0.25, min(3.0, _float(drain_scale, 1.0))) * max(1.0, _float(collapse_mult, 1.0))
+        energy_j = max(0.0, journey_e * fatigue_stamina_mult(fatigue, max_fatigue) * con_ease_j * scale_j)
+        return {
+            "energy": max(0, int(round(energy_j))),
+            "fatigue": 0,
+            "energy_exact": round(energy_j, 4),  # type: ignore[dict-item]
+            "fatigue_exact": 0.0,  # type: ignore[dict-item]
+            "mana": 0,
+            "kind": kind_l,  # type: ignore[dict-item]
+        }
 
     mods = attr_mods(stats)
     minutes = max(0, _int(minutes, 0))
@@ -1484,7 +1530,10 @@ def apply_action_spend(
         # A typed rest or meditation recovers at the Wait control's rate for
         # the same act; talk recovers at the waiting rate.
         regen_kind = kind if kind in {"rest", "sleep", "meditate"} else "wait"
-        regen = apply_regen(conn, minutes=int(minutes), kind=regen_kind, options=options)
+        regen_minutes = int(minutes)
+        if kind in {"talk", "none"}:
+            regen_minutes = int(round(regen_minutes * max(0.0, float(LIGHT_REGEN_SHARE))))
+        regen = apply_regen(conn, minutes=regen_minutes, kind=regen_kind, options=options)
         after = regen.get("after") or get_player_resources(conn, options)
         return {
             "ok": True,

@@ -1957,6 +1957,18 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # threat); hands-on skills are read from the narrated part only.
     own_acts = _SPOKEN_RE.sub(" ", own)
     acted = _SPOKEN_RE.sub(" ", text)
+    # Hands-on checks come from what the player does now (app/act_clauses):
+    # a plan, a case it waits on, a message for someone or a thing set in the
+    # mind rolls nothing ("read the name aloud to fix it in my memory" rolled
+    # craft, 8B run 151 T13). Talk is still read from the whole line, and a
+    # question asked ("what is the ring worth?") is still a check of what is known.
+    try:
+        from app.act_clauses import acts_now
+
+        own_acts = acts_now(own_acts, keep_questions=True)
+        acted = acts_now(acted, keep_questions=True)
+    except Exception:
+        pass
     # What someone else is doing is not the player's act: "I walk over to where
     # the mole catcher is digging" rolled athletics (7B run 19, T1).
     own_acts = _OTHERS_DOING_RE.sub(" ", own_acts)

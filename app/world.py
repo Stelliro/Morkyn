@@ -10113,6 +10113,15 @@ def _unasked_unshown_move(
     # was cut at his "Start there" (8B run 16, T3). Only the narrated part of
     # the line asks.
     acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", _player_line(player_input))
+    # Nor does a plan or a message told: "tell Nell I'll take the matter to the
+    # reeve myself" kept a MOVE to a new "Raven's Office" (8B run 150, T96).
+    # Only the clauses the player does now ask to go (app/act_clauses).
+    try:
+        from app.act_clauses import acts_now
+
+        acts = acts_now(acts)
+    except Exception:
+        pass
     if (
         travel_intent(acts) or venue_move_intent(acts) or (intent == "travel" and _turn_intent(acts)[0] == "travel")
         # Doing something at another known place is going there: "I report to
@@ -25388,6 +25397,15 @@ def _action_cost_kind(player_line: str, context: dict[str, Any], ability: dict[s
     if isinstance(ability, dict) and str(ability.get("name") or "").strip():
         line = re.sub(r"(?<!\w)" + re.escape(str(ability["name"]).strip()) + r"(?!\w)", " ", line, flags=re.I)
         line = _ABILITY_USE_CLAUSE_RE.sub(" ", line)
+    # The intent is read from what the player does now (app/act_clauses): a
+    # plan, a case or a message told ("tell Nell I'll take the matter to the
+    # reeve") is not this turn's act. Speech stays for the talk readers.
+    try:
+        from app.act_clauses import acts_now
+
+        line = acts_now(line, keep_speech=True)
+    except Exception:
+        pass
     if not re.search(r"[a-z]{2,}", line, re.I):
         return "ability" if ability else "none"
     intent, _secondary = _turn_intent(line)
