@@ -23592,7 +23592,11 @@ def _reconcile_prose_with_state(
                 continue
             unpinned.append(full)
             first = full.split(" ")[0]
-            if first != full and len(first) > 2 and first.lower() not in pinned_names:
+            # A title is no first name: an unpinned "Captain Mora" must not make
+            # every "Captain Rafe" sentence someone else's.
+            from app.sketches import TITLE_WORDS
+
+            if first != full and len(first) > 2 and first.lower() not in pinned_names and first.lower() not in TITLE_WORDS:
                 unpinned.append(first)
         text, mended = prose_state.repair_pinned_pronouns(text, cast, not_people=not_people, others=unpinned)
         for entry in mended:

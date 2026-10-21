@@ -64,6 +64,13 @@ _TIES = (
 )
 _SPEECH_VERB = re.compile(r"(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)$")
 _VAGUE = {"figure", "shape", "silhouette", "form", "person", "someone", "stranger"}
+# A first word that is a title or a trade, not a given name: "Captain" or
+# "Harbour" alone is not this person ("Captain Rafe", "Harbour Master Odo").
+TITLE_WORDS = frozenset({
+    "the", "a", "an", "old", "young", "little", "big", "captain", "harbour", "harbor", "master", "mistress",
+    "mother", "father", "brother", "sister", "lady", "lord", "sir", "dame", "mister", "goodman", "goodwife",
+    "widow", "uncle", "aunt", "elder", "reeve", "sergeant", "guard", "keeper",
+})
 
 
 def set_identity_ask(ask: Ask | None) -> Ask | None:
@@ -175,7 +182,7 @@ def _name_forms(row: Any, others: list[str]) -> list[str]:
         return []
     forms = [name]
     first = name.split()[0]
-    if first != name and len(first) >= 3:
+    if first != name and len(first) >= 3 and first.lower() not in TITLE_WORDS:
         if not any(o.lower() != name.lower() and o.split() and o.split()[0].lower() == first.lower() for o in others):
             forms.append(first)
     return forms
@@ -204,6 +211,23 @@ def _brought_back(conn, row: Any, turn: int, narration: str, unspoken: str, play
             return "prose_name"
         if line and re.search(pattern, line, re.I):
             return "player_name"
+    # The figure phrase they were bound to ("the hooded woman", world._store_figure_aliases),
+    # while the player is where they are: the prose often never says the name again.
+    try:
+        here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        here_id = int((here[0] if here else 0) or 0)
+        if code and here_id and here_id in _places_near(conn, int(row["location_id"] or 0)):
+            for (alias,) in conn.execute(
+                "SELECT alias FROM aliases WHERE entity_type = 'npc' AND entity_code = ?", (code,)
+            ).fetchall():
+                words = re.sub(r"^(?:the|a|an)\s+", "", str(alias or "").strip(), flags=re.I)
+                if len(words) < 4:
+                    continue
+                alias_re = r"(?<![\w'])" + re.escape(words) + r"(?![\w'])"
+                if world._named_as_present(unspoken, alias_re, flags=re.I) or (line and re.search(alias_re, line, re.I)):
+                    return "figure_alias"
+    except Exception:
+        pass
     try:
         if conn.execute(
             "SELECT 1 FROM conversations WHERE npc_id = ? AND turn > ? LIMIT 1", (npc_id, int(row["sketch_turn"] or 0))
@@ -536,7 +560,8 @@ def _collapse_twins(conn, turn: int, report: dict[str, Any], text: str, unspoken
 
     def named(row: Any) -> bool:
         name = str(row["name"] or "").strip()
-        forms = [name] + ([name.split()[0]] if " " in name and len(name.split()[0]) >= 3 else [])
+        first = name.split()[0] if " " in name else ""
+        forms = [name] + ([first] if len(first) >= 3 and first.lower() not in TITLE_WORDS else [])
         return any(world._named_as_present(unspoken, r"(?<![\w'])" + re.escape(f) + r"(?![\w'])") for f in forms if f)
 
     unnamed = [r for r in new if not named(r)]
@@ -548,7 +573,10 @@ def _collapse_twins(conn, turn: int, report: dict[str, Any], text: str, unspoken
     except Exception:
         known = []
     free = max(0, figures_shown(unspoken, known) - len(named_new))
-    if free <= 1:
+    # Only a count of exactly one figure folds them: with none counted the
+    # engine cannot tell, and a twin left standing is still asked about when it
+    # is confirmed (the earlier one is a candidate), while a wrong fold loses a person.
+    if free == 1:
         keep = unnamed[0]
         for row in unnamed[1:]:
             _collapse(conn, row, keep, turn, report, why="beyond_figures_shown")
