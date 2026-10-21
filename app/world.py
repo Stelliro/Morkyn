@@ -4877,6 +4877,18 @@ def _move_cast_here(conn, cast: dict[str, Any], narration: str) -> list[str]:
     if not here_id:
         return []
     off = {re.sub(r"^\[+|\]+$", "", str(c).strip()).upper() for c in cast.get("off") or []}
+    # Named only up to the sentence the player leaves in is left behind: "You
+    # thank Elenya [[B]] and step out of the clerk's booth" walked the harbour
+    # clerk out to the wreck on the flats, where she watched for two turns (8B
+    # run 152e, T7-T9). Only the prose after the leaving puts someone here.
+    sentences = re.split(r"(?<=[.!?])[\"”']?\s+", text)
+    for index, sentence in enumerate(sentences):
+        if _PLAYER_DEPARTS_RE.search(_unspoken(sentence)) and not _PERFECT_TENSE_RE.search(sentence):
+            # "You follow Rafe [[B]] down to the boat": the leaving brings them.
+            together = re.search(r"\b(?:follow\w*|with|alongside|beside|together|lead\w*|led|behind\s+you|at\s+your\s+side)\b",
+                                 _unspoken(sentence), re.I)
+            text = " ".join(sentences[index if together else index + 1:])
+            break
     moved: list[str] = []
     for bucket in ("present", "interacting"):
         for code in cast.get(bucket) or []:

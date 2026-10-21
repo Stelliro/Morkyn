@@ -309,6 +309,27 @@ class PeopleMoveWithThePlayer(unittest.TestCase):
             where = dict(conn.execute("SELECT code, location_id FROM npcs WHERE code IN ('H', 'K')").fetchall())
             self.assertEqual(where, {"H": 2, "K": 7})
 
+    def test_someone_named_only_as_the_player_leaves_stays_behind(self):
+        # 8B run 152e, T7: "You thank Elenya [[B]] and step out of the clerk's booth" walked the harbour clerk
+        # out to the wreck; "You follow Tam [[H]] down to the boat" still brings Tam.
+        from app.db import connect, init_db
+
+        init_db()
+        with connect().closing() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("DELETE FROM player")
+            conn.execute("DELETE FROM npcs WHERE code IN ('H', 'B')")
+            conn.execute(
+                "INSERT INTO player (id, name, health, max_health, level, xp, gold, karma, current_location_id) "
+                "VALUES (1, 'Isk', 20, 20, 1, 0, 0, 0, 2)"
+            )
+            conn.execute("INSERT INTO npcs (code, name, location_id) VALUES ('B', 'Elenya', 7)")
+            conn.execute("INSERT INTO npcs (code, name, location_id) VALUES ('H', 'Tam Kemp', 7)")
+            left = "You thank Elenya [[B]] and step out of the clerk's booth. The streets narrow as you walk to the edge of town."
+            self.assertEqual(world._move_cast_here(conn, {"present": ["B"]}, left), [])
+            along = "You follow Tam [[H]] down to the boat. The water slaps the hull."
+            self.assertEqual(world._move_cast_here(conn, {"present": ["H"]}, along), ["Tam Kemp"])
+
 
 class OpsNameThePlayerAndNewPeople(unittest.TestCase):
     """#106: REL to YOU became the code YOU; CAST could not name someone made this turn."""
