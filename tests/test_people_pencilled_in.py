@@ -60,7 +60,7 @@ def _world():
     init_db()
     rng.reset_seed_cache()
     world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
-    with connect() as conn:
+    with connect().closing() as conn:
         town = int(conn.execute("SELECT current_location_id FROM player").fetchone()[0])
         conn.execute("INSERT INTO locations (code, name, summary, parent_id) VALUES ('L91', 'The Docks', '', ?)", (town,))
         docks = int(conn.execute("SELECT id FROM locations WHERE code = 'L91'").fetchone()[0])
@@ -79,7 +79,7 @@ def _mint(name, role, place_id, summary=""):
     from app import world
     from app.db import connect
 
-    with connect() as conn:
+    with connect().closing() as conn:
         before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0])
         code = world._next_alpha_code(conn, "npcs")
         conn.execute(
@@ -93,7 +93,7 @@ def _settle(turn, narration, before=None, **kw):
     from app import sketches
     from app.db import connect
 
-    with connect() as conn:
+    with connect().closing() as conn:
         if before is None:
             before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0])
         return sketches.settle(conn, turn=turn, max_id_before=before, narration=narration, **kw)
@@ -102,7 +102,7 @@ def _settle(turn, narration, before=None, **kw):
 def _people():
     from app.db import connect
 
-    with connect() as conn:
+    with connect().closing() as conn:
         return {str(r["name"]): dict(r) for r in conn.execute("SELECT * FROM npcs").fetchall()}
 
 
@@ -120,7 +120,7 @@ class AMintIsASketch(unittest.TestCase):
     def test_a_sketch_the_prose_brings_back_with_no_one_to_confuse_is_confirmed_without_an_ask(self):
         from app.db import connect
 
-        with connect() as conn:
+        with connect().closing() as conn:
             conn.execute("DELETE FROM npcs")
         before = _mint("Bennet Harrow", "bargeman", self.docks)
         _settle(5, "Bennet Harrow leans on his pole.", before)
@@ -154,12 +154,33 @@ class AMintIsASketch(unittest.TestCase):
         _settle(6, "The water slaps the hull.", player_line="I ask Bennet where the barge is bound.", ask=ask)
         self.assertEqual(_people()["Bennet Harrow"]["sketch_turn"], 0)
 
+    def test_the_figure_phrase_they_were_bound_to_brings_them_back(self):
+        from app.db import connect
+
+        with connect().closing() as conn:
+            conn.execute("DELETE FROM npcs")
+        before = _mint("Edda Crane", "net mender", self.docks)
+        with connect().closing() as conn:
+            code = conn.execute("SELECT code FROM npcs WHERE name = 'Edda Crane'").fetchone()[0]
+            conn.execute("INSERT INTO aliases (alias, entity_type, entity_code) VALUES ('the hooded woman', 'npc', ?)",
+                         (code,))
+        _settle(5, "A hooded woman mends nets.", before)
+        _settle(6, "The hooded woman glances up at you.", ask=_asker({"answer": "new"})[0])
+        self.assertEqual(_people()["Edda Crane"]["sketch_turn"], 0)
+
+    def test_a_title_is_not_a_first_name(self):
+        before = _mint("Captain Ysolde Marr", "captain", self.docks)
+        _settle(5, "Captain Ysolde Marr studies the tide.", before)
+        for turn in (6, 7, 8):
+            _settle(turn, "Captain Odo shouts from the quay.")
+        self.assertNotIn("Captain Ysolde Marr", _people())
+
     def test_the_giver_of_a_job_never_fades(self):
         from app.db import connect
 
         before = _mint("Ingram Fletcher", "porter", self.docks)
         _settle(5, "A porter hauls a crate.", before)
-        with connect() as conn:
+        with connect().closing() as conn:
             npc_id = int(conn.execute("SELECT id FROM npcs WHERE name = 'Ingram Fletcher'").fetchone()[0])
             conn.execute("INSERT INTO quests (code, title, status, giver_npc_id) VALUES ('Q1', 'Haul the crates', 'offered', ?)",
                          (npc_id,))
@@ -188,7 +209,7 @@ class OneAskDecidesWhoTheyAre(unittest.TestCase):
     def test_a_code_merges_the_sketch_into_that_person(self):
         from app.db import connect
 
-        with connect() as conn:
+        with connect().closing() as conn:
             sketch_id, code = conn.execute("SELECT id, code FROM npcs WHERE name = 'Bennet Harrow'").fetchone()
             conn.execute("INSERT INTO conversations (turn, npc_id, summary) VALUES (19, ?, 'asked about the tide')",
                          (int(sketch_id),))
@@ -198,7 +219,7 @@ class OneAskDecidesWhoTheyAre(unittest.TestCase):
         self.assertNotIn("Bennet Harrow", people)
         self.assertIn("Fulk Rooke", people)
         self.assertEqual(report["renames"], {code: "A"})
-        with connect() as conn:
+        with connect().closing() as conn:
             alias = conn.execute("SELECT entity_code FROM aliases WHERE alias = 'Bennet Harrow'").fetchone()
             talked = conn.execute("SELECT npc_id FROM conversations").fetchone()
             fulk = int(conn.execute("SELECT id FROM npcs WHERE name = 'Fulk Rooke'").fetchone()[0])
@@ -262,11 +283,19 @@ class OneFigureOneSketch(unittest.TestCase):
 
         before = _mint("Alditha", "smuggler", self.docks)
         _mint("Ellen", "smuggler", self.docks)
-        with connect() as conn:
+        with connect().closing() as conn:
             ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id, name FROM npcs")}
         _settle(32, "A hooded woman waits on the pier. An old man mends nets.", before,
                 bound_hints={ids["Alditha"]: "A hooded woman", ids["Ellen"]: "a hooded woman"})
         self.assertNotIn("Ellen", _people())
+
+    def test_no_figure_counted_folds_no_one(self):
+        before = _mint("Alditha", "smuggler", self.docks)
+        _mint("Ellen", "net mender", self.docks)
+        _settle(32, "Rain drums on the pier.", before)
+        people = _people()
+        self.assertIn("Alditha", people)
+        self.assertIn("Ellen", people)
 
     def test_figures_shown_folds_a_vague_definite_figure_into_the_first(self):
         from app.sketches import figures_shown
