@@ -341,6 +341,20 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertFalse(qp.player_accepts("I walk down to the dock and ask the nearest worker where a flat-runner signs on for salvage work."))
         self.assertTrue(qp.player_accepts("I sign on for the salvage work."))
 
+    def test_a_new_figure_speaks_for_themselves_not_for_the_last_one_named(self):
+        # 8B run 152d, T2: the scarred man's "New blood?" was credited to Wystan, named a paragraph before.
+        from app.conversation import spoken_lines
+
+        prose = ("You nod your thanks to Wystan Lambard [[A]]. Wystan Lambard [[A]] gives a gruff nod back.\n\n"
+                 "Inside, a group of workers are gathered around a table. One of them, a tall man with a scar running "
+                 "from his temple to his jaw, looks up as you enter.\n\n"
+                 "“New blood?” he asks, his voice rough. “The guild’s always looking for someone.”")
+        rows = [{"code": "A", "name": "Wystan Lambard"}]
+        lines = spoken_lines(prose, rows, "I walk to the guild hall.")
+        self.assertTrue(lines and all(entry["code"] == "" for entry in lines), lines)
+        kept = "Wystan Lambard [[A]] looks up. “New blood?” he asks."
+        self.assertEqual([entry["code"] for entry in spoken_lines(kept, rows, "")], ["A"])
+
     def test_the_step_is_never_cut_mid_word(self):
         # 8B run 152c, T3: the step "... without a bit of pr" reached the narrator, which then wrote "a reco.".
         task = ("Carry the guild's three crates of salvaged tools down to the shipwrights before the tide turns. "
