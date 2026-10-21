@@ -92,6 +92,14 @@ class AClauseIsJudgedByItsForm(unittest.TestCase):
         self.assertNotIn("waking", _now("I slip past the sleeping guard without waking him."))
         self.assertIn("go fishing", _now("I go fishing off the pier."))
 
+    def test_a_line_that_is_all_speech_costs_as_talk(self):
+        # 8B run 152f, T4: an accept naming "hauling" and "bring the goods" was costed as general work.
+        from app.world import _action_cost_kind
+
+        line = "\"I'll take the east district hauling. What's your name, and which warehouse do I bring the goods to?\""
+        self.assertEqual(_action_cost_kind(line, {}), "talk")
+        self.assertNotEqual(_action_cost_kind("I haul the crate up the gangplank.", {}), "talk")
+
     def test_a_narrated_question_and_a_denied_clause_are_not_done(self):
         out = _now("I stop where I am and look around: is this the reeve's office?")
         self.assertIn("look around", out)
