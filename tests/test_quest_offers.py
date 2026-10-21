@@ -263,7 +263,10 @@ class TheAsksFillAndCheck(unittest.TestCase):
         self.assertEqual(item["title"], "Unload the salted fish")
         self.assertTrue(qp.evidence_found(item["evidence"], FISH))
         self.assertTrue(item["_checked"])
-        self.assertEqual([s["title"] for s in item["steps"]], ["Go to the docks", "Unload the shipment"])
+        # The fill's own steps are not read: the one step is the task as said,
+        # and the rest is written as play happens (2026-10-22).
+        self.assertEqual([s["title"] for s in item["steps"]], ["A shipment of salted fish needs unloading"])
+        self.assertTrue(item["_steps_from_play"])
 
     def test_a_card_whose_task_is_the_players_own_words_is_dropped(self):
         # 8B run 146, T34: the fill took the task from the player's quoted line in the passage.
@@ -280,6 +283,7 @@ class TheAsksFillAndCheck(unittest.TestCase):
 
     def test_steps_lifted_from_the_players_line_are_dropped(self):
         # 8B run 150, T72: Nell's "You'll be paid well for this" filled steps out of the player's own line.
+        # The fill's steps are no longer read; the line names nothing to do, so it is no job yet.
         line = ("\"Guildmaster. I've loaded the Hesperian's crates for Rafe today and paid Mabel's three gold. I'm looking for "
                 "steady work with the guild.\" I stand straight and wait.")
         prose = ("\"Guildmaster. I've loaded the Hesperian's crates for Rafe today and paid Mabel's three gold. I'm looking for "
@@ -292,7 +296,7 @@ class TheAsksFillAndCheck(unittest.TestCase):
         report = qo.run_offer_pass(prose, line, npcs=nell, asked_for_work=True, ask=ask)
         self.assertEqual(report["new"], [])
         self.assertEqual([c["phase"] for c in calls], [qo.FILL_PHASE])
-        self.assertEqual(report["fills"][0].get("dropped"), "steps_are_the_players_words")
+        self.assertEqual(report["fills"][0].get("dropped"), "no_thing_named")
 
     def test_a_fill_that_sees_no_work_asks_no_check(self):
         ask, calls = _fake_ask(fill={"offers_work": False, "task": "", "title": ""})
@@ -325,8 +329,10 @@ class TheAsksFillAndCheck(unittest.TestCase):
         self.assertEqual(card["steps"], ["Unload the fish"])
 
     def test_yes_and_no_come_in_many_shapes(self):
-        self.assertTrue(qo.parse_check({"offered": True, "specific": "Yes", "in_text": "yes."})["ok"])
-        self.assertFalse(qo.parse_check({"offered": "yes", "specific": "No", "in_text": "yes"})["ok"])
+        self.assertTrue(qo.parse_check({"offered": True, "in_text": "yes."})["ok"])
+        self.assertFalse(qo.parse_check({"offered": "yes", "in_text": "No"})["ok"])
+        # "specific" is the engine's now (names_a_task); a reply's own is not read.
+        self.assertTrue(qo.parse_check({"offered": "yes", "specific": "No", "in_text": "yes"})["ok"])
         self.assertFalse(qo.parse_check("not json at all")["ok"])
 
 

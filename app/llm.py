@@ -17562,9 +17562,9 @@ def _run_quest_parser(
             )
             progress = qo.run_progress_pass(narration, player_input, active=inputs["active_quests"], ask=ask)
             typed = qo.typed_accepts(player_input, inputs["open_offers"])
-            parsed = {"new": offers["new"], "updates": [*typed, *progress["updates"]]}
+            parsed = {"new": offers["new"], "updates": [*typed, *progress["updates"]], "worked": progress.get("worked") or []}
             record["offers"] = {k: offers.get(k) for k in ("candidates", "dropped", "fills", "checks")}
-            record["progress"] = {k: progress.get(k) for k in ("candidates", "checks")}
+            record["progress"] = {k: progress.get(k) for k in ("candidates", "checks", "worked")}
             record["asks"] = len(offers["fills"]) + len(offers["checks"]) + len(progress["checks"])
             record["event"] = "checked" if (offers["candidates"] or progress["candidates"]) else "no_candidates"
             # QUEST marks were read as hints above; only the narrator's
@@ -17576,7 +17576,7 @@ def _run_quest_parser(
             changes = dict(parsed, source="checked")
         else:
             changes = qp.merge_marks(parsed, marks)
-        if isinstance(changes, dict) and (changes.get("new") or changes.get("updates")):
+        if isinstance(changes, dict) and (changes.get("new") or changes.get("updates") or changes.get("worked")):
             turn["quest_changes"] = changes
         record["proposal"] = changes
         if record["event"] == "skipped" and marks and mode != "checked":
