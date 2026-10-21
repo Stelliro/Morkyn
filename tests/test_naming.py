@@ -308,5 +308,21 @@ class TestLedgerIsWriteOnce(unittest.TestCase):
             self.assertEqual(naming.ledger_lookup(conn, "letter"), "Corvin Marrow")
 
 
+class TestAskedOfThePersonSpokenTo(unittest.TestCase):
+    """8B run 152f, T2: "What do they call you?" put "The name is Something." in the prose."""
+
+    def test_the_person_asked_answers_and_no_contract_is_forced(self):
+        conn = _fresh([("narration", "Something about them feels wrong. Gideon wipes his hands.")])
+        with conn:
+            got = naming.resolve_name_demand(
+                conn, '"Thanks. What do they call you?" Then I walk past the tannery to the guild\'s office.', turn=2
+            )
+            self.assertFalse(got["asked"])
+            self.assertIsNone(naming.naming_contract(got))
+
+    def test_something_is_no_name(self):
+        self.assertEqual(naming.proper_names_in("Something about them feels wrong. Nothing moves."), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -64,6 +64,9 @@ _DEMAND_PATTERNS: tuple[tuple[str, str], ...] = (
 )
 
 _COMPILED = tuple((re.compile(p, re.I), kind) for p, kind in _DEMAND_PATTERNS)
+_ASKS_YOU_RE = re.compile(
+    r"\b(?:call|calls)\s+you\b|\b(?:are|were)\s+you\s+called\b|\byour\s+name\b|\bwho\s+are\s+you\b", re.I
+)
 
 # Words that look like names because they start a sentence or a title.
 _NOT_A_NAME = {
@@ -73,6 +76,10 @@ _NOT_A_NAME = {
     "for", "from", "with", "without", "north", "south", "east", "west", "yes", "no",
     "someone", "somebody", "nobody", "everyone", "stranger", "unknown", "none",
     "his", "her", "their", "its", "one", "two", "three", "sir", "madam", "lord", "lady",
+    # "Something about them feels wrong" gave "Something" as a name (8B run 152f, T2).
+    "something", "nothing", "anything", "everything", "somewhere", "nowhere", "anyone", "anybody",
+    "everybody", "perhaps", "maybe", "still", "even", "only", "just", "now", "once", "again", "inside",
+    "outside", "behind", "ahead", "above", "below", "beyond", "across", "around", "near", "far",
 }
 
 _PROPER_RE = re.compile(r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,2})\b")
@@ -306,6 +313,12 @@ def resolve_name_demand(
     if intent["kind"] == "self" and str(player_name or "").strip():
         result.update(subject="self", name=str(player_name).strip(), source="player")
         return result
+    # Asked of the person spoken to ("What do they call you?", "your name"):
+    # they answer with their own name, which the world already holds. The
+    # contract took its subject from "past the tannery" elsewhere in the line
+    # and put "The name is Something." in the prose (8B run 152f, T2).
+    if intent["kind"] == "person" and _ASKS_YOU_RE.search(str(player_input or "")):
+        return {**result, "asked": False}
 
     subject = subject_key(player_input, known_names) or "unnamed"
     result["subject"] = subject
