@@ -350,6 +350,18 @@ def init_db() -> None:
                 FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS faded_people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                npc_id INTEGER NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                location_id INTEGER NOT NULL DEFAULT 0,
+                turn_faded INTEGER NOT NULL DEFAULT 0,
+                record TEXT NOT NULL DEFAULT '{}',
+                aliases TEXT NOT NULL DEFAULT '[]',
+                conversation_ids TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS turn_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 turn INTEGER NOT NULL,
