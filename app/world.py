@@ -25590,8 +25590,13 @@ def _action_cost_kind(player_line: str, context: dict[str, Any], ability: dict[s
     # plan, a case or a message told ("tell Nell I'll take the matter to the
     # reeve") is not this turn's act. Speech stays for the talk readers.
     try:
-        from app.act_clauses import acts_now
+        from app.act_clauses import acts_now, is_all_speech
 
+        # A line that is all speech is talk, whatever its words name: '"I'll
+        # take the east district hauling ... which warehouse do I bring the
+        # goods to?"' was costed as general work (8B run 152f, T4).
+        if not ability and is_all_speech(line):
+            return "talk"
         line = acts_now(line, keep_speech=True)
     except Exception:
         pass
