@@ -23,6 +23,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Fixed
+- [CLAUDE] The package workflow did not parse (an unquoted colon in a step name), so the `v0.10.0-dev.15` tag built nothing; the Intel-Mac CPU pack also named the retired `macos-13` runner, now `macos-15-intel`. Both found by actionlint. The dev.15 archives were built from main by a manual run and attached to the release by hand, because the tag still holds the broken file. - `.github/workflows/package.yml`
+
 ## [0.10.0-dev.15] - 2026-10-22
 
 > Pre-release on the way to `0.10.0`. The first packaged build: a small Windows exe and Linux/macOS builds from `morkyn_app.py`, with llama-cpp-python split out into runtime packs per accelerator (installed for the detected GPU, or chosen, or a custom build) and a version picker that installs any release and hands over to it at start. Persuasion difficulty now follows what is asked: one small ask judges how many people would refuse, so a plain question is trivial and a strongroom key stays hard.
