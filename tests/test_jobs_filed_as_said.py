@@ -309,6 +309,16 @@ class PayIsAnEngineLedger(unittest.TestCase):
                                narration=line, player_input=DOCK_INPUT, turn=1)
         self.assertFalse(any(entry.startswith("Pay owed") for entry in _journal(self.conn)), _journal(self.conn))
 
+    def test_the_speakers_own_duty_is_no_job_and_a_question_is_no_yes(self):
+        # 8B run 152b, T12: Verity's "I've got to see the name on the delivery" was filed and taken on
+        # "Who signs for it?".
+        self.assertTrue(qo.speakers_own_task("I’ve got to see the name on the delivery."))
+        self.assertFalse(qo.speakers_own_task("I need you to see the name on the delivery."))
+        self.assertFalse(qo.speakers_own_task("I need someone to haul these crates."))
+        self.assertFalse(qo.speakers_own_task("The Hesperian's crates want loading before the tide"))
+        self.assertFalse(qp.player_accepts('"It\'s from the guild office. Who signs for it?"'))
+        self.assertTrue(qp.player_accepts('"Where do I sign? I\'ll sign for it now."'))
+
     def test_closing_the_job_pays_once_and_settles(self):
         qid = _file_crates_job(self.conn)
         before = _gold(self.conn)
