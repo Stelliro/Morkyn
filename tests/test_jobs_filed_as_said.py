@@ -328,6 +328,15 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertFalse(qo.requirement_not_task("You need to haul the nets in before the tide."))
         self.assertFalse(qo.requirement_not_task("Bring the crate to the shipwrights."))
 
+    def test_work_someone_else_holds_is_no_offer_and_a_reported_question_is_no_yes(self):
+        # 8B run 152d, T1: "That's the guild hall. They'll have work for you, if you can prove you're worth the
+        # trouble." was filed and taken on "I ... ask the nearest worker where a flat-runner signs on".
+        line = "That's the guild hall. They'll have work for you, if you can prove you're worth the trouble."
+        self.assertEqual(qo._code_veto(line, asked_for_work=True), "work_held_by_someone_else")
+        self.assertEqual(qo._code_veto("The guild has work for you. I've a job for you too: the nets.", asked_for_work=True), "")
+        self.assertFalse(qp.player_accepts("I walk down to the dock and ask the nearest worker where a flat-runner signs on for salvage work."))
+        self.assertTrue(qp.player_accepts("I sign on for the salvage work."))
+
     def test_the_step_is_never_cut_mid_word(self):
         # 8B run 152c, T3: the step "... without a bit of pr" reached the narrator, which then wrote "a reco.".
         task = ("Carry the guild's three crates of salvaged tools down to the shipwrights before the tide turns. "
