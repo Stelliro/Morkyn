@@ -2361,9 +2361,12 @@ def apply_quest_changes(
             code = f"Q{quest_id}"
             giver = f" (from {item['giver_name']})" if item["giver_name"] else ""
             _journal(conn, turn, f"New job offered: {item['title']}{giver}")
-            if item["reward"]["gold"] or item["reward"]["text"]:
+            if item["reward"]["gold"]:
                 # The pay the giver promised, on the ledger from the start:
-                # who owes it, how much, for which job.
+                # who owes it, how much, for which job. Only an amount the
+                # offer named: the reward create_quest fills in for a job with
+                # no amount was journaled as "Pay owed: 15 gold (from Verity
+                # Cotter)" for a line that promised nothing (8B run 152b, T12).
                 owed = conn.execute("SELECT reward_gold FROM quests WHERE id = ?", (int(quest_id),)).fetchone()
                 amount = int(owed["reward_gold"] or 0) if owed else 0
                 if amount:

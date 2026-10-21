@@ -567,7 +567,10 @@ def card_to_proposal(candidate: dict[str, Any], card: dict[str, Any], check: dic
         "giver": giver,
         "status": "offered",
         "steps": [{"title": s, "description": s, "location": card.get("place") or ""} for s in card["steps"]],
-        "reward": {"gold": card.get("gold") or 0, "xp": 0, "items": [], "text": card.get("pay") or ""},
+        # A pay field that names no pay is empty ("They'll want to sign for it",
+        # 8B run 152b, T12).
+        "reward": {"gold": card.get("gold") or 0, "xp": 0, "items": [],
+                   "text": card.get("pay") if card.get("pay") and _names_pay(str(card.get("pay"))) else ""},
         "difficulty": "normal",
         "timer_turns": 0,
         "offer_line": quote[:300],

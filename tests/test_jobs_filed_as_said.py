@@ -295,6 +295,20 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertTrue(any(line == f"Pay owed: 30 gold (from Rafe) for Q{qid} Load the Hesperian's crates"
                             for line in _journal(self.conn)), _journal(self.conn))
 
+    def test_no_amount_named_is_no_pay_owed(self):
+        # 8B run 152b, T12: "Pay owed: 15 gold (from Verity Cotter)" for a card whose pay was
+        # "They'll want to sign for it" and whose gold was 0 (the 15 was create_quest's default).
+        card = {**CRATES_CARD, "pay": "They'll want to sign for it", "gold": 0}
+        line = "Rafe [[B]] jerks his chin at the stack. \"I've a job for you. The Hesperian's crates want loading before the tide.\""
+        ask, _calls = _fake_ask(card)
+        report = qo.run_offer_pass(line, DOCK_INPUT, npcs=RAFE, asked_for_work=True, ask=ask)
+        self.assertEqual(report["new"][0]["reward"]["text"], "")
+        self.conn.execute("DELETE FROM npcs WHERE code = 'B'")
+        self.conn.execute("INSERT INTO npcs (code, location_id, name, role) VALUES ('B', 1, 'Rafe', 'dock foreman')")
+        qp.apply_quest_changes(self.conn, {"new": report["new"], "updates": [], "source": "checked"},
+                               narration=line, player_input=DOCK_INPUT, turn=1)
+        self.assertFalse(any(entry.startswith("Pay owed") for entry in _journal(self.conn)), _journal(self.conn))
+
     def test_closing_the_job_pays_once_and_settles(self):
         qid = _file_crates_job(self.conn)
         before = _gold(self.conn)
