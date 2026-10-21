@@ -103,6 +103,13 @@ belong to, with the date).
   not, and what could still fix or mitigate it, including building something new for it
   (Stell's example: a dedicated new mechanism such as "the neural welding rig") rather than
   another rule.
+- **Issues first, turn time later** (2026-10-22): "dont worry about how long the tunrs take for
+  the time being as we can always attempt to fix turn time later after the issues are fixed and
+  we have something more concrete". A mechanism that adds a small ask per turn is fine while the
+  fault families are being fixed; log the timings, optimise afterwards. Work order: the five
+  mechanisms (people sketches, places with insides, jobs filed as said with owed pay, pronoun
+  repair limits, acts by grammar + energy rebalance), then 8B runs to see if they worked, then
+  other fixes for what did not.
 - **Roadmap:** stable 0.10 first, then 1.0 as an exe or package. Test saves can pile up until
   then; the cleanup and template saves happen at 1.0.
   Stell (2026-10-18, after 0.10.0-dev.14 was pushed and released): "we should probably leave a
