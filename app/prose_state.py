@@ -1058,14 +1058,37 @@ def pronoun_evidence(text: str, names: list[str]) -> dict[str, int]:
     return counts
 
 
+def _object_pronoun_of(sentence: str, key: str) -> bool:
+    """The sentence holds an object him/her of this set ("flicks to him", "clinging to her.")."""
+    if key == "he":
+        return bool(re.search(r"\bhim\b", sentence, re.I))
+    for match in re.finditer(r"\bher\b", sentence, re.I):
+        nxt = _next_word(sentence, match.end())
+        if not nxt or nxt in _OBJECT_FOLLOWERS:
+            return True
+    return False
+
+
 def repair_pinned_pronouns(
-    text: str, cast: list[dict[str, Any]], *, not_people: tuple[str, ...] | list[str] = ()
+    text: str,
+    cast: list[dict[str, Any]],
+    *,
+    not_people: tuple[str, ...] | list[str] = (),
+    others: tuple[str, ...] | list[str] = (),
 ) -> tuple[str, list[dict[str, Any]]]:
     """Mend a pinned he/she that flipped, in sentences only about that one person.
 
     ``cast``: [{"names": ["Min Yardley", "Min"], "key": "she"}, ...]. ``not_people``:
     capitalised names that are places or things, so they do not count as a
-    second person. Returns the text and one entry per mended sentence.
+    second person. ``others``: names of known people with no pin; any of them in
+    a sentence is a second person wherever it stands. Returns the text and one
+    entry per mended sentence.
+
+    Only the pronouns after the pinned name are mended, in a sentence that names
+    that person and no one else, and in the next sentence when it names no one.
+    Anything less certain is left as written: a wrong flip ("You call out to him"
+    about Rafe made "her" for Mabel named later, 8B run 150, T24) is worse than
+    the slip it meant to mend.
     """
     source = str(text or "")
     people = []
@@ -1084,6 +1107,14 @@ def repair_pinned_pronouns(
     for name in not_people or ():
         known_caps.update(w for w in re.findall(r"[A-Z][\w'’-]*", str(name)))
     known_caps.update({"You", "Your", "Yours", "I", "God", "Gods"})
+    other_names = [str(n).strip() for n in others or () if str(n or "").strip()]
+    pinned_names = {str(n).strip().lower() for entry in cast or [] for n in (entry or {}).get("names") or []}
+    other_names = [n for n in other_names if n.lower() not in pinned_names]
+    others_re = (
+        re.compile(r"\b(?:" + "|".join(re.escape(n) for n in sorted(other_names, key=len, reverse=True)) + r")\b")
+        if other_names
+        else None
+    )
     masked = _mask_speech(source)
     pieces: list[tuple[int, int]] = []
     start = 0
@@ -1109,6 +1140,10 @@ def repair_pinned_pronouns(
         # An animal or a boat can be the "her": "Odo finishes grooming the mare
         # and steps back, patting her gently" became "patting his" (7B run 39, T2).
         stranger = bool(_PERSON_NOUN_RE.search(plain) or _GENDERED_THING_RE.search(plain))
+        if not stranger and others_re is not None and others_re.search(plain):
+            # A known person with no pin, even at the start of the sentence
+            # where every word has a capital.
+            stranger = True
         if not stranger:
             # A code tag is not a second person: "She gestures towards the inn,
             # The Gilded Heron [[L2]]" (7B run 20, T1) kept the wrong "She".
@@ -1130,23 +1165,29 @@ def repair_pinned_pronouns(
             if has_he and has_she:
                 focus = None
                 continue
-            # The name as an object after a pronoun subject is someone else's
-            # sentence: "Her gaze flicks to Rolf, then to you" and "He nods ...
-            # then turns his attention to Veyra" were pinned to the one named
-            # and had their pronouns flipped (8B run 146, T70, T72).
+            # A he/she before the name is someone else's clause: "Her gaze flicks
+            # to Rolf" and "He nods ... then turns his attention to Veyra" (8B
+            # run 146, T70, T72), "You call out to him" with Mabel named later
+            # and "Her gaze flicked between you and Rafe" (8B run 150, T24,
+            # T36). The sentence and the one after it stay as written.
             name_at = named[0]["re"].search(plain)
-            first_pronoun = re.search(r"\b(?:he|him|his|she|her|hers)\b", plain, re.I)
-            if (
-                name_at is not None
-                and first_pronoun is not None
-                and first_pronoun.start() < name_at.start()
-                and re.search(r"\b(?:to|at|toward|towards|with|from|for|beside|behind|past|on|of|against|between|near|"
-                              r"after|before|over|under|like|than|about)\s+(?:the\s+)?(?:\w+\s+)?$", plain[:name_at.start()], re.I)
+            if name_at is not None and re.search(
+                r"\b(?:he|him|his|himself|she|her|hers|herself)\b", plain[: name_at.start()], re.I
             ):
                 focus = None
                 continue
+            # An object him/her of the other set beside the named person is the
+            # one they act on: "Lettice's gaze flicks to him, and he shrinks into
+            # his corner" was Hugh's (8B run 149, T21).
+            wrong_set = "she" if named[0]["key"] == "he" else "he"
+            if _object_pronoun_of(plain[name_at.end() if name_at else 0:], wrong_set):
+                focus = None
+                continue
+        span_from = 0
         if len(named) == 1 and not stranger:
             focus, carried, person = named[0], 0, named[0]
+            name_at = person["re"].search(plain)
+            span_from = name_at.end() if name_at else len(plain)
         elif not named and not stranger and focus is not None and carried < 1:
             carried += 1
             person = focus
@@ -1155,10 +1196,12 @@ def repair_pinned_pronouns(
             continue
         target = person["key"]
         wrong = "she" if target == "he" else "he"
-        if _WORDS_OF[target].search(plain) or not _WORDS_OF[wrong].search(plain):
+        if _WORDS_OF[target].search(plain) or not _WORDS_OF[wrong].search(plain[span_from:]):
             continue
         changed = []
         for word in _WORDS_OF[wrong].finditer(plain):
+            if word.start() < span_from:
+                continue
             new = _swap(word.group(0), target, plain, word.end())
             edits.append((begin + word.start(), begin + word.end(), new))
             changed.append(f"{word.group(0)}->{new}")
