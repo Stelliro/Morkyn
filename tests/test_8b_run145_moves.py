@@ -113,6 +113,33 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
             self.assertEqual(world._movement_intent(conn, line), "travel")
             conn.rollback()
 
+    def test_a_carry_to_a_place_not_made_yet_is_a_walk(self):
+        # 8B run 152b, T11: "I carry the crate out and along the waterfront to the shipwrights' yard" stayed in the
+        # guild office while the prose set the crate down in the yard; the yard was not made yet.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect().closing() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player").fetchone()[0])
+            office = world._upsert_location(conn, "The Guild Office", "", parent_id=town, kind="")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(office),))
+            self.assertEqual(
+                world._movement_intent(conn, "I carry the crate out and along the waterfront to the shipwrights' yard."), "travel"
+            )
+            # Speech and a thing set down are not where the line goes.
+            self.assertNotEqual(world._movement_intent(conn, "\"Take it to the shipyard,\" I tell him."), "travel")
+            self.assertNotEqual(world._movement_intent(conn, "I set the crate down beside the yard gate."), "travel")
+            prose = ("You carry the heavy, dented metal box out of The Guild Office [[L4]] and down the waterfront path. "
+                     "The shipwrights' yard is just ahead, its gates open and the scent of sawdust and tar thick in the air. "
+                     "You set the box down near the edge of the yard, where the workers are busy hammering planks together.")
+            line = "I carry the crate out and along the waterfront to the shipwrights' yard."
+            result = {"narration": prose, "player": {}}
+            report = world.resolve_movement(conn, result, line, intent="travel", narration=prose)
+            self.assertIn("yard", str(report.get("destination") or "").lower(), report)
+            conn.rollback()
+
     def test_leaving_coin_on_a_counter_is_no_journey(self):
         # 8B run 146, T17: "I leave the six gold on his counter ... I turn for the door" kept a MOVE to the wreck.
         from app import world

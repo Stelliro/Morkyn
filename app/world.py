@@ -10342,6 +10342,21 @@ def _is_building(name: str, row: Any = None) -> bool:
     return bool(venues.venue_kind_from_name(name))
 
 
+def _goes_to_a_place_word(player_input: str) -> bool:
+    """The line's own (unquoted) words go "to the ... <building or open-ground word>"."""
+    nouns = set(_OUTBUILDING_WORDS) | set(_OUTDOOR_AREA_WORDS) | set(_CIVIC_BUILDING_WORDS)
+    for kind in venues.VENUE_KINDS:
+        label = venues.kind_label(kind).lower().split()
+        if label:
+            nouns.add(label[-1])
+    line = _destination_text(player_input).lower()
+    pattern = (
+        r"\b(?:to|into|toward|towards|up\s+to|down\s+to|back\s+to|over\s+to|across\s+to)\s+the\s+"
+        r"(?:[\w'’-]+\s+){0,3}?(?:" + "|".join(re.escape(n) for n in sorted(nouns, key=len, reverse=True)) + r")s?\b"
+    )
+    return bool(re.search(pattern, line))
+
+
 def _movement_intent(conn, player_input: str) -> str:
     """The intent movement resolution reads: the line's main intent, or "travel" when a walk rides inside another.
 
@@ -10363,6 +10378,14 @@ def _movement_intent(conn, player_input: str) -> str:
         current_name = str((here["name"] if here else "") or "")
         dest = _movement_destination_from_input(rows, player_input, current_name)
         if dest is None:
+            # A place not made yet, named as where the line goes by a building or
+            # open-ground word: "I carry the crate out and along the waterfront to
+            # the shipwrights' yard" stayed in the guild office while the prose
+            # set the crate down in the yard (8B run 152b, T11). The venue rules
+            # then make it only when the prose reaches it.
+            if _goes_to_a_place_word(player_input):
+                turn_ledger.note("movement", "walk_inside_another_intent", primary=primary, destination="(new place)")
+                return "travel"
             return primary
         # Named as where the line goes ("to the tally house", "back to the
         # dock"), not merely named ("the tally house's ledger says").
@@ -11173,7 +11196,9 @@ _OUTDOOR_AREA_ONWARD_RE = re.compile(
 
 _OUTDOOR_WALK_VERB_RE = re.compile(
     r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|cross\w*|wander\w*|"
-    r"march\w*|climb\w*|wade\w*|pick\s+my\s+way)\b",
+    r"march\w*|climb\w*|wade\w*|pick\s+my\s+way|"
+    # Carrying a load somewhere is walking there (8B run 152b, T11).
+    r"carry|carries|carrying|haul\w*|lug\w*)\b",
     re.IGNORECASE,
 )
 
@@ -11418,6 +11443,8 @@ _CIVIC_BUILDING_WORDS = (
     # went in (8B run 151, T9).
     "warehouse", "warehouses", "storehouse", "boathouse", "smokehouse", "salt house", "sail loft", "net shed",
     "chandlery", "cooperage", "ropewalk", "fish market", "market hall",
+    # "to the shipwrights' yard" (8B run 152b, T11).
+    "shipyard", "boatyard", "yard",
 )
 
 
