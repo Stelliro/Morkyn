@@ -212,7 +212,11 @@ def player_accepts(player_input: str) -> bool:
 _QUOTED_RE = re.compile(r'"[^"]*"|“[^”]*”')
 _QUESTION_SENTENCE_RE = re.compile(r"[^.!?\"“”]*\?")
 _REPORTED_QUESTION_RE = re.compile(
-    r"\b(?:ask|asks|asking|wonder|wonders|enquire|inquire)\b[^.!?\"“”]{0,40}?\b(?:where|how|whether|if|who|what|when|which|why)\b[^.!?\"“”]*",
+    r"\b(?:ask|asks|asking|wonder|wonders|enquire|inquire)\b[^.!?\"“”]{0,40}?\b(?:where|how|whether|if|who|what|when|which|why)\b[^.!?\"“”]*"
+    # A clause that says where or how the player would do it accepts nothing:
+    # "I'm told this is where I sign on for salvage work" took the job (8B run
+    # 152e, T4).
+    r"|\b(?:where|how|whether|when|what)\s+(?:i|we)\b[^.!?\"“”,;]*",
     re.I,
 )
 # The player holds off or says no (7B run 7, T4-T5): "I haven't said yes yet",
