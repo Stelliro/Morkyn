@@ -8610,6 +8610,12 @@ _FEM_WORDS = {"she", "her", "hers", "woman", "women", "girl", "mother", "sister"
 
 
 _QUOTED_SPAN_RE = re.compile(r"\"[^\"]*\"|“[^”]*”")
+# A person named by a role or a kind ("the ferry captain", "an old woman").
+_FIGURE_NOUN_PATTERN = (
+    r"(?:man|men|woman|women|boy|girl|lad|lass|child|stranger|figure|guard|soldier|sailor|merchant|priest|"
+    r"priestess|widow|keeper|clerk|captain|youth|elder|innkeeper|smith|fisherman|fishwife|bargeman|ferryman|"
+    r"dockhand|deckhand|crewman|watchman|master|mistress|cook|barkeep|bartender|trader|vendor|old-timer)\b"
+)
 _KIN_OF_SOMEONE_RE = re.compile(
     # Not "his"/"her": "she strokes her mother's hair" still tells who she is.
     r"\b(?:my|your|our|their|the)\s+(?:\w+['’]s\s+)?"
@@ -8674,9 +8680,22 @@ def infer_npc_pronouns(name: str, narration: str, others: Sequence[str] = ()) ->
                 return True
         return False
 
-    masc = fem = 0
+    def _figure_leads(sentence: str) -> bool:
+        """A role figure ("the ferry captain") comes before the first he/she: the sentence is theirs."""
+        plain = _QUOTED_SPAN_RE.sub(" ", sentence)
+        first = re.search(r"\b(?:he|him|his|she|her|hers)\b", plain, re.I)
+        head = plain[: first.start()] if first else plain
+        return bool(re.search(r"\b(?:the|a|an)\s+(?:[a-z'-]+\s+){0,2}" + _FIGURE_NOUN_PATTERN, head, re.I))
+
+    # One vote per sentence: a sentence about this person that uses only he-words
+    # or only she-words. A sentence using both says nothing about which is theirs.
+    votes = {"he": 0, "she": 0}
     for index, sentence in enumerate(sentences):
-        if not _mentions(sentence):
+        # Named in the narration, not only inside someone's speech: Elara Veyne
+        # was pinned "he" off the player's '"Who is Elara Veyne, and where would
+        # I find her?" you ask.' and the ferry captain's "his desk" after it
+        # (8B run 146, T39).
+        if not _mentions(_QUOTED_SPAN_RE.sub(" ", sentence)):
             continue
         # The sentence has to be about this NPC alone. Sharing it with another
         # named character is how a weaver introduced beside "a young boy, Liora"
@@ -8689,7 +8708,7 @@ def infer_npc_pronouns(name: str, narration: str, others: Sequence[str] = ()) ->
         # a one-sentence window pins virtually nothing.
         window = [sentence]
         nxt = sentences[index + 1] if index + 1 < len(sentences) else ""
-        if nxt and not _mentions(nxt) and not _names_someone_else(nxt):
+        if nxt and not _mentions(nxt) and not _names_someone_else(nxt) and not _figure_leads(nxt):
             window.append(nxt)
         for part in window:
             # Speech and someone's kin are not this person (7B run 10, T0: the
@@ -8698,11 +8717,17 @@ def infer_npc_pronouns(name: str, narration: str, others: Sequence[str] = ()) ->
             part = _QUOTED_SPAN_RE.sub(" ", part)
             part = _KIN_OF_SOMEONE_RE.sub(" ", part)
             words = set(re.findall(r"[a-z]+", part.lower()))
-            masc += len(words & _MASC_WORDS)
-            fem += len(words & _FEM_WORDS)
-    if masc and not fem:
+            masc = bool(words & _MASC_WORDS)
+            fem = bool(words & _FEM_WORDS)
+            if masc != fem:
+                votes["he" if masc else "she"] += 1
+    # The clear majority of the scene's sentences pins; a tie or a near split
+    # (less than two to one) waits for a later turn. A wrong pin is stated as
+    # truth every turn after; an unpinned person only waits.
+    he, she = votes["he"], votes["she"]
+    if he > she and he >= 2 * she:
         return "he"
-    if fem and not masc:
+    if she > he and she >= 2 * he:
         return "she"
     return ""
 
@@ -23548,7 +23573,19 @@ def _reconcile_prose_with_state(
                 person["key"] = other
                 turn_ledger.note("npc", "pronoun_pin_flipped_to_prose", name=person["names"][0], pronouns=other,
                                  evidence=evidence)
-        text, mended = prose_state.repair_pinned_pronouns(text, cast, not_people=not_people)
+        pinned_names = {n.lower() for person in cast for n in person["names"]}
+        # Known people with no pin (and their first names): a second person in
+        # the sentence wherever they stand.
+        unpinned = []
+        for r in conn.execute("SELECT name FROM npcs").fetchall():
+            full = str(r["name"] or "").strip()
+            if not full or full.lower() in pinned_names:
+                continue
+            unpinned.append(full)
+            first = full.split(" ")[0]
+            if first != full and len(first) > 2 and first.lower() not in pinned_names:
+                unpinned.append(first)
+        text, mended = prose_state.repair_pinned_pronouns(text, cast, not_people=not_people, others=unpinned)
         for entry in mended:
             report["trimmed"].append({"why": "pronouns_kept", **entry})
     except Exception:
