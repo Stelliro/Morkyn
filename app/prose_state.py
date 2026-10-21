@@ -793,6 +793,15 @@ def _act_is_players_now(text: str, match: re.Match, clause: str) -> bool:
 def declared_act(own_line: str) -> dict[str, Any] | None:
     """The hands-on act the player's own line declares: {"verb", "family", "phrase"}, or None."""
     text = str(own_line or "")
+    # Only the clauses the player does now (app/act_clauses): a plan, a case,
+    # a message for someone or a thing set in the mind is no act ("fix it in
+    # my memory" rolled craft, 8B run 151 T13). Offsets are kept.
+    try:
+        from app.act_clauses import acts_now
+
+        text = acts_now(text, keep_speech=True)
+    except Exception:
+        pass
     best: tuple[int, str, str] | None = None
     for family, verbs in _ACT_FAMILIES:
         for verb in verbs:
