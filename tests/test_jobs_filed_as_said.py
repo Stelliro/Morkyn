@@ -319,6 +319,15 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertFalse(qp.player_accepts('"It\'s from the guild office. Who signs for it?"'))
         self.assertTrue(qp.player_accepts('"Where do I sign? I\'ll sign for it now."'))
 
+    def test_a_question_for_the_speaker_and_a_list_of_requirements_are_no_job(self):
+        # 8B run 152c, T2: Silas's "Got a job for me?" made a candidate, and "You need a name, a record, and a
+        # bit of coin to get started" was filed as "Runners for the Guild".
+        self.assertEqual(qo._carries_offer("Morning. Got a job for me?", asked_for_work=False), "")
+        self.assertTrue(qo._carries_offer("Got a job for you, if you want it?", asked_for_work=False))
+        self.assertTrue(qo.requirement_not_task("You need a name, a record, and a bit of coin to get started."))
+        self.assertFalse(qo.requirement_not_task("You need to haul the nets in before the tide."))
+        self.assertFalse(qo.requirement_not_task("Bring the crate to the shipwrights."))
+
     def test_closing_the_job_pays_once_and_settles(self):
         qid = _file_crates_job(self.conn)
         before = _gold(self.conn)
