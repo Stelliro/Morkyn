@@ -10419,6 +10419,39 @@ def _leaves_something_else(here_row: Any, player_input: str) -> bool:
     return True
 
 
+_PLAYER_DEED_NOTE_RE = re.compile(r"^\W*(?:you|the\s+player)\s+(?:have\s+|has\s+|had\s+)?(?P<verb>[a-z]+)\b", re.I)
+_NOT_A_DEED = frozenset({"are", "were", "was", "is", "seem", "seemed", "feel", "felt", "know", "knew", "owe", "owed",
+                         "hear", "heard", "see", "saw", "notice", "noticed", "learn", "learned", "learnt", "need",
+                         "needed", "can", "could", "may", "might", "must", "will", "would", "should"})
+
+
+def _note_claims_unasked_player_act(content: str, player_input: str) -> bool:
+    """A journal note says "You <did something>" that the player's own line does not do."""
+    match = _PLAYER_DEED_NOTE_RE.match(str(content or ""))
+    if not match:
+        return False
+    verb = match.group("verb").lower()
+    if verb in _NOT_A_DEED:
+        return False
+    try:
+        from app.act_clauses import acts_now
+
+        own = acts_now(_player_line(player_input)).lower()
+    except Exception:
+        own = str(player_input or "").lower()
+    base = _IRREGULAR_PAST.get(verb) or re.sub(r"(?:ied|ed|es|s|ing)$", "", verb) or verb
+    stem = base[:4] if len(base) > 4 else base
+    return not re.search(rf"\b{re.escape(stem)}", own)
+
+
+_IRREGULAR_PAST = {
+    "took": "take", "went": "go", "gave": "give", "made": "make", "found": "find", "bought": "buy", "paid": "pay",
+    "left": "leave", "told": "tell", "sat": "sit", "ran": "run", "brought": "bring", "caught": "catch", "held": "hold",
+    "swam": "swim", "said": "say", "spoke": "speak", "met": "meet", "got": "get", "sold": "sell", "threw": "throw",
+    "dug": "dig", "hid": "hide", "drew": "draw", "struck": "strik", "stole": "steal", "kept": "keep",
+}
+
+
 def _goes_to_a_place_word(player_input: str) -> bool:
     """The line's own (unquoted) words go "to the ... <building or open-ground word>"."""
     nouns = set(_OUTBUILDING_WORDS) | set(_OUTDOOR_AREA_WORDS) | set(_CIVIC_BUILDING_WORDS)
@@ -25008,6 +25041,13 @@ def apply_turn(
             # under a job stays a fact about that job (7B run 5 #130).
             if filed_as == "fact" and not _fact_shown(str(entry.get("content") or ""), _narration_text(result) or narration, player_input):
                 turn_ledger.note("journal", "unshown_fact_dropped", content=str(entry.get("content") or "")[:200])
+                continue
+            # Whatever it is filed under, a note of the player's own deed that
+            # the player's line never did is not theirs: an "event" "You signed
+            # on for salvage work at the Harbour Reeve's office" on a line that
+            # only asked where to sign on (8B run 152e, T1).
+            if _note_claims_unasked_player_act(str(entry.get("content") or ""), player_input):
+                turn_ledger.note("journal", "player_act_note_dropped", kind=filed_as, content=str(entry.get("content") or "")[:200])
                 continue
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
