@@ -10385,6 +10385,28 @@ def _is_building(name: str, row: Any = None) -> bool:
     return bool(venues.venue_kind_from_name(name))
 
 
+_OUT_OF_RE = re.compile(r"\bout\s+of\s+(?:the\s+|my\s+|his\s+|her\s+|their\s+|a\s+)?(?P<thing>[\w'’-]+(?:\s+[\w'’-]+){0,2})", re.I)
+
+
+def _leaves_something_else(here_row: Any, player_input: str) -> bool:
+    """The line climbs or steps "out of" a thing that is not the place it stands in (a hull, a boat, a cart)."""
+    line = _destination_text(player_input)
+    found = list(_OUT_OF_RE.finditer(line))
+    if not found:
+        return False
+    own = {w for w in re.findall(r"[a-z]+", str(here_row["name"] or "").lower()) if len(w) >= 3} - {"the"}
+    kind = str(venues._field(here_row, "kind", "") or "")
+    if kind:
+        own |= set(re.findall(r"[a-z]+", venues.kind_label(kind).lower()))
+    building = {w.split()[-1] for w in _CIVIC_BUILDING_WORDS} | set(_OUTBUILDING_WORDS) | {
+        "inn", "tavern", "shop", "store", "house", "hall", "room", "building", "door", "doorway", "place"}
+    for match in found:
+        words = set(re.findall(r"[a-z]+", match.group("thing").lower()))
+        if words & own or words & building:
+            return False
+    return True
+
+
 def _goes_to_a_place_word(player_input: str) -> bool:
     """The line's own (unquoted) words go "to the ... <building or open-ground word>"."""
     nouns = set(_OUTBUILDING_WORDS) | set(_OUTDOOR_AREA_WORDS) | set(_CIVIC_BUILDING_WORDS)
@@ -10821,6 +10843,12 @@ def resolve_movement(
                 # Not inside anything, so "step back out" leaves nothing; the
                 # going-in that follows it still counts (playtest #33).
                 doorway = "enter"
+            if doorway == "exit" and _leaves_something_else(here_row, player_input):
+                # "climb back out of the hull onto the mud" at the Edge of the
+                # Settlement left the hull, not the place, and stood the player
+                # in the town (8B run 152e, T9).
+                turn_ledger.note("movement", "left_a_thing_not_the_place", place=str(here_row["name"] or ""))
+                doorway = ""
             if doorway == "exit" and inside_of:
                 parent = _location_row(conn, inside_of)
                 # Leaving for a place the line names: that place, not the

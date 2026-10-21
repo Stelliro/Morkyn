@@ -160,6 +160,19 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
             self.assertNotEqual(name, "The Harbour")
             conn.rollback()
 
+    def test_climbing_out_of_a_hull_does_not_leave_the_place(self):
+        # 8B run 152e, T9: "climb back out of the hull onto the mud" moved the player from the Edge of the
+        # Settlement to Saltmarrow.
+        from app import world
+
+        edge = {"name": "The Edge of the Settlement", "kind": ""}
+        self.assertTrue(world._leaves_something_else(edge, "I coil the rope and climb back out of the hull onto the mud."))
+        inn = {"name": "The Gull's Rest", "kind": "inn"}
+        self.assertFalse(world._leaves_something_else(inn, "I step out of the inn into the rain."))
+        office = {"name": "The Reeve's Office", "kind": ""}
+        self.assertFalse(world._leaves_something_else(office, "I walk out of the office."))
+        self.assertFalse(world._leaves_something_else(office, "I head back out."))
+
     def test_where_the_destination_stands_is_not_the_destination(self):
         # 8B run 152d, T2: "walk to the guild hall at the end of the dock" moved the player to The Dock.
         from app import world
