@@ -21,12 +21,20 @@ The split
    and the known hard shapes (a question back about what work is wanted, a
    bare demand to prove oneself) are dropped here. The speaker is the giver.
 2. ``build_fill_prompt``: one small ask per candidate line fills the card from
-   *that line alone*: does it offer work, what is the task, a title, steps,
-   the place and pay the line names. It never sees the roster, the open quests
-   or the player's acceptance; those are the engine's.
-3. ``build_check_prompt``: a second small ask answers three yes/no questions
-   against the paragraph: is this task offered to the player by the giver, is
-   it a specific piece of work, is it in the text. Any "no" drops the card.
+   *that line alone*: does it offer work, what is the task (in the line's own
+   words), a title, the place and pay the line names. No steps: the job's one
+   open step is the task as said, and the rest is written as play happens
+   (quests.log_job_progress; 8B run 150, T39 filed four invented steps from
+   "I've got a job for you, if you're up for it"). It never sees the roster,
+   the open quests or the player's acceptance; those are the engine's.
+   ``names_a_task``: the engine, not a model, then asks whether the card
+   names a thing, place or act that the offering line itself says. A line
+   that names none ("a job for you", "you'll be paid well") is no job yet.
+3. ``build_check_prompt``: a second small ask answers two yes/no questions
+   against the paragraph: is this task offered to the player by the giver,
+   is it in the text. Either "no" drops the card. (The old third question,
+   "is it a specific piece of work", said yes to bare offers run after run;
+   the engine's naming test above replaced it, 2026-10-22.)
 4. The surviving cards go to ``quest_parser.validate_quest_changes`` in the
    legacy proposal shape with ``_checked`` set: grounding, giver resolution,
    duplicates, retold offers, reward caps and the player's own acceptance stay
@@ -334,7 +342,6 @@ FILL_SHAPE: dict[str, Any] = {
     "offers_work": "true only when the speaker asks the player to do a specific piece of work, or agrees to the player doing one",
     "task": "the work itself, in the speaker's own words",
     "title": "three to eight words naming the work",
-    "steps": ["one to four concrete actions, in order"],
     "place": "where the work is, when the line says; else empty",
     "pay": "what is promised for it, in the line's words; else empty",
     "gold": "a number only when the line names an amount of coin, else 0",
@@ -400,32 +407,84 @@ def parse_fill(raw: Any) -> dict[str, Any] | None:
     title = re.sub(r"\s+", " ", str(data.get("title") or "")).strip(" .\"'")
     if not task and not title:
         return None
-    steps = data.get("steps")
-    if isinstance(steps, str):
-        steps = [steps]
-    step_titles = []
-    for step in steps or []:
-        if isinstance(step, dict):
-            step = step.get("title") or step.get("description") or ""
-        step = re.sub(r"\s+", " ", str(step or "")).strip()
-        if step:
-            step_titles.append(step[:120])
     gold = qp._int(data.get("gold"), 0)
+    # Steps a reply still carries are not read: the job's one open step is the
+    # task as the line says it, and the rest is written as play happens.
     return {
         "task": task[:400],
         "title": (title or task)[:80],
-        "steps": step_titles[:4] or [(task or title)[:120]],
+        "steps": [(task or title)[:120]],
         "place": re.sub(r"\s+", " ", str(data.get("place") or "")).strip()[:100],
         "pay": re.sub(r"\s+", " ", str(data.get("pay") or "")).strip()[:200],
         "gold": max(0, gold),
     }
 
 
+# Words that name no thing, place or act of their own: who is spoken to, being
+# willing, getting and having, pay and its size, time, and the job words
+# themselves (quest_parser._GENERIC_JOB_STEMS). "I've got a job for you, if
+# you're up for it" and "You'll be paid well for this" are made of nothing else.
+_NO_NAMING_WORDS = frozenset({
+    "i've", "i'll", "i'd", "i'm", "you've", "you'll", "you'd", "you're", "we've", "we'll", "we're", "it's", "that's",
+    "there's", "here's", "what's", "let's", "don't", "won't", "can't", "isn't", "aren't",
+    "got", "get", "gets", "getting", "have", "has", "had", "having", "need", "needs", "needed", "want", "wants",
+    "like", "would", "could", "should", "might", "must", "shall", "may", "can", "does", "did", "done", "doing",
+    "make", "makes", "made", "say", "said", "tell", "told", "know", "think", "reckon", "suppose", "see", "look",
+    "mind", "fancy", "willing", "ready", "interested", "keen", "able", "game", "sure", "maybe", "perhaps",
+    "someone", "somebody", "anyone", "anybody", "something", "anything", "nothing", "everything", "everyone",
+    "around", "here", "there", "now", "today", "tonight", "tomorrow", "soon", "later", "day", "days", "while",
+    "before", "after", "when", "until", "last", "once", "again",
+    "only", "even", "also", "too", "very", "really", "quite", "rather", "much", "many", "more", "most", "less",
+    "little", "lot", "lots", "bit", "few", "kind", "sort", "way", "well", "good", "fine", "fair", "decent",
+    "easy", "hard", "rough", "quick", "steady", "honest", "proper", "right", "real",
+    "paid", "pays", "paying", "wage", "wages", "coin", "coins", "gold", "silver", "copper", "money", "reward",
+    "rewarded", "price", "worth", "cut", "share", "fee", "hire", "hiring", "hired", "hand", "hands",
+    "yes", "aye", "okay", "please", "thanks", "if", "for", "with", "this", "that", "these", "those",
+    "yours", "mine", "ours", "theirs", "myself", "yourselves", "ourselves", "lass", "lad", "friend",
+    "offer", "offering", "need", "use", "used", "keep", "kept", "busy",
+})
+
+
+def _naming_stems(text: str, drop: set[str] | None = None) -> set[str]:
+    """The stems in ``text`` that could name a thing, place or act."""
+    out: set[str] = set()
+    for word in re.findall(r"[a-z][a-z'’]+", str(text or "").lower().replace("’", "'")):
+        if len(word) < 3 or word in _NO_NAMING_WORDS:
+            continue
+        stem = qp._stem(word)
+        if stem in qp._QUEST_STOP_STEMS or stem in qp._GENERIC_JOB_STEMS or (drop and stem in drop):
+            continue
+        out.add(stem)
+    return out
+
+
+def names_a_task(card: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
+    """
+    The words of the card that name a thing, place or act and that the
+    offering line itself says; [] when there are none (no job yet). No model.
+
+    Replaces the check's "is it a specific piece of work" question, which said
+    yes to "I've got a job for you, if you're up for it" (8B run 150, T39) and
+    to "You'll be paid well for this" (T72). The task, title and place the
+    fill wrote are read against the line: a task the line names is a job; a
+    card about crates the line never mentions is the fill's own idea.
+    """
+    line = str(candidate.get("line") or "")
+    speaker = candidate.get("speaker") if isinstance(candidate.get("speaker"), dict) else {}
+    # The speaker's own name and trade are who offers, not what is to be done.
+    drop = {qp._stem(w) for w in re.findall(r"[a-z]{3,}", f"{speaker.get('name') or ''} {speaker.get('role') or ''}".lower())}
+    said = _naming_stems(line, drop)
+    if not said:
+        return []
+    proposed = _naming_stems(f"{card.get('task') or ''} {card.get('title') or ''} {card.get('place') or ''}", drop)
+    return sorted(proposed & said)
+
+
 def build_check_prompt(
     candidate: dict[str, Any], card: dict[str, Any], player_input: str = "",
     open_jobs: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
-    """(system, user) for the check ask: three yes/no questions against the paragraph.
+    """(system, user) for the check ask: two yes/no questions against the paragraph.
 
     With ``open_jobs`` (the jobs already offered or taken, by code), a fourth
     question asks which of them, if any, this line tells again: a job retold
@@ -443,11 +502,9 @@ def build_check_prompt(
         "card": {"giver": giver, "title": card.get("title"), "task": card.get("task")},
         "questions": {
             "offered": f"Does {giver}, not the player, offer or assign this task to the player in the passage?",
-            "specific": "Is the task a specific piece of work the player could go and do, rather than a demand to prove "
-                        "oneself, a question about what work the player wants, or talk about the player's debt?",
             "in_text": "Is this task stated in the passage, not added to it?",
         },
-        "return": {"offered": "yes or no", "specific": "yes or no", "in_text": "yes or no", "why": "one short sentence"},
+        "return": {"offered": "yes or no", "in_text": "yes or no", "why": "one short sentence"},
     }
     jobs = [
         {"code": str(j.get("code") or ""), "title": str(j.get("title") or "")[:80], "giver": str(j.get("giver") or "")[:60]}
@@ -463,7 +520,11 @@ def build_check_prompt(
 
 
 def parse_check(raw: Any) -> dict[str, Any]:
-    """{"ok": bool, "offered", "specific", "in_text", "why"}; an unusable reply is not ok."""
+    """{"ok": bool, "offered", "in_text", "why"}; an unusable reply is not ok.
+
+    Whether the task is specific is the engine's (``names_a_task``); a
+    "specific" key a reply still carries is not read.
+    """
     data = raw if isinstance(raw, dict) else None
     if data is None:
         try:
@@ -471,8 +532,8 @@ def parse_check(raw: Any) -> dict[str, Any]:
         except Exception:
             data = None
     if not isinstance(data, dict):
-        return {"ok": False, "offered": False, "specific": False, "in_text": False, "why": "unusable reply", "same_job": ""}
-    verdict = {key: _yes(data.get(key)) for key in ("offered", "specific", "in_text")}
+        return {"ok": False, "offered": False, "in_text": False, "why": "unusable reply", "same_job": ""}
+    verdict = {key: _yes(data.get(key)) for key in ("offered", "in_text")}
     same = re.search(r"\bQ\d+\b", str(data.get("same_job") or ""), re.I)
     return {"ok": all(verdict.values()), **verdict, "why": str(data.get("why") or "")[:200],
             "same_job": same.group(0).upper() if same else ""}
@@ -518,6 +579,8 @@ def card_to_proposal(candidate: dict[str, Any], card: dict[str, Any], check: dic
         "offer_line": quote[:300],
         "evidence": quote[:300],
         "_checked": {"why": check.get("why") or "", "found_by": candidate.get("why") or "", "kind": candidate.get("kind")},
+        # One step, the task as said; the rest is written as play happens.
+        "_steps_from_play": True,
     }
 
 
@@ -585,17 +648,19 @@ def run_offer_pass(
         ) and not _names_pay(str(candidate.get("line") or "")):
             report["fills"][-1]["dropped"] = "task_is_the_players_words"
             continue
-        # The steps are the giver's words too: Nell's "You'll be paid well for
-        # this" filled "Load the Hesperian's crates for Rafe" and "Pay Mabel's
-        # three gold" out of the player's own line (8B run 150, T72). A step
-        # found in the player's line and not in the giver's goes; a card left
-        # with none is no offer.
-        giver_line = str(candidate.get("line") or "")
-        kept_steps = [s for s in card["steps"] if not (qp.evidence_found(s, own) and not qp.evidence_found(s, giver_line))]
-        if not kept_steps:
-            report["fills"][-1]["dropped"] = "steps_are_the_players_words"
+        # The line has to name what is to be done: a thing, a place or an act
+        # the giver's own words say. "I've got a job for you, if you're up for
+        # it" filed "Loading the Cargo Crates" (8B run 150, T39) and Nell's
+        # "You'll be paid well for this" filed steps out of the player's own
+        # line (T72): neither line names anything, so neither is a job yet.
+        named = names_a_task(card, candidate)
+        if not named:
+            from app import turn_ledger
+
+            report["fills"][-1]["dropped"] = "no_thing_named"
+            turn_ledger.note("quest", "offer_names_no_task", title=card.get("title"), line=str(candidate.get("line") or "")[:200])
             continue
-        card["steps"] = kept_steps
+        report["fills"][-1]["named"] = named
         system, user = build_check_prompt(candidate, card, player_input, open_jobs=open_jobs)
         try:
             raw = ask(system, user, max_tokens=CHECK_MAX_TOKENS, phase=CHECK_PHASE)
@@ -784,10 +849,16 @@ def run_progress_pass(
     active: list[dict[str, Any]] | None = None,
     ask: Ask | None = None,
 ) -> dict[str, Any]:
-    """Find, check. Returns {"updates": [{"quest", "action": "step_done", "evidence"}], "candidates", "checks"}."""
+    """Find, check. Returns {"updates": [{"quest", "action": "step_done", "evidence"}], "worked", "candidates", "checks"}.
+
+    ``worked``: work on a job the prose shows and the check found not yet
+    finished, as {"quest", "evidence"}; the engine writes it into a from-play
+    job's steps (quest_parser.log_worked). No extra ask.
+    """
     candidates = find_progress_candidates(narration, player_input, active=active)
     report: dict[str, Any] = {
         "updates": [],
+        "worked": [],
         "candidates": [{"title": c["title"], "sentence": c["sentence"][:240]} for c in candidates],
         "checks": [],
     }
@@ -809,9 +880,14 @@ def run_progress_pass(
         finished = isinstance(data, dict) and _yes(data.get("finished"))
         why = str((data or {}).get("why") or "")[:200] if isinstance(data, dict) else "unusable reply"
         report["checks"].append({"title": candidate["title"], "finished": bool(finished), "why": why})
-        if not finished:
-            continue
         quest = candidate["quest"]
+        if not finished:
+            if isinstance(data, dict):
+                report["worked"].append({
+                    "quest": str(quest.get("code") or (f"Q{quest['id']}" if quest.get("id") else candidate["title"])),
+                    "evidence": candidate["sentence"][:300],
+                })
+            continue
         report["updates"].append(
             {
                 "quest": str(quest.get("code") or (f"Q{quest['id']}" if quest.get("id") else candidate["title"])),

@@ -684,6 +684,10 @@ def merge_marks(parsed: dict[str, Any], marks: list[dict[str, Any]] | None) -> d
             used_marks = True
     out["new"] = out["new"][:MAX_NEW_PER_TURN]
     out["updates"] = out["updates"][:MAX_UPDATES_PER_TURN]
+    # Work shown on a job and not yet finished (quest_offers.run_progress_pass).
+    worked = [dict(w) for w in (parsed or {}).get("worked") or [] if isinstance(w, dict)]
+    if worked:
+        out["worked"] = worked[:MAX_UPDATES_PER_TURN]
     if used_marks and had_parser:
         out["source"] = "parser+marks"
     elif used_marks:
@@ -1735,6 +1739,9 @@ def validate_quest_changes(
                 "timer_turns": max(0, min(60, _int(raw.get("timer_turns"), 0))),
                 "evidence": evidence[:300],
                 "target_location_id": None,
+                # Filed from a spoken offer with only the task the line said:
+                # its steps are written as play happens (quests.log_job_progress).
+                "steps_from_play": bool(raw.get("_steps_from_play")),
             }
         )
         taken_this_turn.append(
@@ -2254,9 +2261,16 @@ def apply_quest_changes(
         "rejected": [],
     }
     try:
-        if not isinstance(changes, dict) or not (changes.get("new") or changes.get("updates")):
+        if not isinstance(changes, dict) or not (changes.get("new") or changes.get("updates") or changes.get("worked")):
             return report
-        from app.quests import accept_offered, complete_quest_step, create_quest, decline_offered, fail_quest
+        from app.quests import (
+            STEPS_FROM_PLAY_NOTE,
+            accept_offered,
+            complete_quest_step,
+            create_quest,
+            decline_offered,
+            fail_quest,
+        )
 
         ctx = load_quest_context(conn, int(turn))
         accepted, rejected = validate_quest_changes(
@@ -2337,13 +2351,25 @@ def apply_quest_changes(
                 giver_npc_id=item["giver_npc_id"],
                 target_location_id=target_id,
                 created_turn=int(turn),
-                notes=f"parser:{accepted['source']}; evidence: {item['evidence']}"[:900],
+                notes=(
+                    (f"{STEPS_FROM_PLAY_NOTE}; " if item.get("steps_from_play") else "")
+                    + f"parser:{accepted['source']}; evidence: {item['evidence']}"
+                )[:900],
                 status="offered",
                 reward_karma=int(item["reward"].get("karma") or 0),
             )
             code = f"Q{quest_id}"
             giver = f" (from {item['giver_name']})" if item["giver_name"] else ""
             _journal(conn, turn, f"New job offered: {item['title']}{giver}")
+            if item["reward"]["gold"] or item["reward"]["text"]:
+                # The pay the giver promised, on the ledger from the start:
+                # who owes it, how much, for which job.
+                owed = conn.execute("SELECT reward_gold FROM quests WHERE id = ?", (int(quest_id),)).fetchone()
+                amount = int(owed["reward_gold"] or 0) if owed else 0
+                if amount:
+                    _journal(conn, turn, f"Pay owed: {amount} gold{giver} for {code} {item['title']}")
+                    turn_ledger.note("quest", "pay_owed", quest=code, gold=amount, giver=item["giver_name"],
+                                     promised=item["reward"]["text"][:120])
             if item["status"] == "active":
                 # Taken in the player's own words this turn: the one accept path journals it.
                 if accept_offered(conn, int(quest_id), turn=int(turn), player_line=player_input) is None:
@@ -2381,15 +2407,60 @@ def apply_quest_changes(
                 fail_quest(conn, qid, turn=int(turn), reason=f"Failed in play: {upd['evidence'][:200]}")
                 _journal(conn, turn, f"Quest failed: {title}")
             elif action == "abandon":
+                from app.quests import void_pay
+
                 conn.execute("UPDATE quests SET status = 'abandoned', failed_turn = ? WHERE id = ?", (int(turn), qid))
+                void_pay(conn, qid, turn=int(turn))
                 _journal(conn, turn, f"Quest abandoned: {title}")
             report["updated"].append({"code": upd["code"], "action": action})
-        report["status"] = "applied" if (report["created"] or report["updated"]) else ("rejected" if report["rejected"] else "empty")
+        progress = log_worked(
+            conn, changes.get("worked"), narration=narration, player_input=player_input, turn=int(turn),
+            skip_ids=set(settled_ids or set()) | {int(u["quest_id"]) for u in accepted["updates"] if u.get("quest_id")},
+        )
+        if progress:
+            report["progress"] = progress
+        report["status"] = "applied" if (report["created"] or report["updated"] or progress) else ("rejected" if report["rejected"] else "empty")
         return report
     except Exception as exc:  # never break the turn
         report["status"] = "error"
         report["error"] = str(exc)[:300]
         return report
+
+
+def log_worked(
+    conn,
+    worked: list[dict[str, Any]] | None,
+    *,
+    narration: str,
+    player_input: str = "",
+    turn: int = 0,
+    skip_ids: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Work on a from-play job the prose shows and the progress check found not
+    yet finished: written into the job's steps (quests.log_job_progress).
+
+    Each row is {"quest": code, "evidence": sentence}. The sentence has to be
+    in the prose; a job the engine or an update already decided this turn is
+    left alone. Returns what was written.
+    """
+    from app.quests import log_job_progress
+
+    out: list[dict[str, Any]] = []
+    rows = [w for w in worked or [] if isinstance(w, dict)]
+    if not rows:
+        return out
+    active = _rows(conn, "SELECT id, code, title, status, notes FROM quests WHERE status = 'active'")
+    skip = {int(i) for i in skip_ids or set()}
+    for row in rows[:MAX_UPDATES_PER_TURN]:
+        quest = _resolve_quest(row.get("quest"), active)
+        evidence = str(row.get("evidence") or "").strip()
+        if quest is None or int(quest.get("id") or 0) in skip or not evidence_found(evidence, narration, player_input):
+            continue
+        logged = log_job_progress(conn, int(quest["id"]), evidence, turn=turn, source="prose")
+        if logged:
+            out.append(logged)
+    return out
 
 
 def settle_player_answer(conn, player_input: str, turn: int) -> list[dict[str, Any]]:
@@ -2464,6 +2535,9 @@ def settle_player_answer(conn, player_input: str, turn: int) -> list[dict[str, A
         "UPDATE quests SET status = 'declined', failed_turn = ? WHERE id = ? AND status IN ('offered', 'active')",
         (int(turn), int(row["id"])),
     )
+    from app.quests import void_pay
+
+    void_pay(conn, int(row["id"]), turn=int(turn))
     _journal(conn, turn, f"Turned down: {row['title']}")
     turn_ledger.note("quest", "declined_by_player", quest=code, was=row["status"])
     return [{"code": code, "action": "decline"}]
@@ -2691,6 +2765,9 @@ def settle_agreed_price(conn, *, narration: str, player_input: str = "", turn: i
     description = re.sub(r"\s*Promised:.*$", "", str(job.get("description") or "")).strip()
     description = f"{description} Promised: {promised}".strip()
     conn.execute("UPDATE quests SET reward_gold = ?, description = ? WHERE id = ?", (amount, description[:800], int(job["id"])))
+    from app.quests import mark_pay_owed
+
+    mark_pay_owed(conn, int(job["id"]))
     _journal(conn, turn, f"Terms agreed: {job['title']} for {promised}")
     change = {"code": job.get("code"), "from": job.get("reward_gold"), "to": amount, "how": how, "per_day": daily}
     turn_ledger.note("quest", "agreed_price_set", **change)

@@ -1050,6 +1050,18 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE quests ADD COLUMN reward_karma INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+    # The pay ledger (app/quests.py): owed at filing, settled once on closing,
+    # void when the job is turned down, failed or abandoned. Older rows read ''.
+    for column, ddl in (
+        ("pay_status", "TEXT NOT NULL DEFAULT ''"),
+        ("pay_settled", "INTEGER NOT NULL DEFAULT 0"),
+        ("pay_turn", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if column not in q_cols:
+            try:
+                conn.execute(f"ALTER TABLE quests ADD COLUMN {column} {ddl}")
+            except Exception:
+                pass
 
     repair_npc_default_summaries(conn)
     repair_npc_roles(conn)
