@@ -194,6 +194,9 @@ def player_accepts(player_input: str) -> bool:
     # A question is no yes: "Who signs for it?" took the job by "sign for it"
     # (8B run 152b, T12).
     text = _QUESTION_SENTENCE_RE.sub(" ", text)
+    # And a question told, not asked: "I ... ask the nearest worker where a
+    # flat-runner signs on" took the job by "signs on" (8B run 152d, T1).
+    text = _REPORTED_QUESTION_RE.sub(" ", text)
     if _accept_re().search(text) or _SIMPLE_ACCEPT_RE.search(text):
         return True
     try:
@@ -208,6 +211,10 @@ def player_accepts(player_input: str) -> bool:
 
 _QUOTED_RE = re.compile(r'"[^"]*"|“[^”]*”')
 _QUESTION_SENTENCE_RE = re.compile(r"[^.!?\"“”]*\?")
+_REPORTED_QUESTION_RE = re.compile(
+    r"\b(?:ask|asks|asking|wonder|wonders|enquire|inquire)\b[^.!?\"“”]{0,40}?\b(?:where|how|whether|if|who|what|when|which|why)\b[^.!?\"“”]*",
+    re.I,
+)
 # The player holds off or says no (7B run 7, T4-T5): "I haven't said yes yet",
 # "No deal, Oriel. I'll take my chances on the flats."
 _HOLDS_OFF_RE = re.compile(

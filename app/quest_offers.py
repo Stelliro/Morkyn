@@ -121,6 +121,20 @@ _FIND_POINTER_RE = re.compile(
 )
 
 
+# Pointed at, not the speaker's own house: "the guild has jobs that pay against
+# the ledger" from the guild's tallyman is his offer (8B run 146, T2).
+_WORK_ELSEWHERE_RE = re.compile(
+    r"\b(?:they|he|she|(?-i:[A-Z][a-z][\w'’-]+))(?:['’]ll|\s+will|\s+might|\s+may|\s+should|\s+could|['’]s|\s+has|\s+have|\s+usually)?\s*"
+    r"(?:have|has|got|be\s+(?:hiring|looking\s+for))\s+(?:some\s+|a\s+bit\s+of\s+)?(?:work|a\s+job|jobs|something|hands|runners)\b",
+    re.I,
+)
+_OWN_OFFER_RE = re.compile(
+    r"\b(?:i|we)(?:['’]ve|\s+have|['’]ve\s+got|\s+got|['’]d|\s+could|\s+can|\s+need)\s+(?:use\s+)?(?:a\s+|some\s+)?"
+    r"(?:job|work|task|errand|hand|someone|you)\b",
+    re.I,
+)
+
+
 def _code_veto(line: str, *, asked_for_work: bool) -> str:
     """Why a job-worded line still offers nothing, decided in code; "" when it may."""
     cleaned = qp._offer_text(line)
@@ -136,6 +150,11 @@ def _code_veto(line: str, *, asked_for_work: bool) -> str:
     # "you're paying for the risk"; runs 82, 96: "if you're willing to pay").
     if qp._PLAYER_PAYS_RE.search(line) and not qp._PAYS_THE_PLAYER_RE.search(line) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned):
         return "player_pays"
+    # Work someone else holds: "That's the guild hall. They'll have work for
+    # you" filed the speaker's job (8B run 152d, T1). Unless the speaker offers
+    # work of their own in the same line.
+    if _WORK_ELSEWHERE_RE.search(cleaned) and not _OWN_OFFER_RE.search(cleaned):
+        return "work_held_by_someone_else"
     without_pointer = _FIND_POINTER_RE.sub(" ", cleaned)
     if _FIND_POINTER_RE.search(cleaned) and not qp._JOB_RE.search(without_pointer) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned):
         return "pointer_to_someone"
