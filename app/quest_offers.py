@@ -195,9 +195,15 @@ _SUGGESTION_RE = re.compile(
 )
 
 
+# A question asked for the speaker's own sake offers nothing: Silas's "Got a
+# job for me?" made his next lines a job (8B run 152c, T2). "Want a job?" or
+# "Got a job for you, if you want it?" still offers.
+_ASKS_FOR_SELF_RE = re.compile(r"[^.!?\"“”]*\b(?:for\s+(?:me|us)|i\s+could\s+use)\b[^.!?\"“”]*\?", re.I)
+
+
 def _carries_offer(line: str, *, asked_for_work: bool) -> str:
     """The job language the line carries, as the reason it is a candidate; "" when none."""
-    cleaned = qp._offer_text(line)
+    cleaned = _ASKS_FOR_SELF_RE.sub(" ", qp._offer_text(line))
     if qp._GIVER_OFFERS_JOB_RE.search(cleaned):
         return "giver_offers_job"
     if qp._JOB_RE.search(cleaned):
@@ -469,6 +475,21 @@ def speakers_own_task(task: str) -> bool:
     return bool(_OWN_DUTY_RE.search(task or "")) and not _SOMEONE_ELSE_RE.search(task or "")
 
 
+# What the player must have, not what they are to do: "You need a name, a record,
+# and a bit of coin to get started" was filed as a job (8B run 152c, T2). "You
+# need to haul the nets in" names an act and stays a task.
+_REQUIREMENT_RE = re.compile(
+    r"^\W*(?:but\s+|first,?\s+)?you(?:['’]ll|\s+will|['’]d)?\s+(?:need|must\s+have|have\s+to\s+have|require|want)\s+"
+    r"(?!to\b)(?:a|an|the|some|your|proof|papers|coin|money|gold|silver|experience|references?|a\s+name)\b",
+    re.I,
+)
+
+
+def requirement_not_task(task: str) -> bool:
+    """The card's task only says what the player must have (a name, coin, proof)."""
+    return bool(_REQUIREMENT_RE.search(task or ""))
+
+
 def names_a_task(card: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
     """
     The words of the card that name a thing, place or act and that the
@@ -675,11 +696,14 @@ def run_offer_pass(
             turn_ledger.note("quest", "offer_names_no_task", title=card.get("title"), line=str(candidate.get("line") or "")[:200])
             continue
         report["fills"][-1]["named"] = named
-        if speakers_own_task(str(card.get("task") or "")):
-            from app import turn_ledger
+        for veto, why in ((speakers_own_task, "speakers_own_task"), (requirement_not_task, "requirement_not_task")):
+            if veto(str(card.get("task") or "")):
+                from app import turn_ledger
 
-            report["fills"][-1]["dropped"] = "speakers_own_task"
-            turn_ledger.note("quest", "offer_is_speakers_own_task", task=str(card.get("task") or "")[:200])
+                report["fills"][-1]["dropped"] = why
+                turn_ledger.note("quest", f"offer_is_{why}", task=str(card.get("task") or "")[:200])
+                break
+        if report["fills"][-1].get("dropped"):
             continue
         system, user = build_check_prompt(candidate, card, player_input, open_jobs=open_jobs)
         try:
