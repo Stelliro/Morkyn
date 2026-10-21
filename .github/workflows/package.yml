@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install the app's requirements (no llama-cpp-python: it is a runtime pack)
+      - name: "Install the app's requirements (no llama-cpp-python: it is a runtime pack)"
         shell: bash
         run: |
           python -m pip install --upgrade pip
@@ -81,7 +81,7 @@ jobs:
             acc: cpu
           - os: macos-14
             acc: metal
-          - os: macos-13
+          - os: macos-15-intel
             acc: cpu
     runs-on: ${{ matrix.os }}
     steps:
