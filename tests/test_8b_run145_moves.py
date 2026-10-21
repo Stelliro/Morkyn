@@ -140,6 +140,26 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
             self.assertIn("yard", str(report.get("destination") or "").lower(), report)
             conn.rollback()
 
+    def test_a_building_named_for_the_harbour_is_the_building(self):
+        # 8B run 152e, T3: "I head over to the Harbour Reeve's office to sign on" made "The Harbour".
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        line = "\"Thanks, Fulk.\" I head over to the Harbour Reeve's office to sign on."
+        prose = ("You turn and make your way toward the Harbour Reeve's offices, a building that looms over the docks. "
+                 "The door is ajar. You step inside, the sound of your boots echoing in the quiet space.")
+        with connect().closing() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player").fetchone()[0])
+            dock = world._upsert_location(conn, "The Dock", "", parent_id=town, kind="")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(dock),))
+            code = conn.execute("SELECT code FROM locations WHERE id = ?", (int(dock),)).fetchone()[0]
+            name = world._venue_requested_and_reached(conn, line, prose, code)
+            self.assertIn("office", name.lower())
+            self.assertNotEqual(name, "The Harbour")
+            conn.rollback()
+
     def test_where_the_destination_stands_is_not_the_destination(self):
         # 8B run 152d, T2: "walk to the guild hall at the end of the dock" moved the player to The Dock.
         from app import world
