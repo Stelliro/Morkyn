@@ -452,6 +452,23 @@ def _naming_stems(text: str, drop: set[str] | None = None) -> set[str]:
     return out
 
 
+# The speaker's own duty in the first person, with no one else to do it: "I've
+# got to see the name on the delivery" was filed as the player's job (the check
+# said "offered: yes", 8B run 152b, T12). "I need you to ..." or "I need someone
+# to ..." is an ask and stays a candidate.
+_OWN_DUTY_RE = re.compile(
+    r"^\W*(?:but\s+|and\s+|so\s+)?(?:i|we)(?:['’]ve\s+got\s+to|\s+have\s+got\s+to|\s+have\s+to|\s+need\s+to|\s+must|"
+    r"['’]ll\s+have\s+to|\s+got\s+to|['’]d\s+better|\s+should)\s+\w",
+    re.I,
+)
+_SOMEONE_ELSE_RE = re.compile(r"\b(?:you|your|someone|somebody|anyone|a\s+(?:hand|runner|pair\s+of\s+hands))\b", re.I)
+
+
+def speakers_own_task(task: str) -> bool:
+    """The card's task is the speaker's own first-person duty, not work handed to the player."""
+    return bool(_OWN_DUTY_RE.search(task or "")) and not _SOMEONE_ELSE_RE.search(task or "")
+
+
 def names_a_task(card: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
     """
     The words of the card that name a thing, place or act and that the
@@ -658,6 +675,12 @@ def run_offer_pass(
             turn_ledger.note("quest", "offer_names_no_task", title=card.get("title"), line=str(candidate.get("line") or "")[:200])
             continue
         report["fills"][-1]["named"] = named
+        if speakers_own_task(str(card.get("task") or "")):
+            from app import turn_ledger
+
+            report["fills"][-1]["dropped"] = "speakers_own_task"
+            turn_ledger.note("quest", "offer_is_speakers_own_task", task=str(card.get("task") or "")[:200])
+            continue
         system, user = build_check_prompt(candidate, card, player_input, open_jobs=open_jobs)
         try:
             raw = ask(system, user, max_tokens=CHECK_MAX_TOKENS, phase=CHECK_PHASE)

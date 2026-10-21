@@ -191,6 +191,9 @@ _PRIOR_AGREEMENT_RE = re.compile(
 
 def player_accepts(player_input: str) -> bool:
     text = _PRIOR_AGREEMENT_RE.sub(" ", _CONDITIONAL_CLAUSE_RE.sub(" ", str(player_input or "")))
+    # A question is no yes: "Who signs for it?" took the job by "sign for it"
+    # (8B run 152b, T12).
+    text = _QUESTION_SENTENCE_RE.sub(" ", text)
     if _accept_re().search(text) or _SIMPLE_ACCEPT_RE.search(text):
         return True
     try:
@@ -204,6 +207,7 @@ def player_accepts(player_input: str) -> bool:
 
 
 _QUOTED_RE = re.compile(r'"[^"]*"|“[^”]*”')
+_QUESTION_SENTENCE_RE = re.compile(r"[^.!?\"“”]*\?")
 # The player holds off or says no (7B run 7, T4-T5): "I haven't said yes yet",
 # "No deal, Oriel. I'll take my chances on the flats."
 _HOLDS_OFF_RE = re.compile(
