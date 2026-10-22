@@ -333,6 +333,8 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertTrue(qo.requirement_not_task("prove they're worth the trouble"))
         self.assertTrue(qo.requirement_not_task("Show me you can swim."))
         self.assertFalse(qo.requirement_not_task("Show the reeve the ledger before noon."))
+        # 8B run 155, T4.
+        self.assertTrue(qo.requirement_not_task("earn your place. The gang's picky."))
 
     def test_work_someone_else_holds_is_no_offer_and_a_reported_question_is_no_yes(self):
         # 8B run 152d, T1: "That's the guild hall. They'll have work for you, if you can prove you're worth the
@@ -357,6 +359,10 @@ class PayIsAnEngineLedger(unittest.TestCase):
         rows = [{"code": "A", "name": "Wystan Lambard"}]
         lines = spoken_lines(prose, rows, "I walk to the guild hall.")
         self.assertTrue(lines and all(entry["code"] == "" for entry in lines), lines)
+        # 8B run 155, T4: the same in a past-tense scene.
+        past = ("You thanked Silas Saxby [[A]] and set off.\n\nA man in a soot-streaked coat looked up from his ledger.\n\n"
+                "“You'll need to earn your place,” he said.")
+        self.assertTrue(all(e["code"] == "" for e in spoken_lines(past, [{"code": "A", "name": "Silas Saxby"}], "")))
         kept = "Wystan Lambard [[A]] looks up. “New blood?” he asks."
         self.assertEqual([entry["code"] for entry in spoken_lines(kept, rows, "")], ["A"])
 

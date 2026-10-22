@@ -1026,8 +1026,10 @@ def spoken_lines(narration: str, rows: list[dict[str, Any]], player_input: str =
 _NEW_FIGURE_RE = re.compile(
     r"(?:^|[.!?]\s+|,\s+)(?:one\s+of\s+them,?\s+|then\s+)?(?:a|an|another)\s+(?:[\w'’-]+\s+){0,3}?"
     r"(?:man|woman|figure|stranger|worker|boy|girl|lad|lass|sailor|fisher\w*|clerk|guard|youth|child|elder|crone|"
-    r"dockhand|loader|porter)\b[^.!?]*?\b(?:looks?|steps?|turns?|glances?|says?|asks?|calls?|speaks?|rises?|stands?|"
-    r"approaches?|waves?|nods?|grunts?|leans?)\b",
+    # Any tense: "A man in a soot-streaked coat looked up from his ledger"
+    # (8B run 155, T4, a past-tense scene) is the new figure too.
+    r"dockhand|loader|porter)\b[^.!?]*?\b(?:look|step|turn|glanc|say|said|ask|call|speak|spoke|rise|rose|stand|stood|"
+    r"approach|wav|nod|grunt|lean)\w*\b",
     re.I,
 )
 
