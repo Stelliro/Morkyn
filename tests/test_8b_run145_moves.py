@@ -192,6 +192,24 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
             self.assertEqual(world._venue_requested_and_reached(conn, line, prose, code), "Warehouse 7")
             conn.rollback()
 
+    def test_the_engines_roll_line_stays_and_the_models_deed_note_goes(self):
+        # 8B run 152g, T1: the deed filter dropped the engine's own "You rolled 2 ..." skill_check line.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        line = "I ask the nearest worker where a flat-runner signs on for salvage work."
+        result = {"narration": "The worker points at a board nailed to the wall.", "self_check": {"passed": True},
+                  "turn_summary": "t",
+                  "journal": [{"kind": "skill_check", "content": "You rolled 2 with your base of 10 (charisma)."},
+                              {"kind": "event", "content": "You signed on for salvage work at the office."}]}
+        world.apply_turn(result, line, input_kind="player")
+        with connect().closing() as conn:
+            kinds = [r[0] for r in conn.execute("SELECT content FROM journal").fetchall()]
+        self.assertTrue(any(k.startswith("You rolled 2") for k in kinds))
+        self.assertFalse(any(k.startswith("You signed on") for k in kinds))
+
     def test_a_note_of_a_deed_the_player_never_did_is_dropped(self):
         # 8B run 152e, T1: the event note "You signed on for salvage work at the Harbour Reeve's office" on a
         # line that only asked where to sign on.

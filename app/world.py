@@ -10425,6 +10425,7 @@ def _leaves_something_else(here_row: Any, player_input: str) -> bool:
     return True
 
 
+_MODEL_NOTE_KINDS = frozenset({"fact", "event", "note", "memory", "rumor", "rumour", "lore", "clue", "observation", ""})
 _PLAYER_DEED_NOTE_RE = re.compile(r"^\W*(?:you|the\s+player)\s+(?:have\s+|has\s+|had\s+)?(?P<verb>[a-z]+)\b", re.I)
 _NOT_A_DEED = frozenset({"are", "were", "was", "is", "seem", "seemed", "feel", "felt", "know", "knew", "owe", "owed",
                          "hear", "heard", "see", "saw", "notice", "noticed", "learn", "learned", "learnt", "need",
@@ -25060,7 +25061,10 @@ def apply_turn(
             # the player's line never did is not theirs: an "event" "You signed
             # on for salvage work at the Harbour Reeve's office" on a line that
             # only asked where to sign on (8B run 152e, T1).
-            if _note_claims_unasked_player_act(str(entry.get("content") or ""), player_input):
+            # Only the model's own notes: the engine's roll line ("You rolled 2
+            # with your base of 10 ...") comes through here too and was dropped
+            # by this check (8B run 152g, T1).
+            if filed_as in _MODEL_NOTE_KINDS and _note_claims_unasked_player_act(str(entry.get("content") or ""), player_input):
                 turn_ledger.note("journal", "player_act_note_dropped", kind=filed_as, content=str(entry.get("content") or "")[:200])
                 continue
             conn.execute(
