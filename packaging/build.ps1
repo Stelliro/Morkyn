@@ -22,28 +22,26 @@ Write-Host "Building Morkyn $version with $Python"
 & $Python -m pip install --quiet pyinstaller sse-starlette starlette-context pydantic-settings
 if ($Console) { $env:MORKYN_BUILD_CONSOLE = "1" } else { Remove-Item Env:MORKYN_BUILD_CONSOLE -ErrorAction SilentlyContinue }
 
-# PyInstaller deletes dist\Morkyn whole. The player's own folders beside the exe
-# (saves and settings, engine packs, installed versions) are moved aside and put
-# back: a rebuild once wiped a played copy's data\ and runtime\ (2026-10-22).
+# PyInstaller deletes its output folder whole, so it builds into a staging
+# folder and only the program (Morkyn.exe, _internal) is replaced in dist\Morkyn.
+# The player's own folders beside the exe (data, runtime, versions) are never
+# touched: a rebuild once wiped a played copy's data\ and runtime\, and moving
+# them aside failed on a file the web view still held (2026-10-22).
 $out = Join-Path $root "dist\Morkyn"
-$keep = Join-Path $root "dist\.keep-player-folders"
-$kept = @()
-foreach ($folder in @("data", "runtime", "versions")) {
-    $src = Join-Path $out $folder
-    if (Test-Path $src) {
-        New-Item -ItemType Directory -Force $keep | Out-Null
-        Move-Item -Force $src (Join-Path $keep $folder)
-        $kept += $folder
+$stage = Join-Path $root "dist\.staging"
+if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+& $Python -m PyInstaller "packaging\morkyn.spec" --noconfirm --distpath $stage --workpath "packaging\build\work"
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+New-Item -ItemType Directory -Force $out | Out-Null
+foreach ($name in @("Morkyn.exe", "_internal")) {
+    $old = Join-Path $out $name
+    if (Test-Path $old) {
+        try { Remove-Item -Recurse -Force $old }
+        catch { throw "Close Mørkyn first: $old is in use." }
     }
+    Move-Item -Force (Join-Path $stage "Morkyn\$name") $old
 }
-& $Python -m PyInstaller "packaging\morkyn.spec" --noconfirm --distpath dist --workpath "packaging\build\work"
-$built = $LASTEXITCODE
-foreach ($folder in $kept) {
-    New-Item -ItemType Directory -Force $out | Out-Null
-    Move-Item -Force (Join-Path $keep $folder) (Join-Path $out $folder)
-}
-if (Test-Path $keep) { Remove-Item -Recurse -Force $keep }
-if ($built -ne 0) { throw "PyInstaller failed" }
+Remove-Item -Recurse -Force $stage
 foreach ($folder in @("static", "content", "config", "Media")) {
     $dest = Join-Path $out $folder
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
