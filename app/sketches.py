@@ -329,6 +329,22 @@ def _describe(row: Any) -> str:
     return ", ".join(p for p in parts if p)
 
 
+_MARK_STOP = {"with", "from", "that", "this", "their", "there", "they", "into", "over", "under", "about", "after",
+              "before", "where", "which", "while", "worn", "weathered", "face", "eyes", "hands", "voice", "years",
+              "look", "looks", "man", "woman", "figure", "someone", "person", "local"}
+
+
+def _mark_words(row: Any) -> set[str]:
+    return {w for w in re.findall(r"[a-z]+", _mark(row).lower()) if len(w) >= 4} - _MARK_STOP
+
+
+def _same_person_evidence(row: Any, other: Any) -> bool:
+    """The engine's own reason to believe a model-named match: the same trade, or a mark they share."""
+    if _job_words(str(row["role"] or "")) & _job_words(str(other["role"] or "")):
+        return True
+    return bool(_mark_words(row) & _mark_words(other))
+
+
 def build_ask(row: Any, others: list[Any]) -> tuple[str, str]:
     """(system, user) for the identity question: one plain question, no examples."""
     lines = [f"A person in the story: {_describe(row)}.", "Is this the same person as one of these?"]
@@ -377,6 +393,13 @@ def _confirm(conn, row: Any, turn: int, evidence: str, unspoken: str, report: di
         if answer and answer != "new":
             target = next((o for o in others if str(o["code"] or "") == answer), None)
             how = "asked"
+            # One model answer must not fuse two real people (side note,
+            # 2026-10-22): the engine also has to see it, the same trade or a
+            # mark they share. Otherwise they stay two people.
+            if target is not None and not _same_person_evidence(row, target):
+                turn_ledger.note("npc", "sketch_merge_unsupported", name=name, answered=answer,
+                                 known=str(target["name"] or ""))
+                target = None
     if isinstance(target, dict) and target.get("_faded_id"):
         _revive(conn, target, row, turn, report)
         return
@@ -465,6 +488,20 @@ def merge_into(conn, src: Any, dst: Any, turn: int, report: dict[str, Any] | Non
     if src_id == dst_id:
         return
     src_code, dst_code = str(src["code"] or "").strip(), str(dst["code"] or "").strip()
+    # Kept whole, so a wrong merge can be seen and undone without a rewind.
+    try:
+        record = {key: src[key] for key in src.keys()}
+        record["_merged_into"] = dst_code
+        talks = [int(r[0]) for r in conn.execute("SELECT id FROM conversations WHERE npc_id = ?", (src_id,)).fetchall()]
+        conn.execute(
+            "INSERT INTO faded_people (npc_id, name, location_id, turn_faded, record, aliases, conversation_ids) "
+            "VALUES (?, ?, ?, ?, ?, '[]', ?)",
+            (src_id, str(src["name"] or ""), int(src["location_id"] or 0), int(turn),
+             json.dumps(record, ensure_ascii=True), json.dumps(talks)),
+        )
+    except Exception as exc:
+        turn_ledger.note("npc", "merge_record_unkept", name=str(src["name"] or ""), error=f"{type(exc).__name__}: {exc}"[:160])
+    turn_ledger.note("npc", "merged_person", merged=_describe(src), into=_describe(dst))
     _keep_for_rewind(conn, turn, "npcs", src_id)
     _keep_for_rewind(conn, turn, "npcs", dst_id)
     for table, column, fk in _ref_columns(conn):
@@ -575,7 +612,8 @@ def _faded(conn) -> list[dict[str, Any]]:
             record = json.loads(entry["record"] or "{}")
         except Exception:
             continue
-        if isinstance(record, dict) and record.get("name"):
+        # A merged person's record is kept for audit and undo, not offered back.
+        if isinstance(record, dict) and record.get("name") and not record.get("_merged_into"):
             # The code the ask shows: a digit keeps it apart from the people's letter codes.
             out.append({**record, "code": f"X{int(entry['id'])}", "_faded_id": int(entry["id"])})
     return out
