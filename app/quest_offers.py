@@ -524,8 +524,11 @@ _REQUIREMENT_RE = re.compile(
 # Proving one's worth is the gate to work, not work: "prove they're worth the
 # trouble" was filed as "Prove Your Worth" (8B run 152d, T2).
 _PROVING_TASK_RE = re.compile(
-    r"^\W*(?:(?:you(?:['’]ll|\s+will)?\s+)?(?:have\s+to|need\s+to|must|got\s+to)\s+)?(?:prove|show)\s+(?:me\s+|us\s+|them\s+)?"
-    r"(?:yourself|your\s+(?:worth|mettle)|(?:you|they|he|she)(?:['’]re|\s+are|['’]s|\s+is)\s+worth|(?:that\s+)?you\s+can\b)",
+    r"^\W*(?:(?:you(?:['’]ll|\s+will)?\s+)?(?:have\s+to|need\s+to|must|got\s+to)\s+)?(?:"
+    r"(?:prove|show)\s+(?:me\s+|us\s+|them\s+)?"
+    r"(?:yourself|your\s+(?:worth|mettle)|(?:you|they|he|she)(?:['’]re|\s+are|['’]s|\s+is)\s+worth|(?:that\s+)?you\s+can\b)"
+    # "earn your place" (8B run 155, T4).
+    r"|(?:earn|win)\s+(?:your|a)\s+(?:place|spot|keep|seat|way\s+in|trust)\b)",
     re.I,
 )
 
