@@ -615,6 +615,32 @@ class TheJobsFigureIsTheOneHere(unittest.TestCase):
         self.assertEqual(npcs, [])
 
 
+class AFigureInAnotherJobIsNotTheNewName(unittest.TestCase):
+    """8B run 152h, T1: "the nearest worker, a burly man" was bound to NPC_NEW "Mira Venn" ROLE "Guild Recruiter"."""
+
+    def test_the_worker_is_not_the_recruiter_waiting_in_the_alley(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        prose = ("You ask the nearest worker, a burly man with a scar across his cheek, where a flat-runner signs on. "
+                 "\"They're hired by the guild,\" he says. He gestures toward a narrow alley where the guild's recruiters "
+                 "are huddled around a crate.")
+        with connect().closing() as conn:
+            npcs = world._npcs_shown_in_prose(conn, [{"name": "Mira Venn", "role": "Guild Recruiter"}], prose)
+        self.assertFalse(any(n.get("_bound_hint") for n in npcs), npcs)
+
+    def test_a_figure_in_the_ops_own_trade_still_binds(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        prose = "A worker, a burly man with a scar across his cheek, looks up from the crates. \"Need something?\" he asks."
+        with connect().closing() as conn:
+            npcs = world._npcs_shown_in_prose(conn, [{"name": "Bram Tarrick", "role": "dock worker"}], prose)
+        self.assertTrue(any(n.get("_bound_hint") for n in npcs), npcs)
+
+
 class AnUnshownKnownPersonStaysPut(unittest.TestCase):
     """8B run 83, T6: NPC_NEW "Mara" for an unnamed woman on a wreck moved the guild's leader to the bay."""
 
