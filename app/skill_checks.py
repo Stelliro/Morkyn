@@ -2271,7 +2271,8 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         # A leave-taking is not an address: "thank Mira, and go out to find Eda
         # Jessop ... to ask" rolled against Mira (8B run 147, T54).
         named_text = re.sub(r"\b(?:not|instead\s+of|rather\s+than|ignoring|leave|leaving|left|away\s+from|thank|thanks|thanking|"
-                            r"nod(?:s|ded|ding)?\s+to|wav(?:e|es|ed|ing)\s+to|bid(?:s|ding)?|bow(?:s|ed|ing)?\s+to)\s+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+",
+                            # "Thanks, Humphrey." with its comma (8B run 154, T4).
+                            r"nod(?:s|ded|ding)?\s+to|wav(?:e|es|ed|ing)\s+to|bid(?:s|ding)?|bow(?:s|ed|ing)?\s+to)[,\s]+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+",
                             " ", src)
         # Asked after is not asked: "ask the nearest dockhand where Elara Veyne
         # can be found" rolled against Elara, who was not there (8B run 146,
@@ -2297,7 +2298,10 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         # A walk away does the same: "I thank Veyne with a nod and walk down to the docks" (8B run 99, T4).
         left_at = re.search(
             r"\b(?:leave|leaves|leaving|walk\s+out\s+of|step\s+out\s+of|head\s+out\s+of)\s+the\b"
-            r"|\band\s+(?:then\s+)?(?:walk|head|go|make\s+my\s+way|set\s+off|move\s+on|turn\s+away)\b",
+            r"|\band\s+(?:then\s+)?(?:walk|head|go|make\s+my\s+way|set\s+off|move\s+on|turn\s+away)\b"
+            # A new sentence that sets off: '"Isk. Thanks, Humphrey." I head up to
+            # the tally house to ask for work' rolled against Humphrey (8B run 154, T4).
+            r"|(?:^|[.!?][\"”']?\s+)(?:i|we)\s+(?:then\s+)?(?:walk|head|go|make\s+my\s+way|set\s+off|move\s+on|turn\s+away)\b",
             named_text, re.I,
         )
         # Only a contest has another side: a bystander named in the line is no

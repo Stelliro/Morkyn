@@ -284,6 +284,10 @@ class ANameAskedAfterIsNoOpponent(unittest.TestCase):
         # Thanked and then asked, she is still the other side.
         check = infer_check_from_action("I thank Mira for the receipt and ask her what the guild pays for rope.", ctx)
         self.assertEqual(((check or {}).get("opposition") or {}).get("name"), "Mira Venn")
+        # 8B run 154, T4: the thanks said with a comma, then a walk to ask someone else.
+        line = "\"Isk. Thanks, Mira.\" I head up to the salvage guild's tally house to ask for flat-running work myself."
+        check = infer_check_from_action(line, ctx)
+        self.assertNotEqual(((check or {}).get("opposition") or {}).get("name"), "Mira Venn")
 
     def test_the_debtor_named_in_a_question_to_someone_else_is_no_opponent(self):
         # 8B run 147, T89-T90: "ask Mira whether ... collected from Dunmore" and "a bonus for Dunmore" rolled against Dunmore.
