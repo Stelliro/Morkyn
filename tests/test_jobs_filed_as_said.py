@@ -391,6 +391,25 @@ class PayIsAnEngineLedger(unittest.TestCase):
         two = [job, {**job, "code": "Q2", "id": 2, "title": "Mend the nets", "current_objective": "mend the nets"}]
         self.assertEqual(qo.find_progress_candidates(prose, "\"Is the job done?\"", active=two), [])
 
+    def test_a_sum_named_in_silver_is_no_gold_owed(self):
+        # 8B run 154, T5: "A hundred silver for the job" became "Pay owed: 100 gold".
+        line = "Thorne [[B]] stands. \"The guild has a salvage contract for you: the Shattered Tides. A hundred silver for the job.\""
+        card = {"task": "recover the Shattered Tides' cargo", "title": "Salvage the Shattered Tides", "pay": "A hundred silver",
+                "gold": 100}
+
+        def asker(fill):
+            def ask(system, user, *, max_tokens, phase):
+                return fill if "fill" in phase else {"offered": "yes", "in_text": "yes", "why": "Thorne offers it"}
+            return ask
+
+        thorne = [{"code": "B", "name": "Thorne", "role": "tallyman"}]
+        report = qo.run_offer_pass(line, "I ask for work.", npcs=thorne, asked_for_work=True, ask=asker(card))
+        self.assertEqual(report["new"][0]["reward"]["gold"], 0)
+        gold_card = {**card, "pay": "Thirty gold", "gold": 30}
+        report = qo.run_offer_pass(line.replace("A hundred silver", "Thirty gold"), "I ask for work.", npcs=thorne,
+                                   asked_for_work=True, ask=asker(gold_card))
+        self.assertEqual(report["new"][0]["reward"]["gold"], 30)
+
     def test_the_step_is_never_cut_mid_word(self):
         # 8B run 152c, T3: the step "... without a bit of pr" reached the narrator, which then wrote "a reco.".
         task = ("Carry the guild's three crates of salvaged tools down to the shipwrights before the tide turns. "
