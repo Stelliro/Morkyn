@@ -2125,7 +2125,9 @@ def _preset_for_key(key: str) -> str:
     low = str(key or "").strip().lower()
     if low.startswith("xai-") and "xai" in API_PRESETS:
         return "xai"
-    if low.startswith("sk-") and not low.startswith("sk-ant-") and "openai" in API_PRESETS:
+    # Only OpenAI's own key shapes. A plain "sk-" is shared (OpenRouter "sk-or-",
+    # DeepSeek, gateways), so it guesses nothing and the chosen provider stands.
+    if low.startswith(("sk-proj-", "sk-svcacct-", "sk-admin-")) and "openai" in API_PRESETS:
         return "openai"
     return ""
 

@@ -13671,7 +13671,7 @@ function renderModelForm() {
   const preset = config.api_preset || "xai";
   const keyHint = config.api_key_set
     ? `Key set${config.api_key_hint ? ` (${escapeHtml(config.api_key_hint)})` : ""} — leave blank to keep`
-    : "Paste your key: that is all you need (xai-… Grok, sk-… OpenAI)";
+    : "Paste your key. xAI and OpenAI keys set the address and model themselves";
   return `
     <form id="modelForm" class="modelForm">
       <label>
