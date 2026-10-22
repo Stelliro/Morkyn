@@ -1839,6 +1839,22 @@ def _names_someone(unit: str) -> bool:
     )
 
 
+def _voices_the_player(line: str, own_stems: set[str]) -> bool:
+    """A voiced line says what the player's line asked to say, not a story of its own.
+
+    One shared word let '"Yes. The barrels and the crate are still sealed, but
+    the fish and rum were already taken. I don't know who took them, but I
+    think it's someone who knew about the shipment."' stand for "tell Eda I
+    found the Black Tide's cargo ... three barrels, two crates and a bundle of
+    salted fish and rum" (8B run 153, T6). Half its words have to be the
+    player's.
+    """
+    said = content_stems(line)
+    if not said or not own_stems:
+        return False
+    return len(said & own_stems) * 2 >= len(said)
+
+
 def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tuple[list[str], list[str]]:
     """
     Remove quotations the narration gives the player when the player did not
@@ -1971,9 +1987,11 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             # a question someone just put to the player is the player answering
             # (7B run 18, T7: '"You're a bit hurt there. What happened?"' then
             # '"I fell into a crate of broken pots. ... Can I start tomorrow?"').
+            # On a voiced turn too ("tell Eda I found the cargo"): the reply is
+            # the player's, and is then judged as the voicing (8B run 153, T6).
             answering = bool(
                 not addressed and other_spoke and prev_spoke and not prev_by_player
-                and not voiced and len(units) == 1 and bare[0]
+                and len(units) == 1 and bare[0]
                 and _asks_the_player(prev_last_quote)
                 # Anywhere in the line: '"Not since the storm. I've been
                 # tracking the tides"' answers in its second sentence (run 23, T1).
@@ -1999,6 +2017,9 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                 # guess read Roger's appraisal as the player's (run 5, T20).
                 if answering and not tagged and not _OTHER_SAID_RE.search(outside):
                     if all(_words_from_player(span, own, quotes) for span in spans):
+                        kept_units.append(unit)
+                    elif voiced and not voicing_kept and _voices_the_player(" ".join(spans), own_stems):
+                        voicing_kept = True
                         kept_units.append(unit)
                     else:
                         dropped.append(unit)
@@ -2055,14 +2076,20 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                         trimmed, gone = _drop_invented_spans(unit, lambda s: _is_player_line(s, quotes))
                         kept_units.append(trimmed)
                         dropped.extend(gone)
-                    elif voiced and not voicing_kept and content_stems(" ".join(spans)) & own_stems:
+                    elif voiced and not voicing_kept and _voices_the_player(" ".join(spans), own_stems):
                         # One line voices the request: "I need to speak with you
                         # about my debt" and then "I can work ... I'll do whatever
                         # it takes" both stood for "ask the tallyman what work
                         # he'll take" (8B run 48, T1).
                         voicing_kept = True
                         kept_units.append(unit)
-                    elif voiced and not voicing_kept and (not asked or "?" in " ".join(spans)):
+                    elif voiced and not voicing_kept and (
+                        ("?" in " ".join(spans)) if asked
+                        # A told message voiced in other words is kept only when
+                        # short; a long line with words of its own is the
+                        # narrator's story in the player's mouth (8B run 153, T6).
+                        else len(re.findall(r"[A-Za-z']+", " ".join(spans))) <= 12
+                    ):
                         voicing_kept = True
                         kept_units.append(unit)
                     else:

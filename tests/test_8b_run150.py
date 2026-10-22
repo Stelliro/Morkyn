@@ -284,6 +284,28 @@ class AnAnswerOpeningOnTheQuoteIsThePlayers(unittest.TestCase):
         self.assertEqual(spoken, [])
 
 
+class AToldReportIsNotRetoldAsAStory(unittest.TestCase):
+    """8B run 153, T6: "tell Eda I found the cargo ..." became an invented reply with a theft and a suspect."""
+
+    LINE = ("I walk back to the dock and tell Eda I found the Black Tide's cargo at the old shipyard: three barrels, two "
+            "crates and a bundle of salted fish and rum.")
+
+    def test_a_voicing_with_words_of_its_own_goes_and_a_faithful_one_stays(self):
+        import re
+
+        from app.narration_pipeline import drop_invented_player_speech
+
+        prose = ("You walk back to The Dock, where Eda waits.\n\n“You found it?” she asks, her tone edged with suspicion.\n\n"
+                 "“Yes. The barrels and the crate are still sealed, but the fish and rum were already taken. I don’t know "
+                 "who took them, but I think it’s someone who knew about the shipment.”")
+        _kept, spoken = drop_invented_player_speech(re.split(r"\n\s*\n", prose), self.LINE)
+        self.assertTrue(any("already taken" in s for s in spoken), spoken)
+        faithful = ("You walk back to The Dock, where Eda waits.\n\n“You found it?” she asks.\n\n"
+                    "“At the old shipyard. Three barrels, two crates and a bundle of salted fish and rum.” you tell her.")
+        _kept, spoken = drop_invented_player_speech(re.split(r"\n\s*\n", faithful), self.LINE)
+        self.assertEqual(spoken, [])
+
+
 class ARepeatedPieceTakesItsTagAlong(unittest.TestCase):
     """T98: the repeated piece went and 'you repeat, the weight of the unspoken debt ...' stayed."""
 
