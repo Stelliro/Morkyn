@@ -912,9 +912,34 @@ def find_progress_candidates(
                 break
             out.append({"quest": quest, "sentence": flat[:400], "step": step, "title": title})
             break
+        else:
+            # The player's own act names the job's work: "push it along the dock
+            # to Warehouse 7" on a job "hauling goods from the docks to the
+            # warehouses" made no candidate, as the prose said "wagon" and
+            # "inside" (8B run 152f, T7). The check still decides finished.
+            last = _act_names_the_job(player_input, words, text)
+            if last and not (_CONSENT_STEP_RE.search(step or title) and not _others_consent(text, player_input)):
+                out.append({"quest": quest, "sentence": last[:400], "step": step, "title": title, "from_act": True})
         if len(out) >= PROGRESS_CAP:
             break
     return out
+
+
+def _act_names_the_job(player_input: str, words: set[str], narration: str) -> str:
+    """The prose's last sentence about "you", when the player's act now shares two words with the job; else ""."""
+    try:
+        from app.act_clauses import acts_now
+
+        own = acts_now(qp._player_own_line(str(player_input or "")))
+    except Exception:
+        own = qp._player_own_line(str(player_input or ""))
+    stems = qp._stems(own) | set(re.findall(r"[a-z]{4,}", own.lower()))
+    if len({w for w in words if w in stems or any(s.startswith(w[:5]) for s in stems if len(w) >= 5)}) < 2:
+        return ""
+    unspoken = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", str(narration or ""))
+    yours = [re.sub(r"\s+", " ", s).strip() for s in qp._SENTENCE_SPLIT.split(unspoken)
+             if re.search(r"\byou\b", s, re.I) and not s.strip().endswith("?")]
+    return yours[-1] if yours else ""
 
 
 def build_progress_prompt(candidate: dict[str, Any], narration: str, player_input: str = "") -> tuple[str, str]:
