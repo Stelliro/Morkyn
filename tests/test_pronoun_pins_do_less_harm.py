@@ -87,6 +87,19 @@ class TheRepairOnlyMendsWhatIsCertain(unittest.TestCase):
         self.assertEqual(len(notes), 2)
 
 
+class ASentenceOpensOnACapital(unittest.TestCase):
+    """8B run 155, T3: the engine's cut left 'you say, "Silas, who hires ..."' after a full stop."""
+
+    def test_a_small_you_after_a_stop_is_capitalised_and_inside_a_sentence_left(self):
+        from app.world import _SMALL_YOU_START_RE
+
+        fix = lambda t: _SMALL_YOU_START_RE.sub(lambda m: m.group(1) + m.group(2).capitalize(), t)
+        self.assertEqual(fix("The scent of tar fills the air. you say, “Silas, who hires?”"),
+                         "The scent of tar fills the air. You say, “Silas, who hires?”")
+        self.assertEqual(fix("He looks at you and nods."), "He looks at you and nods.")
+        self.assertEqual(fix("“Done?” you ask."), "“Done?” you ask.")
+
+
 class ThePlayersOwnSexNoun(unittest.TestCase):
     """8B runs 152c T2, 152d T3, 152e T2: NPCs called Isk (she) "a man"."""
 
