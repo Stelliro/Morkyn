@@ -2059,23 +2059,29 @@ def get_model_config(*, ignore_override: bool = False, resolve_limits: bool = Tr
         with connect().closing() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'model_config'").fetchone()
     except Exception:
-        default["provider"] = _normalize_provider(default["provider"])
-        default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
-        default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
-        return _overlay_model_limits(default) if resolve_limits else default
-    if not row:
-        default["provider"] = _normalize_provider(default["provider"])
-        default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
-        default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
-        return _overlay_model_limits(default) if resolve_limits else default
+        row = None
     try:
-        stored = json.loads(row["value"])
+        stored = json.loads(row["value"]) if row else {}
     except json.JSONDecodeError:
-        default["provider"] = _normalize_provider(default["provider"])
-        default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
-        default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
-        return _overlay_model_limits(default) if resolve_limits else default
-    merged = {**default, **stored}
+        stored = {}
+    stored = stored if isinstance(stored, dict) else {}
+    # The player's own settings and key live per user, not per save (app/user_store):
+    # they win over what an older save's database still holds.
+    from app import user_store
+
+    user = user_store.load_settings()
+    legacy_key = str(stored.pop("api_key", "") or "").strip()
+    merged = {**default, **stored, **user}
+    try:
+        secret = user_store.get_secret("api_key")
+        if not secret and legacy_key:
+            # A key an older build kept in plain text in the save moves to the encrypted store.
+            user_store.set_secret("api_key", legacy_key)
+            secret = legacy_key
+    except Exception:
+        secret = legacy_key
+    if secret:
+        merged["api_key"] = secret
     explicit_env = {
         "provider": "AI_RPG_MODEL_PROVIDER",
         "mle_model": "MLE_MODEL",
@@ -2203,10 +2209,18 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     next_config.pop("theme_model_active", None)
     next_config.pop("context_window", None)
     next_config.pop("model_limits", None)
+    # The key goes to the encrypted per-user store and the settings to the
+    # per-user file (app/user_store); the save's copy keeps no key.
+    from app import user_store
+
+    if new_key:
+        user_store.set_secret("api_key", new_key)
+    stored_config = {k: v for k, v in next_config.items() if k != "api_key"}
+    user_store.save_settings(stored_config)
     with connect().closing() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            ("model_config", json.dumps(next_config, ensure_ascii=True)),
+            ("model_config", json.dumps(stored_config, ensure_ascii=True)),
         )
     # The settings form says whether its numbers are the player's own for
     # this model or the automatic ones. Stored per model, so switching to

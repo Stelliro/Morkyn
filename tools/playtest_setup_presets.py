@@ -116,6 +116,8 @@ def isolated_data_env(data_dir: str) -> dict[str, str]:
         # Abilities the model invents and the game verifies (app/ability_library.py).
         "AI_RPG_ABILITY_LIBRARY": str(root / "ability_library.json"),
         "AI_RPG_PACK_DIR": str(root / "packs"),
+        # The per-user settings and encrypted key (app/user_store.py), never the player's AppData.
+        "MORKYN_USER_DIR": str(root / "user"),
     }
 
 

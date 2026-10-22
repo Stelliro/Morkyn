@@ -36,7 +36,8 @@ def main() -> int:
     # deleted the other's databases ("no such table: npcs", 2026-10-14).
     tmp = base / f"run-{os.getpid()}"
     tmp.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
+    # The per-user store (app/user_store.py) too: a test must never write the player's AppData.
+    env = dict(os.environ, TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp), MORKYN_USER_DIR=str(tmp / "user"))
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "unittest", "discover", "-s", "."],

@@ -342,9 +342,33 @@ def _read_stored_row() -> dict[str, Any]:
     return {k: v for k, v in stored.items() if k in _base_defaults()}
 
 
+def _read_user_config() -> dict[str, Any]:
+    """The save's row under the per-user speech settings and the encrypted key (app/user_store).
+
+    Stell (2026-10-22): settings and keys did not save; they lived in the save's
+    database, the key in plain text. A key an older save still holds moves to
+    the encrypted store.
+    """
+    row = _read_stored_row()
+    legacy_key = str(row.pop("api_key", "") or "").strip()
+    try:
+        from app import user_store
+
+        merged = {**row, **{k: v for k, v in user_store.load_settings("speech").items() if k in _base_defaults()}}
+        secret = user_store.get_secret("tts_api_key")
+        if not secret and legacy_key:
+            user_store.set_secret("tts_api_key", legacy_key)
+            secret = legacy_key
+    except Exception:
+        merged, secret = row, legacy_key
+    if secret:
+        merged["api_key"] = secret
+    return merged
+
+
 def get_tts_config() -> dict[str, Any]:
     """The stored row merged over the defaults; ``AI_RPG_TTS_*`` wins when set."""
-    merged = {**_base_defaults(), **_read_stored_row()}
+    merged = {**_base_defaults(), **_read_user_config()}
     return _normalize_tts_config(_apply_env(merged))
 
 
@@ -355,7 +379,7 @@ def update_tts_config(payload: dict[str, Any]) -> dict[str, Any]:
     voice, model, base_url and chunk_chars (unless the same payload sets them), so a
     voice id never survives a switch to another service.
     """
-    stored = {**_base_defaults(), **_read_stored_row()}
+    stored = {**_base_defaults(), **_read_user_config()}
     payload = dict(payload or {})
     if "provider" not in payload:
         # The form shows the provider with AI_RPG_TTS_PROVIDER applied and omits it when
@@ -386,10 +410,19 @@ def update_tts_config(payload: dict[str, Any]) -> dict[str, Any]:
             if key not in payload or payload.get(key) is None:
                 next_cfg[key] = blank
     clean = _normalize_tts_config(next_cfg)
+    # The key to the encrypted per-user store, the rest to the per-user file;
+    # the save's copy keeps no key.
+    from app import user_store
+
+    new_key = str(payload.get("api_key") or "").strip()
+    if new_key:
+        user_store.set_secret("tts_api_key", new_key)
+    stored_clean = {k: v for k, v in clean.items() if k != "api_key"}
+    user_store.save_settings(stored_clean, "speech")
     with connect().closing() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (TTS_CONFIG_KEY, json.dumps(clean, ensure_ascii=True)),
+            (TTS_CONFIG_KEY, json.dumps(stored_clean, ensure_ascii=True)),
         )
     return public_tts_config(get_tts_config())
 
