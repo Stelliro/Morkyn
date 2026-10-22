@@ -221,6 +221,15 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
         self.assertFalse(world._note_claims_unasked_player_act("You learned the reeve hires runners.", asked))
         self.assertFalse(world._note_claims_unasked_player_act("The reeve hires runners.", asked))
 
+    def test_the_old_dockyard_is_not_the_dock(self):
+        # 8B run 154, T7: "walk east through the fog to the old dockyard" kept the model's MOVE to The Dock.
+        from app import world
+
+        line = "i nod to thorne and walk east through the fog to the old dockyard to find the wreck of the shattered tides."
+        self.assertFalse(world._line_names_place(line, ["dock"]))
+        self.assertTrue(world._line_names_place("i walk back down to the docks.", ["dock"]))
+        self.assertTrue(world._line_names_place("i head for the dock's end.", ["dock"]))
+
     def test_where_the_destination_stands_is_not_the_destination(self):
         # 8B run 152d, T2: "walk to the guild hall at the end of the dock" moved the player to The Dock.
         from app import world

@@ -12,8 +12,8 @@ rebuild lost them, and the key was stored there as plain text.
   * ``model_settings.json``: the model settings, no secrets in it.
   * ``secrets.bin``: named secrets (the API keys). On Windows the file is
     encrypted with DPAPI for the current Windows user (CryptProtectData, with
-    Mørkyn's own entropy), so only that user's processes that know the
-    entropy can read it. On macOS and Linux it is a file only the user may
+    Mørkyn's own entropy; see above for what that does and does not stop).
+    On macOS and Linux it is not encrypted: a file only the user may
     read (mode 600); there is no OS encryption call without extra packages,
     and ``protection()`` says which one is in use.
 """
