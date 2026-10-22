@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 
 _TMP = Path(tempfile.mkdtemp(prefix="morkyn-model-limits-"))
 _ENV = {
+    # The per-user settings and key (app/user_store.py): this module once wrote the player's AppData.
+    "MORKYN_USER_DIR": str(_TMP / "user"),
     "AI_RPG_DB": str(_TMP / "world.db"),
     "AI_RPG_PACK_DIR": str(_TMP / "packs"),
     "AI_RPG_SOURCE_INDEX": str(_TMP / "source_index"),
