@@ -284,16 +284,16 @@
               <input name="gguf_model_path" value="" maxlength="1000" placeholder="D:\models\....gguf" />
             </label>
             <label>
-              <span>API base URL</span>
-              <input name="api_base_url" value="https://api.x.ai/v1" maxlength="400" />
-            </label>
-            <label>
-              <span>API model</span>
-              <input name="api_model" value="grok-4.5" maxlength="200" />
-            </label>
-            <label>
               <span>API key</span>
-              <input name="api_key" type="password" value="" maxlength="500" autocomplete="off" placeholder="Paste your key (kept with the model settings, not in the prefs file)" />
+              <input name="api_key" type="password" value="" maxlength="500" autocomplete="off" placeholder="Paste your key: that is all you need (xai-… for Grok, sk-… for OpenAI)" />
+            </label>
+            <label>
+              <span>API address (optional)</span>
+              <input name="api_base_url" value="https://api.x.ai/v1" maxlength="400" title="Filled from your key's provider. Change it only for another OpenAI-compatible service." />
+            </label>
+            <label>
+              <span>API model (optional)</span>
+              <input name="api_model" value="grok-4.5" maxlength="200" title="Filled from your key's provider. Change it to use another model." />
             </label>
             <label>
               <span>Context tokens</span>
