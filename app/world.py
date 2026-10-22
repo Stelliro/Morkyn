@@ -569,6 +569,12 @@ def is_plausible_person_name(name: str) -> bool:
     # Descriptions are not names ("Woman", "Hooded Figure", "The Old Guard")
     if is_generic_person_label(n):
         return False
+    # Nor a word that only opens a sentence: an NPC "Something" was minted and
+    # then confirmed as "Something [[B]] from the tannery" (8B run 152f, T2-T6).
+    from app.naming import _NOT_A_NAME
+
+    if all(w.lower() in _NOT_A_NAME for w in words):
+        return False
     from app.example_pools import is_roster_name_part
 
     # A given or family name from the engine's own pools is a name even when it

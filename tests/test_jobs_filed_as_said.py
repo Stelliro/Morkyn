@@ -225,7 +225,9 @@ class StepsAreWrittenAsPlayHappens(unittest.TestCase):
         logged = quests.log_job_progress(self.conn, qid, "I try to shoulder a crate.", turn=2, done=False)
         self.assertEqual(logged["step"], 0)
         self.assertEqual(int(quests.get_quest(self.conn, qid)["total_steps"]), 1)
-        self.assertTrue(any("(not done yet)" in line for line in _journal(self.conn)))
+        # 8B run 152f, T6: a failed haul read as progress; it is journaled as a try that went wrong.
+        self.assertTrue(any(line.startswith("Job attempt went wrong:") for line in _journal(self.conn)))
+        self.assertFalse(any(line.startswith("Job progress:") for line in _journal(self.conn)))
 
     def test_a_job_with_written_steps_is_left_as_it_is(self):
         qid = quests.create_quest(self.conn, title="The Sealed Letter", steps=[{"title": "Read the letter"}, {"title": "Deliver it"}])
