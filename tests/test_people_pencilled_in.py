@@ -275,7 +275,9 @@ class OneAskDecidesWhoTheyAre(unittest.TestCase):
         user = calls[0]["user"]
         self.assertIn("Is this the same person as one of these?", user)
         self.assertIn("A: Fulk Rooke, wherryman", user)
-        self.assertTrue(user.rstrip().endswith("Answer a code or new."))
+        # The choices by name (8B run 153, T2: "Answer a code or new" came back as "code").
+        self.assertTrue(user.rstrip().endswith("Answer with one of: A, new."), user)
+        self.assertNotIn("a code or new", calls[0]["system"])
         self.assertEqual(calls[0]["phase"], "sketch_identity")
 
     def test_a_code_merges_the_sketch_into_that_person(self):
