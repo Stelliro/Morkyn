@@ -9240,6 +9240,10 @@ def ground_acquisitions(
     return granted
 
 
+# After a plain stop only: '"Done?" you ask' is a tag after a closing quote.
+_SMALL_YOU_START_RE = re.compile(r"(^|[.!?]\s+|\n\s*)(you|your)\b")
+
+
 _YOU_ARE_A_RE = re.compile(
     r"\b(?P<lead>you(?:['’]re|\s+are|\s+were|\s+look|\s+seem|\s+sound)?(?:\s+not)?(?:\s+(?:like|more\s+like))?\s+"
     r"(?:a|an|the|no|some)\s+(?:(?:kind|sort|type)\s+of\s+)?(?:[\w'’-]+\s+){0,2}?)(?P<noun>man|men|lad|boy|fellow|woman|lass|girl)\b",
@@ -11668,15 +11672,22 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
         walk = _OUTDOOR_WALK_VERB_RE.search(wanted or "")
         # "push it along the dock to Warehouse 7" (8B run 152f, T7): no "the",
         # and a number that is part of the name.
+        # Without "the" only a numbered building: "to Philippa's chandlery" is a
+        # proper name for _named_building_requested, and read here it made "The
+        # Philippa's Chandlery" from a walk that stopped at a shut door.
+        words = "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True))
         onward = re.compile(
-            r"\b(?:to|toward|towards|into|up\s+to)\s+(?:the\s+)?(?P<place>(?:[a-z'’-]+\s+){0,2}?(?:"
-            + "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True)) + r")(?:\s+\d{1,3}\b)?)\b",
+            r"\b(?:to|toward|towards|into|up\s+to)\s+(?:the\s+(?P<place>(?:[a-z'’-]+\s+){0,2}?(?:" + words + r")(?:\s+\d{1,3}\b)?)"
+            r"|(?P<numbered>(?:" + words + r")\s+\d{1,3}))\b",
             re.IGNORECASE,
         )
         match = next((m for m in onward.finditer(wanted or "") if walk and walk.end() <= m.start() <= walk.end() + 60), None)
     if not match:
         return ""
-    place = " ".join(match.group("place").split())
+    found = match.group("place") if "place" in match.re.groupindex else None
+    if found is None and "numbered" in match.re.groupindex:
+        found = match.group("numbered")
+    place = " ".join(str(found or "").split())
     numbered = bool(re.search(r"\s\d{1,3}$", place))
     head = place.split()[-2 if numbered else -1].lower()
     rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
@@ -23819,6 +23830,13 @@ def _reconcile_prose_with_state(
             turn_ledger.note("prose", "player_sex_noun_repaired", fixed=fixed)
     except Exception:
         pass
+    # The engine's own cuts can leave a sentence opening on a small "you": the
+    # invented '"Silas,"' dropped from '"Silas," you say, "who hires ..."' left
+    # 'you say, "Silas, who hires ..."' after a full stop (8B run 155, T3).
+    fixed_text = _SMALL_YOU_START_RE.sub(lambda m: m.group(1) + m.group(2).capitalize(), text)
+    if fixed_text != text:
+        report["trimmed"].append({"why": "sentence_start_capitalised"})
+        text = fixed_text
     # Op, packet and status text in the prose (7B run 5, #131, #83): only the
     # exact engine shapes are repaired; the rest of the scene stays as written.
     try:
