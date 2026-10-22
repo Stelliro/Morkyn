@@ -19913,9 +19913,21 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
             # Not a figure in another trade: "a weaver's stall where a woman in a
             # soot-stained apron is mending" was bound to the tallyman, who was
             # then pinned "she" (8B run 75, T1).
+            figure_sentence = _hint_sentence(text, free[0]).lower()
             other_trade = re.search(r"\b([a-z]+)['’]s\s+(?:stall|cart|shop|forge|bench|booth|barrow|boat|yard)\b",
-                                    _hint_sentence(text, free[0]).lower())
-            if not (other_trade and other_trade.group(1) not in role_words):
+                                    figure_sentence)
+            # Nor a figure the prose gives another job, while it puts this
+            # person's trade elsewhere: "the nearest worker, a burly man" was
+            # bound to NPC_NEW "Mira Venn" ROLE "Guild Recruiter" while "the
+            # guild's recruiters" waited in the alley, and she was pinned "he"
+            # (8B run 152h, T1).
+            figure_job = {w for w in re.findall(r"[a-z]+", figure_sentence) if w in _FIGURE_JOB_NOUNS}
+            role_stems = {w[:5] for w in role_words if len(w) >= 4}
+            other_job = bool(figure_job) and not any(j[:5] in role_stems for j in figure_job)
+            role_elsewhere = any(
+                re.search(rf"\b{re.escape(stem)}\w*", unspoken.replace(figure_sentence, " "), re.I) for stem in role_stems
+            ) if role_stems else False
+            if not (other_trade and other_trade.group(1) not in role_words) and not (other_job and role_elsewhere):
                 match = free[0]
         if match is None and len(unshown) == 1 and len(free) > 1:
             # Of several, the one shown once the player is inside: NPC_NEW "Lars"
@@ -20097,6 +20109,14 @@ def _clean_op_role(role: str) -> str:
     words = str(role or "").split()
     kept = [w for w in words if not (len(w) > 3 and w[0].isupper() and w[1].islower() and w[1] == w[0].lower())]
     return " ".join(kept) if kept else str(role or "").strip()
+
+
+_FIGURE_JOB_NOUNS = frozenset({
+    "worker", "workers", "dockworker", "dockhand", "docker", "loader", "porter", "sailor", "fisherman", "fisher",
+    "fisherwoman", "clerk", "guard", "merchant", "trader", "smith", "baker", "cook", "barkeep", "innkeeper", "bargeman",
+    "boatman", "ferryman", "wherryman", "net-mender", "labourer", "laborer", "carter", "carpenter", "shipwright",
+    "recruiter", "recruiters", "tallyman", "reeve", "priest", "beggar", "urchin", "sentry", "watchman", "stevedore",
+})
 
 
 def _store_figure_aliases(conn, npc: dict[str, Any], npc_id: int | None) -> None:
