@@ -6,13 +6,19 @@ somewhere else secure". The model settings lived in the game database, which is
 per save and sits beside the executable, so a new game, another slot or a
 rebuild lost them, and the key was stored there as plain text.
 
+What the protection is, plainly: DPAPI ties the file to this Windows user, so
+other accounts on the PC and anyone who copies the file to another machine
+cannot read it. It does not stop another program running as the same user:
+the entropy is in Mørkyn's public source. A local app cannot be the only
+reader of its own secret; treat the key like a password the browser saves.
+
   * ``user_dir()``: %APPDATA%\\Morkyn on Windows, ~/Library/Application
     Support/Morkyn on macOS, $XDG_CONFIG_HOME/morkyn on Linux;
     ``MORKYN_USER_DIR`` overrides it (tests, portable use).
   * ``model_settings.json``: the model settings, no secrets in it.
   * ``secrets.bin``: named secrets (the API keys). On Windows the file is
     encrypted with DPAPI for the current Windows user (CryptProtectData, with
-    Mørkyn's own entropy; see above for what that does and does not stop).
+    Mørkyn's own entropy; what that does and does not stop is above).
     On macOS and Linux it is not encrypted: a file only the user may
     read (mode 600); there is no OS encryption call without extra packages,
     and ``protection()`` says which one is in use.
