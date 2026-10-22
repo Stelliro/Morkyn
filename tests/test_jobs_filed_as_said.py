@@ -381,6 +381,16 @@ class PayIsAnEngineLedger(unittest.TestCase):
         self.assertEqual(qo.find_progress_candidates("Eadric nods.", "\"Which warehouse do I haul the goods to?\"",
                                                      active=[job]), [])
 
+    def test_the_one_jobs_giver_saying_the_work_is_done_is_checked(self):
+        # 8B run 153, T7: "The work is done," she says, for the only job going; nothing reached the check.
+        job = {"code": "Q1", "id": 1, "status": "active", "title": "Retrieve the Black Tide's Cargo",
+               "current_objective": "find the missing cargo from the Black Tide"}
+        prose = "You hand the containers to Eda. \"The work is done,\" she says, \"but the payment waits on the harbour master.\""
+        cands = qo.find_progress_candidates(prose, "\"Is the job done, and what does it pay?\"", active=[job])
+        self.assertEqual([c["title"] for c in cands], ["Retrieve the Black Tide's Cargo"])
+        two = [job, {**job, "code": "Q2", "id": 2, "title": "Mend the nets", "current_objective": "mend the nets"}]
+        self.assertEqual(qo.find_progress_candidates(prose, "\"Is the job done?\"", active=two), [])
+
     def test_the_step_is_never_cut_mid_word(self):
         # 8B run 152c, T3: the step "... without a bit of pr" reached the narrator, which then wrote "a reco.".
         task = ("Carry the guild's three crates of salvaged tools down to the shipwrights before the tide turns. "
