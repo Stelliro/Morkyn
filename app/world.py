@@ -10349,7 +10349,9 @@ def _line_names_place(line: str, words: list[str]) -> bool:
     if not words:
         return False
     if len(words) == 1:
-        return bool(re.search(rf"\b{re.escape(words[0])}", line))
+        # The whole word, plural or possessive: "dock" is not named by "the old
+        # dockyard", which walked the player to The Dock (8B run 154, T7).
+        return bool(re.search(rf"\b{re.escape(words[0])}(?:s|es|['’]s|s['’])?\b", line))
     # Filler words between them still name it: "the drowned lower district"
     # for "Drowned Lower District", whose words skip "lower" (8B run 17, T1).
     filler = "|".join(sorted(_PLACE_FILLER_WORDS, key=len, reverse=True))
@@ -11581,8 +11583,8 @@ _CIVIC_BUILDING_WORDS = (
     # went in (8B run 151, T9).
     "warehouse", "warehouses", "storehouse", "boathouse", "smokehouse", "salt house", "sail loft", "net shed",
     "chandlery", "cooperage", "ropewalk", "fish market", "market hall",
-    # "to the shipwrights' yard" (8B run 152b, T11).
-    "shipyard", "boatyard", "yard",
+    # "to the shipwrights' yard" (8B run 152b, T11); "the old dockyard" (8B run 154, T7).
+    "shipyard", "boatyard", "dockyard", "yard",
 )
 
 
