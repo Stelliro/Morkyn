@@ -2120,6 +2120,16 @@ def get_model_config(*, ignore_override: bool = False, resolve_limits: bool = Tr
     return _overlay_model_limits(merged) if resolve_limits else merged
 
 
+def _preset_for_key(key: str) -> str:
+    """The API preset a key's own prefix names ("xai-" is xAI, "sk-" OpenAI), or ""."""
+    low = str(key or "").strip().lower()
+    if low.startswith("xai-") and "xai" in API_PRESETS:
+        return "xai"
+    if low.startswith("sk-") and not low.startswith("sk-ant-") and "openai" in API_PRESETS:
+        return "openai"
+    return ""
+
+
 def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     current = get_model_config(ignore_override=True, resolve_limits=False)
     allowed = {
@@ -2161,6 +2171,23 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     next_config["theme_adapter_map"] = normalize_theme_adapter_map(next_config.get("theme_adapter_map"))
     next_config["theme_llm_lora_map"] = normalize_theme_llm_lora_map(next_config.get("theme_llm_lora_map"))
     next_config["lora_path"] = str(next_config.get("lora_path") or "").strip()
+    # The key is all a player should need (Stell, 2026-10-22: "no model or link
+    # should be required for an api"). A new key names its provider by its
+    # prefix; the address and model then come from that preset unless the
+    # player typed their own (anything that is not another preset's default).
+    new_key = str(config.get("api_key") or "").strip()
+    keyed = _preset_for_key(new_key) if new_key else ""
+    # The custom preset's address is a gateway the player runs: never replaced.
+    defaults = {p.get("api_base_url") for n, p in API_PRESETS.items() if n != "custom"} | {""}
+    models = {p.get("api_model") for n, p in API_PRESETS.items() if n != "custom"} | {""}
+    # A typed address (a gateway, a custom service) is the player's: the key's
+    # provider only replaces a preset's own default.
+    if keyed and str(next_config.get("api_base_url") or "") in defaults:
+        next_config["api_preset"] = keyed
+        if str(next_config.get("api_base_url") or "") in defaults:
+            next_config["api_base_url"] = API_PRESETS[keyed]["api_base_url"]
+        if str(next_config.get("api_model") or "") in models:
+            next_config["api_model"] = API_PRESETS[keyed]["api_model"]
     # Apply preset defaults when switching to openai without custom URL
     preset_name = str(next_config.get("api_preset") or "xai").strip().lower()
     if next_config["provider"] == "openai" and preset_name in API_PRESETS:

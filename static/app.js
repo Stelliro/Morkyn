@@ -13671,7 +13671,7 @@ function renderModelForm() {
   const preset = config.api_preset || "xai";
   const keyHint = config.api_key_set
     ? `Key set${config.api_key_hint ? ` (${escapeHtml(config.api_key_hint)})` : ""} — leave blank to keep`
-    : "Paste key or set XAI_API_KEY / OPENAI_API_KEY / AI_RPG_API_KEY";
+    : "Paste your key: that is all you need (xai-… Grok, sk-… OpenAI)";
   return `
     <form id="modelForm" class="modelForm">
       <label>
@@ -13691,16 +13691,16 @@ function renderModelForm() {
         </select>
       </label>
       <label>
-        <span>API base URL</span>
-        <input name="api_base_url" value="${escapeHtml(config.api_base_url || "https://api.x.ai/v1")}" maxlength="400" placeholder="https://api.x.ai/v1" />
-      </label>
-      <label>
-        <span>API model</span>
-        <input name="api_model" value="${escapeHtml(config.api_model || "grok-4.5")}" maxlength="200" placeholder="grok-4.5" />
-      </label>
-      <label>
         <span>API key</span>
         <input name="api_key" type="password" value="" maxlength="500" autocomplete="off" placeholder="${escapeHtml(keyHint)}" />
+      </label>
+      <label>
+        <span>API address (optional)</span>
+        <input name="api_base_url" value="${escapeHtml(config.api_base_url || "https://api.x.ai/v1")}" maxlength="400" placeholder="Filled from the preset or your key's provider" />
+      </label>
+      <label>
+        <span>API model (optional)</span>
+        <input name="api_model" value="${escapeHtml(config.api_model || "grok-4.5")}" maxlength="200" placeholder="Filled from the preset or your key's provider" />
       </label>
       <label>
         <span>Model Path (GGUF)</span>
@@ -29646,6 +29646,11 @@ document.querySelector("#appSettingsForm")?.addEventListener("submit", async (ev
       });
       if (!keyResponse.ok) throw new Error(await keyResponse.text());
       modelConfig = await keyResponse.json();
+      // The key picked its provider; the prefs follow it, so the prefill of
+      // another provider's address is not pushed back over it below.
+      if (modelConfig?.api_base_url) prefs.api_base_url = modelConfig.api_base_url;
+      if (modelConfig?.api_model) prefs.api_model = modelConfig.api_model;
+      if (modelConfig?.api_preset) prefs.api_preset = modelConfig.api_preset;
       if (form.elements.api_key) {
         form.elements.api_key.value = "";
         form.elements.api_key.placeholder = `Key saved${modelConfig?.api_key_hint ? ` (${modelConfig.api_key_hint})` : ""}. Leave blank to keep.`;
