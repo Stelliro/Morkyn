@@ -55,10 +55,13 @@ belong to, with the date).
 
 - **Commit tested work every turn** without asking (2026-10-05). **Push, tag and release only on
   an explicit ask.** Commit messages end with the Co-Authored-By line from the session.
-- **Changelog:** entries go under `## [Unreleased]` in CHANGELOG.md. A pushed batch becomes
-  `0.10.0-dev.N`: rename the section with date and a `>` summary, set `APP_VERSION` in
-  app/main.py, the two README version spots and changelogs/0.10.0-dev.md "Latest", tag
-  `v0.10.0-dev.N`, push main and the tag. N only goes up.
+- **Changelog:** entries go under `## [Unreleased]` in CHANGELOG.md. Versions (2026-10-22):
+  "we should be working on the newer build 0.11.0 and later changelogs would be 0.11.1^". The
+  dev.N series ended at `0.10.0-dev.15`; the current batch is `0.11.0` (APP_VERSION is already
+  set to it so local builds say so), and each pushed batch after it is the next patch,
+  `0.11.1`, `0.11.2` and on. On a push: rename the section with date and a `>` summary, set
+  `APP_VERSION` in app/main.py, the two README version spots and the changelogs/ "Latest"
+  line, tag `v0.11.N`, push main and the tag. The number only goes up.
 - **Playtests: log only.** While Stell is playtesting, log each reported issue in
   docs/PLAYTEST_ISSUES.md (where, what, evidence, first guess at cause) and acknowledge. No fixes
   until Stell says testing is done (2026-10-05).
