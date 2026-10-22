@@ -219,10 +219,21 @@
           }
         }
 
+        // No call is left waiting when the page is about to be replaced by the
+        // game: its answer would land on a page that is gone (pywebview raised
+        // "_returnValuesCallbacks ... is not a function").
+        var leaving = false;
+        var inFlight = false;
+
         function poll() {
           var a = api();
-          if (!a) return;
-          a.status().then(render).catch(function () {});
+          if (!a || leaving || inFlight) return;
+          inFlight = true;
+          a.status().then(function (s) {
+            inFlight = false;
+            if (s && s.state === "ready" && !s.show_running) leaving = true;
+            render(s);
+          }).catch(function () { inFlight = false; });
         }
 
         function call(name, arg) {
@@ -242,7 +253,7 @@
         document.getElementById("quitFailed").onclick = function () { call("quit"); };
         document.getElementById("quitRunning").onclick = function () { call("quit"); };
         document.getElementById("openBrowser").onclick = function () { call("open_in_browser"); };
-        document.getElementById("openWindow").onclick = function () { call("open_game_here"); };
+        document.getElementById("openWindow").onclick = function () { leaving = true; call("open_game_here"); };
         document.getElementById("restartBtn").onclick = function () { call("restart"); };
 
         window.addEventListener("pywebviewready", poll);

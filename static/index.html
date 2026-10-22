@@ -292,6 +292,10 @@
               <input name="api_model" value="grok-4.5" maxlength="200" />
             </label>
             <label>
+              <span>API key</span>
+              <input name="api_key" type="password" value="" maxlength="500" autocomplete="off" placeholder="Paste your key (kept with the model settings, not in the prefs file)" />
+            </label>
+            <label>
               <span>Context tokens</span>
               <input name="llama_cpp_context" value="auto" maxlength="12" placeholder="auto" title="auto = sized from the model's header and your GPU. Below 12288 the full story contract does not fit." />
             </label>

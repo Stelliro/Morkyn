@@ -66,7 +66,22 @@ CATALOG: list[dict[str, Any]] = [
         "os": ["windows", "linux", "macos"],
         "provides": "llama_cpp",
     },
+    # Add-ons sit beside the engine: every installed one is on the path. The
+    # packaged app has no pip, and "Install local speech engine" ran
+    # `Morkyn.exe -m pip ...`, which opened a second Mørkyn (Stell, 2026-10-22).
+    {
+        "id": "piper-speech",
+        "title": "Local speech engine (Piper)",
+        "summary": "Reads the story aloud on this machine, no account needed. Voices download separately in Speech settings.",
+        "os": ["windows", "linux", "macos"],
+        "provides": "piper",
+        "kind": "addon",
+    },
 ]
+
+
+def is_addon(pack_id: str) -> bool:
+    return any(e["id"] == pack_id and e.get("kind") == "addon" for e in CATALOG)
 
 _PROGRESS: dict[str, dict[str, Any]] = {}
 _LOCK = threading.Lock()
@@ -227,6 +242,12 @@ def activate() -> list[str]:
     added: list[str] = []
     picked = choice()
     try:
+        for pack in installed():
+            if pack.get("fits") and is_addon(str(pack.get("id") or "")):
+                _add_site(Path(pack["site"]), added)
+    except Exception:
+        pass
+    try:
         if picked["mode"] == "none":
             return added
         if picked["mode"] == "custom":
@@ -234,7 +255,7 @@ def activate() -> list[str]:
             if site is not None:
                 _add_site(site, added)
             return added
-        have = {p["id"]: p for p in installed() if p.get("fits")}
+        have = {p["id"]: p for p in installed() if p.get("fits") and not is_addon(str(p.get("id") or ""))}
         pack = have.get(picked["pack"])
         if pack is None and picked["mode"] == "auto" and have:
             # Auto with the fitting pack not yet installed: any installed one serves until it is.

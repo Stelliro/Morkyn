@@ -2643,10 +2643,12 @@ def _start_managed_llama_cpp(
         stdout_handle = open(stdout_path, "a", encoding="utf-8")
         stderr_handle = open(stderr_path, "a", encoding="utf-8")
 
+    from app.launcher import module_command
+
+    # The packaged exe runs the module itself; `Morkyn.exe -m ...` would open a
+    # second Mørkyn (the same fault as the speech install, 2026-10-22).
     args = [
-        sys.executable,
-        "-m",
-        "llama_cpp.server",
+        *module_command("llama_cpp.server"),
         "--model",
         model_path,
         "--model_alias",

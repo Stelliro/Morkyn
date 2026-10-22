@@ -107,6 +107,47 @@ class APackFromAZip(unittest.TestCase):
         self.assertEqual(rp.auto_install_if_needed().get("skipped"), "not packaged")
 
 
+class TheSpeechAddOn(unittest.TestCase):
+    """Stell, 2026-10-22: "install local speech engine" in the exe opened a second Mørkyn."""
+
+    def test_an_installed_addon_is_on_the_path_whatever_engine_is_chosen(self):
+        from app import runtime_packs as rp
+
+        zip_path = _fake_pack_zip(_TMP / "piper.zip", "piper-speech")
+        rp.set_choice("none")
+        try:
+            self.assertTrue(rp.install("piper-speech", zip_path.as_uri(), wait=True)["ok"])
+            sys.path[:] = [p for p in sys.path if "piper-speech" not in p]
+            rp.activate()
+            self.assertTrue(any(p.endswith(str(Path("piper-speech") / "site")) for p in sys.path))
+            self.assertTrue(rp.remove("piper-speech")["ok"])
+        finally:
+            rp.set_choice("auto")
+            sys.modules.pop("fake_engine_module", None)
+
+    def test_the_exe_installs_the_speech_pack_not_pip(self):
+        from app import tts
+
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch("app.runtime_packs.install", return_value={"ok": True}) as install, \
+                mock.patch.object(tts, "piper_installed", return_value=(True, "1.8.0")), \
+                mock.patch("subprocess.run") as run:
+            out = tts.pip_install_piper()
+        self.assertTrue(out["ok"], out)
+        install.assert_called_once()
+        self.assertEqual(install.call_args[0][0], "piper-speech")
+        run.assert_not_called()
+
+    def test_the_llama_server_starts_through_the_exes_module_runner(self):
+        from app.launcher import module_command
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            self.assertEqual(module_command("llama_cpp.server")[1:3], ["--run-module", "llama_cpp.server"])
+        source = (ROOT / "app" / "llm.py").read_text(encoding="utf-8")
+        self.assertIn('module_command("llama_cpp.server")', source)
+        self.assertNotIn('"-m",\n        "llama_cpp.server"', source)
+
+
 class ACustomZip(unittest.TestCase):
     def test_the_custom_zip_is_unpacked_and_put_on_the_path(self):
         from app import runtime_packs as rp

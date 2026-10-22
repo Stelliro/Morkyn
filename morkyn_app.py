@@ -276,7 +276,7 @@ class Shell:
             if sup.state == "ready":
                 if self.window_mode == "app" and self.showing != "game":
                     self.showing = "game"
-                    self.main.load_url(sup.url + "/")
+                    self.load_soon(sup.url + "/")
                 elif self.window_mode == "browser" and self.browser_opened_for != sup.url:
                     self.browser_opened_for = sup.url
                     webbrowser.open(sup.url)
@@ -284,6 +284,19 @@ class Shell:
                 self.showing = "boot"
                 self._close_popouts()
                 self.main.load_html(boot_html(self.logo))
+
+    def load_soon(self, url: str, delay: float = 0.8) -> None:
+        """Leave the gate page a moment after the calls in flight return.
+
+        Loading the game while the page's status() poll or the "Open here" call
+        was still waiting threw "_returnValuesCallbacks ... is not a function"
+        in pywebview's threads: the callback went with the page (Stell, 2026-10-22).
+        """
+        def go() -> None:
+            if self.main is not None and not self.quitting:
+                self.main.load_url(url)
+
+        threading.Timer(delay, go).start()
 
     def status(self) -> dict[str, Any]:
         out = self.sup.status()
@@ -460,7 +473,7 @@ class ShellApi:
                 shell.main.resize(1280, 800)
             except Exception:
                 pass
-            shell.main.load_url(shell.sup.url + "/")
+            shell.load_soon(shell.sup.url + "/")
         return True
 
     def open_external(self, url: str) -> bool:

@@ -56,16 +56,23 @@ def python_tag() -> str:
     return f"cp{sys.version_info[0]}{sys.version_info[1]}"
 
 
+# Add-on packs (app/runtime_packs.CATALOG kind "addon"): the local speech engine
+# for the packaged app, which has no pip (Stell, 2026-10-22).
+ADDONS = {"piper": ("piper-speech", "piper-tts==1.8.0")}
+
+
 def build(acc: str, out_dir: Path) -> Path:
-    if acc not in INDEX:
-        raise SystemExit(f"unknown accelerator {acc!r}; one of {', '.join(INDEX)}")
-    pack_id = f"llama-cpp-{acc}"
+    if acc not in INDEX and acc not in ADDONS:
+        raise SystemExit(f"unknown pack {acc!r}; one of {', '.join([*INDEX, *ADDONS])}")
+    pack_id, requirement = ADDONS[acc] if acc in ADDONS else (f"llama-cpp-{acc}", f"llama-cpp-python[server]=={PIN}")
     name = f"morkyn-pack-{pack_id}-{os_tag()}-{arch_tag()}-{python_tag()}.zip"
     work = Path(tempfile.mkdtemp(prefix="morkyn-pack-"))
     site = work / "site"
-    cmd = [sys.executable, "-m", "pip", "install", "--target", str(site), "--upgrade", f"llama-cpp-python[server]=={PIN}"]
+    cmd = [sys.executable, "-m", "pip", "install", "--target", str(site), "--upgrade", requirement]
     env = dict(os.environ)
-    if INDEX[acc]:
+    if acc in ADDONS:
+        cmd += ["--prefer-binary"]
+    elif INDEX[acc]:
         cmd += ["--extra-index-url", INDEX[acc]]
     else:
         cmd += ["--no-binary", "llama-cpp-python"]
@@ -78,13 +85,13 @@ def build(acc: str, out_dir: Path) -> Path:
             shutil.rmtree(entry, ignore_errors=True) if entry.is_dir() else entry.unlink()
     meta = {
         "id": pack_id,
-        "version": PIN,
-        "accelerator": acc,
+        "version": requirement.split("==")[-1],
+        "accelerator": "" if acc in ADDONS else acc,
         "python_tag": python_tag(),
         "os": os_tag(),
         "arch": arch_tag(),
         "built": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "index": INDEX[acc] or "source",
+        "index": "pypi" if acc in ADDONS else (INDEX[acc] or "source"),
     }
     (work / "pack.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -103,7 +110,7 @@ def build(acc: str, out_dir: Path) -> Path:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("accelerator", choices=sorted(INDEX))
+    ap.add_argument("accelerator", choices=sorted([*INDEX, *ADDONS]))
     ap.add_argument("--out", default=str(ROOT / "dist" / "packs"))
     args = ap.parse_args(argv)
     build(args.accelerator, Path(args.out))
