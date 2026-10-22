@@ -360,6 +360,27 @@ class PayIsAnEngineLedger(unittest.TestCase):
         kept = "Wystan Lambard [[A]] looks up. “New blood?” he asks."
         self.assertEqual([entry["code"] for entry in spoken_lines(kept, rows, "")], ["A"])
 
+    def test_the_players_act_on_the_job_is_checked_for_a_finish(self):
+        # 8B run 152f, T7: "push it along the dock to Warehouse 7" on a hauling job made no progress candidate.
+        job = {"code": "Q1", "id": 1, "status": "active", "title": "Runners Needed for East District Flats",
+               "current_objective": "A few flats in the east district are looking for runners. You'll be hauling goods "
+                                    "from the docks to the warehouses."}
+        line = "I restack the fallen crates on the cart, tie them down, and push it along the dock to Warehouse 7."
+        prose = ("You push the loaded wagon along The Dock [[L2]]. The one marked 7 is the largest. "
+                 "You wheel the wagon inside, the heavy cargo rattling as it settles.")
+        calls: list[str] = []
+
+        def ask(system, user, *, max_tokens, phase):
+            calls.append(user)
+            return {"finished": "yes", "why": "the cargo is inside the warehouse"}
+
+        report = qo.run_progress_pass(prose, line, active=[job], ask=ask)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(report["updates"][0]["quest"], "Q1")
+        # Talk about the job is no act on it.
+        self.assertEqual(qo.find_progress_candidates("Eadric nods.", "\"Which warehouse do I haul the goods to?\"",
+                                                     active=[job]), [])
+
     def test_the_step_is_never_cut_mid_word(self):
         # 8B run 152c, T3: the step "... without a bit of pr" reached the narrator, which then wrote "a reco.".
         task = ("Carry the guild's three crates of salvaged tools down to the shipwrights before the tide turns. "
