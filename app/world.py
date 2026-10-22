@@ -23294,8 +23294,11 @@ def _settle_stated_gold(
         # (T71) and "the memory of forty-six gold coins spent on a walk back"
         # (T79) backed GOLD gains of 36 and 37 (8B run 146). Coin spent, paid,
         # counted or carried by the player reaches nobody.
+        # And the coin has to reach "you": Garrick "idly tossing a coin into
+        # the water" backed GOLD +small, rolled to +10 (8B run 152f, T7).
         money_words = any(
             _money_moves_in(sentence) and not _PROMISED_MONEY_RE.search(sentence) and not _OWN_COIN_RE.search(sentence)
+            and re.search(r"\b(?:you|your|yours)\b", sentence, re.I)
             for sentence in (_ASKED_CLAUSE_RE.sub(" ", s) for _, _, s in prose_state.sentence_spans(plain))
         )
         # A sum said in someone's speech is an offer or a promise: '"Fifteen
