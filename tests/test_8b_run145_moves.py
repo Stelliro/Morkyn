@@ -173,6 +173,25 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
         self.assertFalse(world._leaves_something_else(office, "I walk out of the office."))
         self.assertFalse(world._leaves_something_else(office, "I head back out."))
 
+    def test_a_cart_pushed_to_a_numbered_warehouse_goes_there(self):
+        # 8B run 152f, T7: "push it along the dock to Warehouse 7" stayed at The Dock while the prose wheeled it inside.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        line = "I restack the fallen crates on the cart, tie them down with the cart's rope, and push it along the dock to Warehouse 7."
+        prose = ("You push the loaded wagon along The Dock [[L2]]. You reach the end of The Dock [[L2]], where the warehouses "
+                 "loom. The one marked 7 is the largest, its doors wide open. You wheel the wagon inside.")
+        with connect().closing() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player").fetchone()[0])
+            dock = world._upsert_location(conn, "The Dock", "", parent_id=town, kind="")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(dock),))
+            self.assertEqual(world._movement_intent(conn, line), "travel")
+            code = conn.execute("SELECT code FROM locations WHERE id = ?", (int(dock),)).fetchone()[0]
+            self.assertEqual(world._venue_requested_and_reached(conn, line, prose, code), "Warehouse 7")
+            conn.rollback()
+
     def test_a_note_of_a_deed_the_player_never_did_is_dropped(self):
         # 8B run 152e, T1: the event note "You signed on for salvage work at the Harbour Reeve's office" on a
         # line that only asked where to sign on.

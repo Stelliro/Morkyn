@@ -10467,7 +10467,7 @@ def _goes_to_a_place_word(player_input: str) -> bool:
             nouns.add(label[-1])
     line = _destination_text(player_input).lower()
     pattern = (
-        r"\b(?:to|into|toward|towards|up\s+to|down\s+to|back\s+to|over\s+to|across\s+to)\s+the\s+"
+        r"\b(?:to|into|toward|towards|up\s+to|down\s+to|back\s+to|over\s+to|across\s+to)\s+(?:the\s+)?"
         r"(?:[\w'’-]+\s+){0,3}?(?:" + "|".join(re.escape(n) for n in sorted(nouns, key=len, reverse=True)) + r")s?\b"
     )
     return bool(re.search(pattern, line))
@@ -11327,7 +11327,9 @@ _OUTDOOR_WALK_VERB_RE = re.compile(
     r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|cross\w*|wander\w*|"
     r"march\w*|climb\w*|wade\w*|pick\s+my\s+way|"
     # Carrying a load somewhere is walking there (8B run 152b, T11).
-    r"carry|carries|carrying|haul\w*|lug\w*)\b",
+    r"carry|carries|carrying|haul\w*|lug\w*|"
+    # A cart pushed or wheeled somewhere goes with the player (8B run 152f, T7).
+    r"push|pushes|pushing|wheel|wheels|wheeling|drag|drags|dragging)\b",
     re.IGNORECASE,
 )
 
@@ -11661,16 +11663,19 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
         # "I walk up into town to the salvage guild's tally house" (8B run 26,
         # T1): the walk verb a few words before, the owner before the building.
         walk = _OUTDOOR_WALK_VERB_RE.search(wanted or "")
+        # "push it along the dock to Warehouse 7" (8B run 152f, T7): no "the",
+        # and a number that is part of the name.
         onward = re.compile(
-            r"\b(?:to|toward|towards|into|up\s+to)\s+the\s+(?P<place>(?:[a-z'’-]+\s+){0,2}?(?:"
-            + "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True)) + r"))\b",
+            r"\b(?:to|toward|towards|into|up\s+to)\s+(?:the\s+)?(?P<place>(?:[a-z'’-]+\s+){0,2}?(?:"
+            + "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True)) + r")(?:\s+\d{1,3}\b)?)\b",
             re.IGNORECASE,
         )
         match = next((m for m in onward.finditer(wanted or "") if walk and walk.end() <= m.start() <= walk.end() + 60), None)
     if not match:
         return ""
     place = " ".join(match.group("place").split())
-    head = place.split()[-1].lower()
+    numbered = bool(re.search(r"\s\d{1,3}$", place))
+    head = place.split()[-2 if numbered else -1].lower()
     rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
     for row in rows:
         stored = humanize_place_name(str(row["name"] or "")).lower()
@@ -11690,7 +11695,7 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
             # of oil ..." is the entry (8B run 28, T1).
             or re.search(rf"\b{re.escape(head)}\b[^.!?]*[.!?]\s+(?:[^.!?]*[.!?]\s+)?inside\b", unspoken)):
         return ""
-    name = "The " + " ".join(w[:1].upper() + w[1:] for w in place.split())
+    name = ("" if numbered else "The ") + " ".join(w[:1].upper() + w[1:] for w in place.split())
     if not is_plausible_place_name(name):
         return ""
     existing = _match_location_by_name(conn, name)
