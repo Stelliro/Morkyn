@@ -57,7 +57,7 @@ _ASK_OVERRIDE: list[Ask | None] = [None]
 # Kept short on purpose (Stell, 2026-10-21: prompts "as simple but understood as possible").
 _SYSTEM = (
     "You keep track of the people in a story. "
-    "Answer only JSON: {\"answer\": \"a code or new\"}"
+    "Answer only JSON: {\"answer\": \"...\"}"
 )
 
 # Tables a rewind restores by row (world._restore_snapshot_rows): rows of these
@@ -349,7 +349,8 @@ def build_ask(row: Any, others: list[Any]) -> tuple[str, str]:
     """(system, user) for the identity question: one plain question, no examples."""
     lines = [f"A person in the story: {_describe(row)}.", "Is this the same person as one of these?"]
     lines += [f"{str(o['code'] or '').strip()}: {_describe(o)}" for o in others]
-    lines.append("Answer a code or new.")
+    # The choices by name: "Answer a code or new" came back as "code" (8B run 153, T2).
+    lines.append("Answer with one of: " + ", ".join([*(str(o["code"] or "").strip() for o in others), "new"]) + ".")
     return _SYSTEM, "\n".join(lines)
 
 
