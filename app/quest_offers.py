@@ -858,6 +858,13 @@ def _others_consent(narration: str, player_input: str = "") -> bool:
     return False
 
 
+_GENERIC_DONE_RE = re.compile(
+    r"\b(?:the|this|that|your|our)\s+(?:work|job|task|errand)(?:['’]s|\s+is|\s+was|\s+has\s+been)\s+"
+    r"(?:done|finished|complete|completed|over)\b|\b(?:job|work)\s+well\s+done\b",
+    re.I,
+)
+
+
 def find_progress_candidates(
     narration: str, player_input: str = "", *, active: list[dict[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
@@ -876,6 +883,7 @@ def find_progress_candidates(
         for a, b in re.findall(r"\"([^\"]+)\"|“([^”]+)”", qp._player_own_line(str(player_input or "")))
         if len((a or b).strip()) >= 12
     ]
+    active_now = [q for q in active or [] if isinstance(q, dict) and str(q.get("status") or "active") == "active"]
     for quest in active or []:
         if not isinstance(quest, dict) or str(quest.get("status") or "active") != "active":
             continue
@@ -899,7 +907,11 @@ def find_progress_candidates(
             if not (qp._shows_result(flat) or qp._PROGRESS_RE.search(flat)):
                 continue
             stems = qp._stems(flat) | set(re.findall(r"[a-z]{4,}", flat.lower()))
-            if not (words & stems) and not any(w in flat.lower() for w in words if len(w) >= 5):
+            # With one job going, "the work is done" is that job: Eda's "The work
+            # is done" for "Retrieve the Black Tide's Cargo" named nothing of its
+            # title and the job stayed open (8B run 153, T7).
+            sole_job_done = len(active_now) == 1 and bool(_GENERIC_DONE_RE.search(flat))
+            if not (words & stems) and not any(w in flat.lower() for w in words if len(w) >= 5) and not sole_job_done:
                 continue
             # A step that needs someone's yes is done only when they give it:
             # "Convince the Drowned Hand to let you take it" was finished on
