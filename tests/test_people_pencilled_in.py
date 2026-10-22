@@ -298,6 +298,23 @@ class OneAskDecidesWhoTheyAre(unittest.TestCase):
         self.assertEqual(alias[0], "A")
         self.assertEqual(int(talked[0]), fulk)
 
+    def test_a_merge_the_engine_cannot_see_is_refused_and_a_merge_is_kept_on_record(self):
+        # Side note, 2026-10-22: one wrong model answer must not fuse two real people.
+        from app.db import connect
+
+        before = _mint("Maud Kettle", "baker", self.docks, "Flour on her apron and a loud laugh.")
+        _settle(20, "Maud Kettle sets out loaves.", before)
+        ask, _calls = _asker({"answer": "A"})
+        _settle(21, "Maud Kettle waves a floury hand at you.", ask=ask)
+        self.assertIn("Maud Kettle", _people())  # a baker is not the wiry wherryman
+        with connect().closing() as conn:
+            code = conn.execute("SELECT code FROM npcs WHERE name = 'Bennet Harrow'").fetchone()[0]
+        _settle(22, f"Bennet Harrow [[{code}]] pulls the wherry alongside.", ask=_asker({"answer": "A"})[0])
+        self.assertNotIn("Bennet Harrow", _people())  # both wiry: the engine sees it, the merge stands
+        with connect().closing() as conn:
+            kept = conn.execute("SELECT record FROM faded_people WHERE name = 'Bennet Harrow'").fetchone()
+        self.assertEqual(json.loads(kept[0])["_merged_into"], "A")
+
     def test_new_keeps_them_as_a_new_person(self):
         ask, _calls = _asker("new")
         _settle(20, "Bennet Harrow pulls the wherry alongside.", ask=ask)
