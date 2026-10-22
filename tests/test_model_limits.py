@@ -265,12 +265,15 @@ class TheKeyIsAllAnApiNeeds(unittest.TestCase):
 
     def test_the_key_picks_its_provider_and_a_typed_address_stays(self):
         llm.update_model_config({"provider": "openai", "api_preset": "xai", "api_base_url": "", "api_model": ""})
-        cfg = llm.update_model_config({"api_key": "sk-test-0000", "api_base_url": "https://api.x.ai/v1", "api_model": "grok-4.5"})
+        cfg = llm.update_model_config({"api_key": "sk-proj-test-0000", "api_base_url": "https://api.x.ai/v1", "api_model": "grok-4.5"})
         self.assertEqual((cfg.get("api_preset"), cfg.get("api_base_url"), cfg.get("api_model")),
                          ("openai", "https://api.openai.com/v1", "gpt-4.1-mini"))
+        # A shared "sk-" shape (OpenRouter, DeepSeek) guesses nothing.
+        self.assertEqual(llm._preset_for_key("sk-or-v1-abcd"), "")
+        self.assertEqual(llm._preset_for_key("sk-0123456789abcdef"), "")
         cfg = llm.update_model_config({"api_key": "xai-test-0000", "api_preset": "openai"})
         self.assertEqual(cfg.get("api_base_url"), "https://api.x.ai/v1")
-        cfg = llm.update_model_config({"api_key": "sk-test-1111", "api_base_url": "http://127.0.0.1:4000/v1", "api_model": "local-agent"})
+        cfg = llm.update_model_config({"api_key": "sk-proj-test-1111", "api_base_url": "http://127.0.0.1:4000/v1", "api_model": "local-agent"})
         self.assertEqual((cfg.get("api_base_url"), cfg.get("api_model")), ("http://127.0.0.1:4000/v1", "local-agent"))
         llm.update_model_config({"provider": "mle", "api_key": "", "api_preset": "xai", "api_base_url": "", "api_model": ""})
 
