@@ -634,6 +634,10 @@ def _verified_retell(code: str, open_jobs: list[dict[str, Any]] | None, candidat
     return code
 
 
+_PAY_IN_OTHER_UNIT_RE = re.compile(r"\b(?:\d+|[a-z]+)(?:[\s-]+[a-z]+)?\s+(?:silver|silvers|copper|coppers|pennies|marks)\b", re.I)
+_PAY_IN_GOLD_RE = re.compile(r"\b(?:gold|crowns?)\b", re.I)
+
+
 def card_to_proposal(candidate: dict[str, Any], card: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
     """The legacy proposal shape validate_quest_changes reads, marked as checked."""
     speaker = candidate.get("speaker") if isinstance(candidate.get("speaker"), dict) else None
@@ -644,6 +648,16 @@ def card_to_proposal(candidate: dict[str, Any], card: dict[str, Any], check: dic
     else:
         giver = str(candidate.get("stranger") or "")
     quote = str(candidate.get("quote") or candidate.get("line") or "")
+    gold = int(card.get("gold") or 0)
+    if gold and _PAY_IN_OTHER_UNIT_RE.search(str(candidate.get("line") or "")) and not _PAY_IN_GOLD_RE.search(
+            str(candidate.get("line") or "")):
+        # "A hundred silver for the job" was owed as 100 gold (8B run 153, T5).
+        # The purse is gold; how silver and copper count is not decided, so a
+        # sum named in them is no gold owed.
+        from app import turn_ledger
+
+        turn_ledger.note("quest", "pay_in_another_unit", title=card.get("title"), gold=gold)
+        gold = 0
     return {
         "title": card["title"],
         "summary": card["task"] or card["title"],
@@ -652,7 +666,7 @@ def card_to_proposal(candidate: dict[str, Any], card: dict[str, Any], check: dic
         "steps": [{"title": s, "description": s, "location": card.get("place") or ""} for s in card["steps"]],
         # A pay field that names no pay is empty ("They'll want to sign for it",
         # 8B run 152b, T12).
-        "reward": {"gold": card.get("gold") or 0, "xp": 0, "items": [],
+        "reward": {"gold": gold, "xp": 0, "items": [],
                    "text": card.get("pay") if card.get("pay") and _names_pay(str(card.get("pay"))) else ""},
         "difficulty": "normal",
         "timer_turns": 0,
