@@ -83,6 +83,15 @@ jobs:
             acc: metal
           - os: macos-15-intel
             acc: cpu
+          # The local speech engine add-on (Piper), one per platform.
+          - os: windows-latest
+            acc: piper
+          - os: ubuntu-22.04
+            acc: piper
+          - os: macos-14
+            acc: piper
+          - os: macos-15-intel
+            acc: piper
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

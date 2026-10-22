@@ -1170,7 +1170,24 @@ def load_piper_voice(code: str):
 
 
 def pip_install_piper(*, timeout: float = 900.0) -> dict[str, Any]:
-    """Install the pinned package into this interpreter. Never runs through a shell."""
+    """Install the pinned package into this interpreter. Never runs through a shell.
+
+    The packaged app has no pip, and ``sys.executable`` is Morkyn.exe: "Install
+    local speech engine" opened a second Mørkyn (Stell, 2026-10-22). There the
+    engine is the ``piper-speech`` runtime pack instead.
+    """
+    if getattr(sys, "frozen", False):
+        from app import runtime_packs
+
+        done = runtime_packs.install("piper-speech", wait=True)
+        if not done.get("ok"):
+            return {"ok": False, "error": str(done.get("error") or "the speech pack did not install")[:600]}
+        importlib.invalidate_caches()
+        sys.modules.pop("piper", None)
+        ok, version = piper_installed()
+        if not ok:
+            return {"ok": False, "error": "The speech pack installed but cannot be loaded. Restart Mørkyn and try again."}
+        return {"ok": True, "version": version, "pack": "piper-speech"}
     env = {**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PIP_NO_INPUT": "1"}
     argv = [sys.executable, "-m", "pip", "install", PIPER_PACKAGE, "--prefer-binary"]
     try:

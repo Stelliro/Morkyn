@@ -23715,7 +23715,8 @@ function renderEnginePanel(e) {
   const gpus = (hw.gpus || []).map((g) => escapeHtml(g.name)).join(", ") || "none found";
   const options = [
     ["auto", `Automatic (${escapeHtml(hw.recommended || "cpu")})`],
-    ...packs.map((p) => [p.id, escapeHtml(p.title)]),
+    // Add-ons (the speech engine) install beside the engine; they are no engine choice.
+    ...packs.filter((p) => p.kind !== "addon").map((p) => [p.id, escapeHtml(p.title)]),
     ["custom", "Custom build (a folder or zip of llama-cpp-python)"],
     ["none", "No local engine (cloud APIs only)"],
   ];
@@ -29498,6 +29499,15 @@ async function loadAppSettingsForm() {
     const data = await fetchLauncherPrefs();
     const prefs = data.prefs || {};
     fillAppSettingsForm(form, prefs);
+    try {
+      const keyRes = await fetch("/api/model-config");
+      const cfg = keyRes.ok ? await keyRes.json() : {};
+      if (form.elements.api_key && cfg?.api_key_set) {
+        form.elements.api_key.placeholder = `Key saved${cfg.api_key_hint ? ` (${cfg.api_key_hint})` : ""}. Leave blank to keep.`;
+      }
+    } catch (_) {
+      /* the key field keeps its plain hint */
+    }
     if (prefs.ui_theme) {
       document.documentElement.setAttribute("data-theme", prefs.ui_theme);
       const themeSel = document.querySelector("#themeSelect");
@@ -29621,8 +29631,26 @@ document.querySelector("#appSettingsForm")?.addEventListener("submit", async (ev
   const form = event.currentTarget;
   // Every named control, as text; the server coerces types and ranges.
   const prefs = Object.fromEntries(new FormData(form).entries());
+  // The key goes to the model settings (/api/model-config), never into
+  // launcher_prefs.json. Stell (2026-10-22): Settings offered only the API's
+  // address with no place for a key.
+  const apiKey = String(prefs.api_key || "").trim();
+  delete prefs.api_key;
   const st = document.querySelector("#appSettingsStatus");
   try {
+    if (apiKey) {
+      const keyResponse = await fetch("/api/model-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: apiKey, api_base_url: prefs.api_base_url, api_model: prefs.api_model }),
+      });
+      if (!keyResponse.ok) throw new Error(await keyResponse.text());
+      modelConfig = await keyResponse.json();
+      if (form.elements.api_key) {
+        form.elements.api_key.value = "";
+        form.elements.api_key.placeholder = `Key saved${modelConfig?.api_key_hint ? ` (${modelConfig.api_key_hint})` : ""}. Leave blank to keep.`;
+      }
+    }
     const data = await saveLauncherPrefs(prefs);
     fillAppSettingsForm(form, data.prefs || {});
     const theme = data.prefs?.ui_theme || prefs.ui_theme;
