@@ -561,8 +561,8 @@ def log_job_progress(
     if any(marker in str(s.get("notes") or "") for s in quest.get("steps") or []):
         return None
     if conn.execute(
-        "SELECT 1 FROM journal WHERE turn = ? AND kind = 'quest' AND content LIKE ? LIMIT 1",
-        (int(turn), f"Job progress: {quest['title']}:%"),
+        "SELECT 1 FROM journal WHERE turn = ? AND kind = 'quest' AND (content LIKE ? OR content LIKE ?) LIMIT 1",
+        (int(turn), f"Job progress: {quest['title']}:%", f"Job attempt went wrong: {quest['title']}:%"),
     ).fetchone():
         return None
     current = int(quest.get("current_step") or 1)
@@ -585,7 +585,11 @@ def log_job_progress(
             "UPDATE quests SET current_step = ?, total_steps = ? WHERE id = ?", (current + 1, total + 1, int(quest_id))
         )
         out["step"] = current
-    _offer_journal(conn, turn, f"Job progress: {quest['title']}: {deed}" + ("" if done else " (not done yet)"))
+    # A failed try is journaled as one, not as progress: "Job progress: ...
+    # (not done yet)" was written for a haul that rolled "bad nothing" (8B run
+    # 152f, T6).
+    _offer_journal(conn, turn, f"Job progress: {quest['title']}: {deed}" if done
+                   else f"Job attempt went wrong: {quest['title']}: {deed}")
     return out
 
 

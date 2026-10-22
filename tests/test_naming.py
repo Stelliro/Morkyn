@@ -321,7 +321,11 @@ class TestAskedOfThePersonSpokenTo(unittest.TestCase):
             self.assertIsNone(naming.naming_contract(got))
 
     def test_something_is_no_name(self):
+        from app.world import is_plausible_person_name
+
         self.assertEqual(naming.proper_names_in("Something about them feels wrong. Nothing moves."), [])
+        self.assertFalse(is_plausible_person_name("Something"))
+        self.assertTrue(is_plausible_person_name("Gideon Rook"))
 
 
 if __name__ == "__main__":
