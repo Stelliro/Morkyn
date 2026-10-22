@@ -131,6 +131,14 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
         self.assertNotEqual(result["player"].get("gold_delta"), -30)
         self.assertNotEqual(result["player"].get("gold_delta"), 30)
 
+    def test_coin_that_moves_to_someone_else_backs_no_gain(self):
+        # 8B run 152f, T7: Garrick "idly tossing a coin into the water" backed GOLD +small, rolled to +10.
+        prose = ("You push the loaded wagon along the dock. The sailor, Garrick [[D]], leans on his crate, idly tossing a "
+                 "coin into the water. You wheel the wagon inside the warehouse.")
+        result = {"narration": prose, "player": {"gold_band": "small"}}
+        note = _settle_stated_gold(result, "I push the cart along the dock to Warehouse 7.")
+        self.assertEqual((note or {}).get("source"), "gain_without_coin_dropped", note)
+
     def test_a_jobs_pay_described_backs_no_gain(self):
         # 8B run 148, T8: "it's not much, but it pays in coin" let GOLD +small stand on the offer.
         prose = ("\"There's a load of fish in the hold of the Mistral,\" he says. \"It's not much, but it pays in coin. You'll "
