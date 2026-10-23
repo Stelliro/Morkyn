@@ -1397,6 +1397,7 @@ def dead_and_destroyed(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
                 people.append({
                     "code": str(npc.get("code") or ""), "name": clean_name(npc.get("name")), "turn": int(npc["died_turn"]),
                     "body": body_state(npc.get("body")), "location_id": at_id, "location_code": at_code,
+                    "kind": str(npc.get("kind") or ""), "kind_number": int(npc.get("kind_number") or 0),
                     "here": bool((here_id and at_id == here_id) or (not here_id and here_code and at_code == here_code)),
                 })
     places = [
@@ -1412,7 +1413,9 @@ def dead_and_destroyed(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
 def body_entry(person: dict[str, Any]) -> dict[str, Any]:
     """A body as a place lists it: who, since when, and what it is doing."""
     return {"code": person.get("code") or "", "name": person.get("name") or "", "died_turn": int(person.get("turn") or 0),
-            "body": person.get("body") or BODY_LIES}
+            "body": person.get("body") or BODY_LIES,
+            # An unnamed figure stays recognisable as one, so the story sees "the ghoul", not "Ghoul 1".
+            "kind": person.get("kind") or "", "kind_number": int(person.get("kind_number") or 0)}
 
 
 def hold_context(state: dict[str, Any], context: dict[str, Any]) -> None:
@@ -1470,16 +1473,22 @@ def facts(context: Any, limit: int = 6) -> list[str]:
         return []
     out: list[str] = []
     for person in found.get("people") or []:
-        label = f"{person.get('name')} [[{person.get('code')}]]" if person.get("code") else str(person.get("name") or "")
+        # An unnamed figure is "the ghoul [[A]]" to the story, never its engine number (Ghoul 1).
+        name = called(person, prose=True)
+        label = f"{name} [[{person.get('code')}]]" if person.get("code") else str(name or "")
         if label.strip():
-            out.append(f"{label} died in turn {person.get('turn')} and is dead.")
+            out.append(_sentence_start(f"{label} died in turn {person.get('turn')} and is dead."))
             if person.get("here"):
-                out.append(_BODY_FACTS.get(str(person.get("body") or BODY_LIES), _BODY_FACTS[BODY_LIES]).format(label=label))
+                out.append(_sentence_start(_BODY_FACTS.get(str(person.get("body") or BODY_LIES), _BODY_FACTS[BODY_LIES]).format(label=label)))
     for place in found.get("places") or []:
         label = f"{place.get('name')} [[{place.get('code')}]]" if place.get("code") else str(place.get("name") or "")
         if label.strip():
             out.append(f"{label} was destroyed in turn {place.get('turn')}.")
     return out[:limit]
+
+
+def _sentence_start(text: str) -> str:
+    return text[:1].upper() + text[1:] if text else text
 
 
 def dead_codes(conn) -> set[str]:

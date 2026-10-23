@@ -809,6 +809,51 @@ class ThePronounInASpeechTag(unittest.TestCase):
         self.assertEqual(len([r for r in here if r["kind"] == ""]), 1, [dict(r) for r in here])
 
 
+class TheDeadKeepTheirStoryName(unittest.TestCase):
+    """The second reviewer: after a numbered figure died, its body and death facts carried "Ghoul 1" to the narrator."""
+
+    def test_a_dead_ghoul_is_the_ghoul_in_the_facts_and_bodies(self):
+        from app import interpreter as I
+        from app.unnamed import story_names, story_view
+
+        state = {"current_location": {"id": 2, "code": "L2"}, "locations": [{"id": 2, "code": "L2", "npcs": [
+            {"code": "A", "name": "Ghoul 1", "kind": "Ghoul", "kind_number": 1, "died_turn": 3, "location_id": 2}]}]}
+        context = {"current_location": {"id": 2, "code": "L2", "npcs": []}, "locations": [{"id": 2, "code": "L2", "npcs": []}]}
+        I.hold_context(state, context)
+        facts = I.facts(context)
+        self.assertTrue(facts, context)
+        self.assertFalse(any("Ghoul 1" in f for f in facts), facts)
+        self.assertEqual(facts[0], "The ghoul [[A]] died in turn 3 and is dead.")
+        self.assertIn("The body of the ghoul [[A]] lies here.", facts)
+        names = story_names(context)
+        self.assertIn("Ghoul 1", names)
+        viewed = story_view(context, names)
+        self.assertNotIn("Ghoul 1", repr(viewed))
+
+    def test_a_named_dead_person_keeps_the_name(self):
+        from app import interpreter as I
+
+        state = {"current_location": {"id": 2, "code": "L2"}, "locations": [{"id": 2, "code": "L2", "npcs": [
+            {"code": "B", "name": "Beth", "died_turn": 10, "location_id": 2}]}]}
+        context = {"current_location": {"id": 2, "code": "L2", "npcs": []}, "locations": [{"id": 2, "code": "L2", "npcs": []}]}
+        I.hold_context(state, context)
+        self.assertEqual(I.facts(context)[0], "Beth [[B]] died in turn 10 and is dead.")
+
+
+class ACreatureThatSpeaksIsTheCreature(unittest.TestCase):
+    def setUp(self):
+        _fresh_world()
+
+    def test_raider_takes_no_drawn_role_or_race(self):
+        # The reviewer's probe (verifyU2-scratch/speak.py).
+        prose = 'A raider steps out and levels a rifle at you. "Drop it," he growls.'
+        asker = _Asker(figures=("raider",), hostile=("raider",), speaks=("raider",))
+        _play(prose, "i freeze", asker)
+        raiders = [r for r in _rows() if r["kind"] == "Raider"]
+        self.assertEqual(len(raiders), 1, [dict(r) for r in _rows("1=1")])
+        self.assertNotEqual(raiders[0]["role"], "scribe")
+
+
 class MoreAndReferredBack(unittest.TestCase):
     def setUp(self):
         _fresh_world()
