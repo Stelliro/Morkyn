@@ -18,6 +18,7 @@ from typing import Any
 
 from app import turn_ledger, venues
 from app.db import connect, row_to_dict, rows_to_dicts
+from app.narration_pipeline import _TITLE_ABBREVIATIONS
 from app.llm import (
     LlmError,
     ambient_llm_enabled,
@@ -14888,6 +14889,17 @@ def _near_name_matches(conn, name: str) -> list[Any]:
         ]
         if len(wearers) == 1:
             out.append(wearers[0])
+    if not out and len(words) == 1 and len(words[0]) >= 3:
+        # The other way round: a bare "Theo" beside the known "Dr. Theo"
+        # (Hermes 3 8B, live/integ-r3 T1). One known person who is that name
+        # with a title in front is that person.
+        titled = [
+            row for row in conn.execute("SELECT * FROM npcs").fetchall()
+            if _without_title(str(row["name"] or "")).lower() == words[0].lower()
+            and str(row["name"] or "").strip().lower() != words[0].lower()
+        ]
+        if len(titled) == 1:
+            out.append(titled[0])
     return out
 
 
@@ -14896,7 +14908,15 @@ _TITLE_WORDS = frozenset({
     "father", "mother", "brother", "sister", "sir", "lord", "lady", "dame", "goodman", "goodwife", "skipper", "bosun",
     "doctor", "mayor", "bailiff", "sheriff", "abbot", "abbess", "prior", "steward", "alderman", "magistrate", "widow",
     "old", "young", "uncle", "aunt", "madam", "mister", "mrs", "mr", "ms",
-})
+}) | {t.lower() for t in _TITLE_ABBREVIATIONS}  # "Dr. Theo" beside Theo (#163); the sentence splitter's own list
+
+
+def _without_title(name: str) -> str:
+    """A name with the titles in front of it taken off: "Dr. Theo" -> "Theo". A lone word is left alone."""
+    words = str(name or "").split()
+    while len(words) > 1 and words[0].lower().strip(".,") in _TITLE_WORDS:
+        words.pop(0)
+    return " ".join(words)
 
 
 _WALK_WORD_RE = re.compile(
@@ -20805,6 +20825,9 @@ def _introduced_person_first(
     plain = re.sub(r"\s*\[\[[^\]]*\]\]", "", venues.strip_speech(str(text or "")))
     blocked = {str(n).strip().lower() for n in not_people}
     known = {str(n or "").strip().lower() for n in known_names if str(n or "").strip()}
+    # "Dr. Theo [[B]], the keeper of this place" read "Theo" as a new keeper
+    # beside Dr. Theo (#163): a known name is known without its title too.
+    known |= {_without_title(k) for k in known} - {""}
     matches = sorted(
         list(_INTRODUCED_PERSON_RE.finditer(plain)) + list(_NAMED_JOB_PERSON_RE.finditer(plain))
         + list(_JOB_THEN_NAME_RE.finditer(plain)) + list(_NAME_TOLD_RE.finditer(plain))
