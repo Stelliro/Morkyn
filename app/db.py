@@ -831,6 +831,11 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         # What a dead person's body is doing (app/interpreter.py, the dead leave a
         # body, 2026-10-24): '' lies where it fell, 'carried', 'buried'.
         ("body", "TEXT NOT NULL DEFAULT ''"),
+        # An unnamed figure is stored by its kind and the next number for it
+        # (app/unnamed.py, Stell 2026-10-24): "Ghoul" and 3 for Ghoul 3. The
+        # number stays when the prose names them later; '' / 0 = a named person.
+        ("kind", "TEXT NOT NULL DEFAULT ''"),
+        ("kind_number", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
