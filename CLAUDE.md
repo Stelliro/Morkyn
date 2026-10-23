@@ -189,6 +189,10 @@ belong to, with the date).
   kind and the next number for that kind (Ghoul 1, Ghoul 2, Raider 1; Stell chose per kind and
   every unnamed one); the code stays the engine's own (A, B, ...). A creature is a person row,
   not filtered out as a place.
+  A plural with no count is rolled (Stell, 2026-10-24): "we should be looking at "'s" as if they
+  account for many, and we should roll a dice on it and stick to it ie. "Gouls lunge at you" dice
+  roll = 4 = "4 ghouls lunge at you"". The engine rolls the count, files that many rows, writes
+  the number into the prose where the plural first appears, and keeps to it after.
 - **The Settlement map view is for the settlement you are in** (2026-10-23): "when the player is
   not in a town or settlemnet the player can still view the settlement tab". It was built for
   #19 as "the settlement you are in, or one you know"; outside a settlement it is not offered.
