@@ -904,8 +904,14 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
         if ambiguous and not new:
             turn_ledger.note("npc", "figure_ambiguous", kind=kind, here=[str(r["name"] or "") for r in here])
         # The ones the prose shows of this kind are in the scene (attack candidates next turn).
+        # And brought back for the sketch pass (sketches._brought_back reads
+        # the turn's touched ids): prose that keeps saying "the ghoul" never
+        # says "Ghoul 1", and the figure faded mid-fight without this.
+        shown = result.setdefault("_figures_shown", []) if ms and here else []
         for row in (here if ms else []):
             _mark_present(result, str(row["code"] or ""))
+            if int(row["id"]) not in shown:
+                shown.append(int(row["id"]))
         if not new:
             if here and ms:
                 turn_ledger.note("npc", "figure_is_one_here", kind=kind, names=[str(r["name"] or "") for r in here])

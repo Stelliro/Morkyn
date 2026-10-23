@@ -485,6 +485,24 @@ class TwoFiguresInOneTurn(unittest.TestCase):
         self.assertEqual(unnamed.speaker_kinds('A guard steps out. "Halt," says the guard.'), ["guard"])
 
 
+class TheyDoNotVanish(unittest.TestCase):
+    def setUp(self):
+        _fresh_world()
+
+    def test_a_ghoul_the_prose_keeps_showing_stays(self):
+        # The skeptic's replay: Ghoul 1 faded at turn 6 while every turn said "The ghoul circles you".
+        _play("A rotting ghoul lunges at you from the shadows.", "i look", _Asker(figures=("ghoul",), hostile=("ghoul",)))
+        for _ in range(8):
+            _play("The ghoul circles you, snarling.", "i wait", _Asker())
+        self.assertEqual(_names(), ["Ghoul 1"])
+
+    def test_several_ghouls_in_a_fight_stay(self):
+        _play(GHOULS_PROSE, GHOULS_LINE, _Asker(figures=("ghoul",), hostile=("ghoul",)))
+        for _ in range(8):
+            _play("The ghouls press in around you, snapping.", "i swing my rifle at them", _Asker())
+        self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3", "Ghoul 4"])
+
+
 class EachGameCountsItsOwn(unittest.TestCase):
     def test_a_new_game_starts_at_ghoul_1(self):
         from app import db, sketches, world
