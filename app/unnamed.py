@@ -914,6 +914,12 @@ def _number_fresh(conn, row: Any, kind: str, attitude: str, result: dict[str, An
     updates: dict[str, Any] = {"name": name, "kind": title, "kind_number": number}
     if attitude:
         updates["attitude"] = attitude[:80]
+    if str(kind or "").strip().lower() not in _person_words():
+        # The face was drawn as a person (a role, a race) for a line a creature turns out to
+        # speak: it is the creature now, minted as one would be (reviewer: Raider 1 had become
+        # a human scribe).
+        updates["race"] = "unknown"
+        updates["role"] = "local"
     conn.execute(f"UPDATE npcs SET {', '.join(k + ' = ?' for k in updates)} WHERE id = ?",
                  (*updates.values(), int(row["id"])))
     code = str(row["code"] or "")
@@ -1108,7 +1114,9 @@ def _numbered_rows(value: Any, out: dict[str, str], depth: int = 0, definite: bo
         name, kind = numbered_name(value)
         if name:
             out[name] = story_label(kind, definite=definite)
-        for key in ("npcs", "current_location", "locations"):
+        # The dead too: a place's bodies and the_dead's people (the body change), or "Ghoul 1"
+        # reaches the story through the bodies list and the death facts.
+        for key in ("npcs", "current_location", "locations", "bodies", "the_dead", "people"):
             if key in value:
                 _numbered_rows(value[key], out, depth + 1, definite)
     elif isinstance(value, list):
