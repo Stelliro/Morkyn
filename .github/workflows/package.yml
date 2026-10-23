@@ -80,6 +80,12 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
+          # The release has to exist before anything can be attached. v0.11.1's three jobs all
+          # failed here with "release not found" when the tag went up before the release was made;
+          # make it (as a pre-release, notes from the tag) when it is missing. Two jobs racing to
+          # create it is fine: the loser's create fails and the upload below still finds it.
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" --prerelease --title "Mørkyn ${GITHUB_REF_NAME#v}" --generate-notes || true
           gh release upload "${GITHUB_REF_NAME}" dist/*.zip dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.AppImage --clobber
 
   packs:
