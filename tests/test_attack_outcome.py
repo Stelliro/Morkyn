@@ -365,7 +365,7 @@ class Prose:
         if phase in (I.PHASE_DESTROYED, I.PHASE_DESTROYED_CHECK, I.PHASE_HOLD):
             return "No"
         if phase == I.PHASE_REFUSED_DEATH:
-            sentence = re.search(r'In the sentence "(.*)", is ', prompt, re.S).group(1)
+            sentence = re.search(r'Does the sentence "(.*)" say that ', prompt, re.S).group(1)
             return "Yes, she is dead." if sentence.startswith(self.dead_sentences) else "No."
         return "No"
 
@@ -506,7 +506,7 @@ def _phase_of(prompt: str) -> str:
         ("destroyed at the end", I.PHASE_DESTROYED),
         ("still standing at the end", I.PHASE_DESTROYED_CHECK),
         ("say or do anything in it", I.PHASE_HOLD),
-        ("In the sentence", I.PHASE_REFUSED_DEATH),
+        ("Does the sentence", I.PHASE_REFUSED_DEATH),
     ):
         if marker in prompt:
             return phase

@@ -123,7 +123,7 @@ def _gold_phase(prompt: str) -> str:
         return I.PHASE_GOLD_OUT
     if "receive money" in prompt:
         return I.PHASE_GOLD_IN
-    if "same money at the end" in prompt:
+    if "money change hands" in prompt:
         return I.PHASE_GOLD_CHECK
     return ""
 
@@ -142,7 +142,7 @@ class Reader:
         if phase == I.PHASE_GOLD_IN:
             return "Yes." if self.truth["in"] else "No, the player does not receive money."
         if phase == I.PHASE_GOLD_CHECK:
-            return "No, it changes." if (self.truth["out"] or self.truth["in"]) else "Yes."
+            return "Yes, money changes hands." if (self.truth["out"] or self.truth["in"]) else "No."
         return "No"
 
 
@@ -191,12 +191,24 @@ class TestReadGold(unittest.TestCase):
             # the second check was asked before it counted, once
             self.assertEqual(model.calls.count(I.PHASE_GOLD_CHECK), 1, key)
 
-    def test_a_yes_biased_model_needs_the_second_check(self):
+    def test_a_yes_biased_model_passes_the_check_and_gets_mains_behaviour(self):
+        # The check asks "does any money change hands?" and needs a yes (measured live on
+        # Hermes 3 8B: 0 false yes in 33; the old "same money at the end?" wording said no on
+        # 4 of 5 real no-money scenes and blocked a real tip). A model that says yes to
+        # everything therefore passes it: the loss is taken, which is what main did anyway.
         model = YesBiased()
         out = I.read_gold(B2, model)
+        self.assertIs(out["out"], True)
+        self.assertIn(I.PHASE_GOLD_CHECK, model.calls)
+
+    def test_a_check_that_sees_no_money_refutes_a_yes(self):
+        # The live case the new check is for: the side ask says yes on a scene with no coin
+        # (baseline T3), the check says no money changed hands, nothing counts.
+        def model(phase, prompt, max_tokens=8):
+            return "No." if phase == I.PHASE_GOLD_CHECK else "Yes."
+        out = I.read_gold(B3, model)
         self.assertIs(out["out"], False)
         self.assertIs(out["in"], False)
-        self.assertIn(I.PHASE_GOLD_CHECK, model.calls)
         self.assertEqual({u["direction"] for u in out["report"]["unconfirmed"]}, {"out", "in"})
 
     def test_a_no_biased_model_counts_nothing(self):
@@ -355,8 +367,15 @@ class TestTheEngineTakesOnlyShownGold(unittest.TestCase):
         _play(_turn(FINE, {"gold_delta": -10}), "i pay the fine", Reader(TRUTH["FINE"]))
         self.assertEqual(_gold(), 2)
 
-    def test_a_yes_biased_model_takes_nothing_without_the_check(self):
+    def test_a_yes_biased_model_takes_what_main_took(self):
+        # See test_a_yes_biased_model_passes_the_check_and_gets_mains_behaviour: no worse than main.
         _play(_turn(B2, {"gold_delta": -10}), "i shoot Marisol", YesBiased())
+        self.assertLess(_gold(), 12)
+
+    def test_a_scene_with_no_coin_keeps_the_purse_when_the_check_says_no(self):
+        def model(phase, prompt, max_tokens=8):
+            return "No." if phase == I.PHASE_GOLD_CHECK else "Yes."
+        _play(_turn(B2, {"gold_delta": -10}), "i shoot Marisol", model)
         self.assertEqual(_gold(), 12)
 
     def test_a_no_biased_model_keeps_the_purse_and_cuts_no_prose(self):

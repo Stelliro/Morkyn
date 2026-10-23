@@ -64,7 +64,7 @@ must answer "no" before either counts:
 
     out    "Does the player give, pay or lose money in this text?"   yes, then
     in     "Does the player receive money in this text?"             yes, then
-    check  "Does the player have the same money at the end of it as at the start?"  must be no
+    check  "Does any money change hands in this text?"                 must be yes
 
 The amount is never the model's: it is the engine's (the sum the prose names,
 read by prose_state, else the band roll). A gold event adds "direction"
@@ -409,7 +409,10 @@ def ask_gold_in(passage: str) -> str:
 
 
 def ask_gold_check(passage: str) -> str:
-    return f"Read this.\n\n{passage}\n\nDoes the player have the same money at the end of it as at the start? Answer yes or no."
+    # Measured live on Hermes 3 8B (docs/showcase/ask-live-eval-2026-10-24.md, round 3): "the same
+    # money at the end as at the start?" said no on 4 of 5 real scenes with no money and blocked a
+    # real tip; "does any money change hands?" (yes required) made no false yes in 33.
+    return f"Read this.\n\n{passage}\n\nDoes any money change hands in this text? Answer yes or no."
 
 
 # ---------------------------------------------------------------------------
@@ -433,8 +436,8 @@ def gold_passage(text: str, limit: int = GOLD_PASSAGE_CHARS) -> str:
 def read_gold(text: str, ask: Ask) -> dict[str, Any]:
     """Whether the scene shows money leaving ("out") and reaching ("in") the player.
 
-    Each side is True only when its ask says yes and the shared check ("the
-    same money at the end as at the start?") says no; False when either did
+    Each side is True only when its ask says yes and the shared check ("does
+    any money change hands in this text?") says yes; False when either did
     not (a no, an unread reply, a yes the check refutes); None when the asks
     could not be put at all (the model down: nothing is known, and the caller
     keeps what its own rules decided). The check is asked once, only after a yes.
@@ -465,7 +468,7 @@ def read_gold(text: str, ask: Ask) -> dict[str, Any]:
             out["answers"]["check"] = check["answer"]
         if check["failed"]:
             return None
-        if check["answer"] is False:
+        if check["answer"] is True:
             return True
         report["unconfirmed"].append({"kind": KIND_GOLD, "direction": direction, "check": check["answer"]})
         return False
@@ -641,7 +644,9 @@ def _cut(text: str, start: int, end: int) -> str:
 def ask_shows_death(name: str, paragraph: str, sentence: str) -> str:
     return (
         f"Read this.\n\n{paragraph}\n\n"
-        f"In the sentence \"{sentence}\", is {name} dead? Answer yes or no."
+        # Measured live (round 3): "In the sentence ..., is X dead?" answered about the whole
+        # paragraph (12/51 false yes); asking what the sentence says: 1/51.
+        f"Does the sentence \"{sentence}\" say that {name} is dead? Answer yes or no."
     )
 
 
