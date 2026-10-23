@@ -14036,7 +14036,9 @@ _SUBORDINATE_HEAD_RE = re.compile(
     r"since|because|unless|as\s+soon\s+as)\b",
     re.I,
 )
-_ACT_SENTENCE_SPLIT_RE = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"\u201d\u2019]))\s+")
+from app.narration_pipeline import NOT_AFTER_TITLE as _NOT_AFTER_TITLE  # "Dr. Beth" is one sentence (#29)
+
+_ACT_SENTENCE_SPLIT_RE = re.compile(_NOT_AFTER_TITLE + r"(?:(?<=[.!?])|(?<=[.!?][\"\u201d\u2019]))\s+")
 
 
 def _verb_in_input(verb: str, own: str) -> bool:
@@ -15513,7 +15515,8 @@ def _engine_prose_cleanups(
     trimmed = _drop_decided_choice(_apply_menu_trim(turn), player_input)
     final = _drop_player_overreach(trimmed, player_input, phase, trace, context)
     # The speech-memory drops come last; the player's words are checked once more after them.
-    return _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
+    final = _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
+    return _close_open_quotes(final, phase, trace)
 
 
 def _ensure_narration_quality(
@@ -15559,7 +15562,8 @@ def _ensure_narration_quality(
     trimmed = _drop_decided_choice(_apply_menu_trim(_soften_stock_lines(recalled)), player_input)
     chars_before = _narration_char_count(trimmed)
     cut_before = trimmed.get("_scene_cut") if isinstance(trimmed, dict) else None
-    final = _drop_player_overreach(trimmed, player_input, phase, trace, context)
+    asks = _agency_asks(timeout, usage, trace)
+    final = _drop_player_overreach(trimmed, player_input, phase, trace, context, asks=asks)
     chars_after = _narration_char_count(final)
     # A scene cut at an NPC's question is meant to be short: the answer is the
     # player's. Lengthening it re-adds what the cut took out (#75, #77).
@@ -15571,8 +15575,10 @@ def _ensure_narration_quality(
         deeper = _ensure_narration_depth(
             final, context, player_input, system_prompt, timeout, usage, phase, trace, prose_system_prompt=prose_prompt
         )
-        final = _drop_player_overreach(deeper, player_input, phase, trace, context)
-    return _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
+        final = _drop_player_overreach(deeper, player_input, phase, trace, context, asks=asks)
+    final = _drop_retold_paragraphs(final, asks, phase, trace)
+    final = _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
+    return _close_open_quotes(final, phase, trace)
 
 
 def _apply_speech_memory(
@@ -15634,9 +15640,31 @@ def _apply_speech_memory(
                 turn["narration"] = joined
             elif dropped:
                 dropped = []
+    # A sentence said in an earlier scene, whoever says it now (#78, cc87dd29
+    # T8/T9): the earlier lines of every speaker and the quotations of the
+    # last narration, the player's invented ones too.
+    from app.narration_pipeline import drop_lines_from_earlier_scenes, quoted_spans, speech_units
+
+    last = context.get("last_narration") if isinstance(context, dict) else ""
+    # One line per unit: '"You're not the enemy," you confirm, "but this ..."' is one line said.
+    last_lines = [" ".join(quoted_spans(u)) for u in speech_units(last)] if isinstance(last, str) else []
+    said_lines = earlier + [line for line in last_lines if line]
+    if said_lines:
+        text = str(turn.get("narration") or "")
+        kept, line_drops = drop_lines_from_earlier_scenes(re.split(r"\n\s*\n", text), said_lines, player_input)
+        joined = "\n\n".join(p for p in kept if p.strip()).strip()
+        if line_drops and joined:
+            _rebuild_segments(turn, joined)
+            dropped = [*dropped, *line_drops]
     if dropped:
         turn["_speech_said_before"] = dropped
         _append_trace(trace, {"phase": phase, "event": "speech_said_before_dropped", "dropped": [u[:160] for u in dropped[:6]]})
+        try:
+            from app import turn_ledger
+
+            turn_ledger.note("prose", "speech_said_before_dropped", lines=[u[:120] for u in dropped[:6]])
+        except Exception:
+            pass
 
     names = [str(n) for n in memory.get("player_names") or [] if str(n or "").strip()]
     if names:
@@ -15678,12 +15706,230 @@ def _apply_speech_memory(
     return turn
 
 
+AGENCY_ASK_TIMEOUT = 45
+
+
+def _agency_asks(timeout: int, usage: list[dict[str, Any]] | None, trace: list[dict[str, Any]] | None) -> Any:
+    """The turn's small yes/no asks (app/player_agency), on the ordinary call path.
+
+    Each goes through _chat_text, so its prompt, raw reply and time are in the
+    turn trace and its size in model_usage, like the verifier's calls. With the
+    model already found down this turn, no ask is made and the old rules stand.
+    """
+    from app.player_agency import ASK_MAX_TOKENS, AgencyAsks
+
+    if _model_unavailable_noted(usage):
+        return AgencyAsks(None)
+
+    def chat(system: str, user: str, phase: str) -> str:
+        return _chat_text(
+            system,
+            user,
+            timeout=min(int(timeout or AGENCY_ASK_TIMEOUT), AGENCY_ASK_TIMEOUT),
+            usage=usage,
+            phase=phase,
+            max_tokens=ASK_MAX_TOKENS,
+            trace=trace,
+            temperature=0.0,
+        )
+
+    return AgencyAsks(chat)
+
+
+def _rebuild_segments(turn: dict[str, Any], text: str) -> None:
+    turn["narration"] = text
+    if isinstance(turn.get("narration_segments"), list):
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+        turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in paragraphs] or [{"label": "paragraph", "text": text}]
+
+
+def _end_scene_at(
+    turn: dict[str, Any], cut: int, player_input: str, family: str, decision: str, phase: str,
+    trace: list[dict[str, Any]] | None, **detail: Any,
+) -> dict[str, Any]:
+    """End the narration at ``cut``; the ops only the cut part held go with it (as the #75 cut)."""
+    text = str(turn.get("narration") or "")
+    head = text[:cut].rstrip()
+    tail = text[cut:].strip()
+    if not head or not tail:
+        return turn
+    _rebuild_segments(turn, head)
+    cut_ops = _drop_ops_of_cut_tail(turn, head, tail, player_input)
+    dsl = turn.get("_dsl")
+    if isinstance(dsl, dict):
+        dsl["cut_ops"] = list(dsl.get("cut_ops") or []) + cut_ops
+    turn["_scene_cut"] = {
+        "family": family,
+        "trigger": str(detail.get("trigger") or "")[:300],
+        "npc_line": "",
+        "tail": tail[:1200],
+        "tail_chars": len(tail),
+        "cut_ops": cut_ops,
+    }
+    short = {k: str(v)[:200] for k, v in detail.items()}
+    _append_trace(trace, {"phase": phase, "event": decision, "tail_chars": len(tail), "cut_ops": cut_ops[:8], **short})
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("player_words", decision, tail_chars=len(tail), cut_ops=cut_ops, **short)
+    except Exception:
+        pass
+    return turn
+
+
+def _drop_script_lines(
+    turn: dict[str, Any], player_input: str, context: dict[str, Any] | None, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """A script line for the player ('You: i shoot Marisol [[A]]', baseline T2) (#30).
+
+    The player's own typed line pasted back is an echo of the input and goes.
+    Any other words after the label are read as speech the prose gives the
+    player ('"...," you say.'), so the speech drop judges them like any line.
+    """
+    from app.narration_pipeline import content_stems
+    from app.player_agency import script_label_re
+
+    if not isinstance(turn, dict) or str(player_input or "").startswith("__"):
+        return turn
+    memory = (context or {}).get("speech_memory") if isinstance(context, dict) else None
+    names = list((memory or {}).get("player_names") or []) if isinstance(memory, dict) else []
+    label = script_label_re(names)
+    text = str(turn.get("narration") or "")
+    if not label.search(text):
+        return turn
+    own_stems = content_stems(_SCENE_QUOTE_RE.sub(" ", player_line_of(player_input)))
+    echoed: list[str] = []
+    voiced: list[str] = []
+
+    def _fix(match: re.Match[str]) -> str:
+        line = match.group("line").strip()
+        stems = content_stems(line)
+        if not stems or (own_stems and len(stems & own_stems) >= 0.8 * len(stems)):
+            echoed.append(line)
+            return ""
+        voiced.append(line)
+        body = line.strip().strip('"“”').rstrip()
+        if body and body[-1] not in ".!?":
+            body += "."
+        return f'"{body}" you say.'
+
+    fixed = label.sub(_fix, text)
+    fixed = re.sub(r"\n\s*\n(?:\s*\n)+", "\n\n", fixed).strip()
+    if fixed == text or not fixed:
+        return turn
+    _rebuild_segments(turn, fixed)
+    _append_trace(trace, {"phase": phase, "event": "player_script_line", "echoed": echoed[:4], "voiced": voiced[:4]})
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("player_words", "player_script_line", echoed=echoed[:4], voiced=voiced[:4])
+    except Exception:
+        pass
+    return turn
+
+
+def _cut_scene_at_choice_taken(
+    turn: dict[str, Any], player_input: str, asks: Any, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """The prose put a choice to the player and then made it (#30, cc87dd29 T2)."""
+    if asks is None or not isinstance(turn, dict) or str(player_input or "").startswith("__"):
+        return turn
+    from app.player_agency import choice_taken_cut
+
+    point = choice_taken_cut(str(turn.get("narration") or ""), asks)
+    if not point:
+        return turn
+    return _end_scene_at(
+        turn, point["cut"], player_input, "choice_taken", "scene_ended_before_choice_made_for_player", phase, trace,
+        trigger=point["sentence"], question=point["question"],
+    )
+
+
+def _cut_scene_at_reply_to_dropped_act(
+    turn: dict[str, Any], before: str, dropped: list[str], player_input: str, asks: Any, phase: str,
+    trace: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """The kept prose answers a player act that was dropped as invented (#30, baseline T1)."""
+    if asks is None or not dropped or not isinstance(turn, dict):
+        return turn
+    from app.player_agency import reply_to_dropped_act_cut
+
+    point = reply_to_dropped_act_cut(before, str(turn.get("narration") or ""), dropped, asks)
+    if not point:
+        return turn
+    return _end_scene_at(
+        turn, point["cut"], player_input, "reply_to_dropped_act", "scene_ended_at_dropped_player_act", phase, trace,
+        trigger=point["act"], reply=point["reply"],
+    )
+
+
+def _drop_retold_paragraphs(
+    turn: dict[str, Any], asks: Any, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """A paragraph that tells an earlier one's events again (#29, cc87dd29 T2)."""
+    if asks is None or not isinstance(turn, dict):
+        return turn
+    from app.player_agency import drop_retold_paragraphs
+
+    text = str(turn.get("narration") or "")
+    paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paragraphs) < 2:
+        return turn
+    kept, dropped = drop_retold_paragraphs(paragraphs, asks)
+    if not dropped:
+        return turn
+    _rebuild_segments(turn, "\n\n".join(p for p in kept if p.strip()))
+    _append_trace(trace, {"phase": phase, "event": "retold_sentences_dropped", "dropped": [s[:160] for s in dropped[:8]]})
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("prose", "retold_sentences_dropped", sentences=[s[:120] for s in dropped[:6]])
+    except Exception:
+        pass
+    return turn
+
+
+def _close_open_quotes(turn: dict[str, Any], phase: str, trace: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """An opening quote with no close in its paragraph gets one (#29, cc87dd29 T14)."""
+    from app.player_agency import close_open_quotes
+
+    if not isinstance(turn, dict):
+        return turn
+    text = str(turn.get("narration") or "")
+    paragraphs = re.split(r"(\n\s*\n)", text)
+    fixed_any: list[str] = []
+    for i in range(0, len(paragraphs), 2):
+        fixed, count = close_open_quotes(paragraphs[i])
+        if count:
+            fixed_any.append(fixed[:160])
+            paragraphs[i] = fixed
+    if not fixed_any:
+        return turn
+    new = "".join(paragraphs)
+    turn["narration"] = new
+    segments = turn.get("narration_segments")
+    if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
+        turn["narration_segments"] = [
+            {**seg, "text": "\n\n".join(close_open_quotes(p)[0] for p in re.split(r"\n\s*\n", str(seg.get("text") or "")))}
+            for seg in segments
+        ]
+    _append_trace(trace, {"phase": phase, "event": "open_quote_closed", "paragraphs": fixed_any[:6]})
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("prose", "open_quote_closed", paragraphs=fixed_any[:4])
+    except Exception:
+        pass
+    return turn
+
+
 def _drop_player_overreach(
     turn: dict[str, Any],
     player_input: str,
     phase: str,
     trace: list[dict[str, Any]] | None,
     context: dict[str, Any] | None = None,
+    asks: Any = None,
 ) -> dict[str, Any]:
     """Invented player speech, then invented player acts, thoughts and decisions (#30).
 
@@ -15691,13 +15937,21 @@ def _drop_player_overreach(
     the prose answers someone's line with words or a take the player did not
     give, it ends on that line, and the ops that only the cut part supported
     go with it. An opening ends before the first line it gives the player.
+
+    ``asks`` (app/player_agency, from _agency_asks) settles by one small
+    question each: a choice the prose put to the player and then made, a
+    quotation with "you" beside it, a voiced line, and a reply to a dropped
+    player act. Without it (the light-question path) the engine rules alone run.
     """
+    turn = _drop_script_lines(turn, player_input, context, phase, trace)
     turn = _narrator_voice_to_second_person(turn, player_input, phase, trace)
     turn = _end_silent_scene_before_player(turn, player_input, trace)
     cut_before = turn.get("_scene_cut") if isinstance(turn, dict) else None
     turn = _cut_scene_at_invented_request(turn, player_input, earlier=_earlier_lines(context))
     if isinstance(turn, dict) and turn.get("_scene_cut") is cut_before:
         turn = _cut_scene_after_completed_act(turn, player_input)
+    if isinstance(turn, dict) and turn.get("_scene_cut") is cut_before:
+        turn = _cut_scene_at_choice_taken(turn, player_input, asks, phase, trace)
     cut = turn.get("_scene_cut") if isinstance(turn, dict) else None
     if cut and cut is not cut_before:
         _append_trace(
@@ -15713,7 +15967,7 @@ def _drop_player_overreach(
             },
         )
     said_before = list(turn.get("_invented_player_speech") or []) if isinstance(turn, dict) else []
-    spoken = _drop_invented_player_speech(turn, player_input)
+    spoken = _drop_invented_player_speech(turn, player_input, asks=asks)
     said_after = list(spoken.get("_invented_player_speech") or []) if isinstance(spoken, dict) else []
     if said_after and said_after != said_before:
         _append_trace(
@@ -15725,6 +15979,7 @@ def _drop_player_overreach(
 
         turn_ledger.note("player_words", "invented_speech_dropped", phase=phase, lines=[s[:160] for s in said_after[:6]])
     before = list(spoken.get("_invented_player_acts") or []) if isinstance(spoken, dict) else []
+    text_before_acts = str(spoken.get("narration") or "") if isinstance(spoken, dict) else ""
     acted = _drop_invented_player_acts(spoken, player_input)
     after = list(acted.get("_invented_player_acts") or [])
     if after and after != before:
@@ -15732,6 +15987,10 @@ def _drop_player_overreach(
             trace,
             {"phase": phase, "event": "invented_player_acts_dropped", "count": len(after), "dropped": [s[:160] for s in after[:6]]},
         )
+        if acted.get("_scene_cut") is cut_before:
+            acted = _cut_scene_at_reply_to_dropped_act(
+                acted, text_before_acts, [s for s in after if s not in before], player_input, asks, phase, trace
+            )
     # Measured, not refused (playtest #77, T13): the act the player declared,
     # done in the prose by someone else and never by "you". Ownership is fixed
     # in the ask (PROSE_VOICE); this counts how often the ask is ignored.
@@ -16798,13 +17057,20 @@ def _cut_scene_after_completed_act(turn: dict[str, Any], player_input: str, *, f
     return turn
 
 
-def _drop_invented_player_speech(turn: dict[str, Any], player_input: str) -> dict[str, Any]:
+def _drop_invented_player_speech(turn: dict[str, Any], player_input: str, asks: Any = None) -> dict[str, Any]:
     """
     Drop quoted lines the narration gives the player that the player did not
     say (playtest #30: '"I don't think," you say. "I know."' for an input with
     no speech in it). Whole units go; segments follow; the drop is recorded.
+    ``asks`` settles a "you" tag the verb list does not hold and a voiced line.
     """
-    from app.narration_pipeline import drop_invented_player_speech
+    from functools import partial
+
+    from app.narration_pipeline import drop_invented_player_speech as _drop_speech
+
+    drop_invented_player_speech = (
+        partial(_drop_speech, says=asks.speaks, voices=asks.voices) if asks is not None else _drop_speech
+    )
 
     segments = turn.get("narration_segments")
     if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
