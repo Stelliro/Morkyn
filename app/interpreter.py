@@ -47,8 +47,21 @@ the record (facts_to_keep next turn) carries the death.
 The event shape is the one later kinds (gold, items, moves) will use:
     {"kind": str, "subject": {"type": "npc"|"place", "code": str, "name": str},
      "evidence": str, "status": "proposed"|"applied"|"refused", "reason": str}
-A gold event would add "amount" and an "object" of the same shape;
 allow_event is the seat where the dice round refuses what a roll did not allow.
+
+Gold (#41, read_gold): whether money leaves or reaches the player, asked over
+the whole scene, each a positive question about one thing, and one check that
+must answer "no" before either counts:
+
+    out    "Does the player give, pay or lose money in this text?"   yes, then
+    in     "Does the player receive money in this text?"             yes, then
+    check  "Does the player have the same money at the end of it as at the start?"  must be no
+
+The amount is never the model's: it is the engine's (the sum the prose names,
+read by prose_state, else the band roll). A gold event adds "direction"
+("out" / "in") and "amount" to the shape above, with the player as subject.
+world.apply_turn refuses a loss the scene does not show (out confirmed) and
+logs both answers beside _settle_stated_gold in shadow mode.
 
 Every ask goes through the model call path the caller gives (app/llm.py passes
 _chat_text with the turn's usage and trace, so each prompt, raw reply and its
@@ -75,10 +88,17 @@ PHASE_HOLD = "interpreter_hold"
 PHASE_RETURNED = "interpreter_returned"
 PHASE_RETURNED_CHECK = "interpreter_returned_check"
 PHASE_WHICH = "interpreter_hold_which"
+PHASE_GOLD_OUT = "interpreter_gold_out"
+PHASE_GOLD_IN = "interpreter_gold_in"
+PHASE_GOLD_CHECK = "interpreter_gold_check"
 
 KIND_DIED = "died"
 KIND_DESTROYED = "destroyed"
 KIND_RETURNED = "returned"
+KIND_GOLD = "gold"
+
+# The gold asks read the whole scene (a payment can sit in any paragraph).
+GOLD_PASSAGE_CHARS = 4000
 
 # How many candidates one turn may ask about, and how many asks in all.
 MAX_PEOPLE = 4
@@ -368,6 +388,98 @@ def ask_which(name: str, paragraph: str, sentence: str) -> str:
         f"Read this.\n\n{paragraph}\n\n"
         f"In the sentence \"{sentence}\", does {name} say or do something? Answer yes or no."
     )
+
+
+def ask_gold_out(passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nDoes the player give, pay or lose money in this text? Answer yes or no."
+
+
+def ask_gold_in(passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nDoes the player receive money in this text? Answer yes or no."
+
+
+def ask_gold_check(passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nDoes the player have the same money at the end of it as at the start? Answer yes or no."
+
+
+# ---------------------------------------------------------------------------
+# Gold (#41): does money leave or reach the player in this scene
+# ---------------------------------------------------------------------------
+
+
+def gold_passage(text: str, limit: int = GOLD_PASSAGE_CHARS) -> str:
+    """The whole scene without codes; when too long, its last whole paragraphs."""
+    out: list[str] = []
+    size = 0
+    for para in reversed(_paragraphs(text)):
+        para_plain = plain(para)
+        if out and size + len(para_plain) > limit:
+            break
+        out.insert(0, para_plain[-limit:] if not out and len(para_plain) > limit else para_plain)
+        size += len(para_plain)
+    return "\n\n".join(out)
+
+
+def read_gold(text: str, ask: Ask) -> dict[str, Any]:
+    """Whether the scene shows money leaving ("out") and reaching ("in") the player.
+
+    Each side is True only when its ask says yes and the shared check ("the
+    same money at the end as at the start?") says no; False when either did
+    not (a no, an unread reply, a yes the check refutes); None when the asks
+    could not be put at all (the model down: nothing is known, and the caller
+    keeps what its own rules decided). The check is asked once, only after a yes.
+    """
+    report: dict[str, Any] = {"asks": [], "held": [], "events": [], "unconfirmed": []}
+    out: dict[str, Any] = {"out": None, "in": None, "answers": {}, "report": report}
+    passage = gold_passage(text)
+    if not passage:
+        return out
+    started = time.time()
+    check: dict[str, Any] = {}
+
+    def failed() -> bool:
+        return bool(report["asks"] and report["asks"][-1].get("error"))
+
+    def side(phase: str, prompt: str, direction: str) -> bool | None:
+        raw = _ask(ask, report, phase, prompt)
+        if raw is None and failed():
+            return None
+        answer = yes_no(raw)
+        out["answers"][direction] = answer
+        if answer is not True:
+            return False
+        if "answer" not in check:
+            raw_check = _ask(ask, report, PHASE_GOLD_CHECK, ask_gold_check(passage))
+            check["failed"] = raw_check is None and failed()
+            check["answer"] = yes_no(raw_check)
+            out["answers"]["check"] = check["answer"]
+        if check["failed"]:
+            return None
+        if check["answer"] is False:
+            return True
+        report["unconfirmed"].append({"kind": KIND_GOLD, "direction": direction, "check": check["answer"]})
+        return False
+
+    try:
+        out["out"] = side(PHASE_GOLD_OUT, ask_gold_out(passage), "out")
+        out["in"] = side(PHASE_GOLD_IN, ask_gold_in(passage), "in")
+    except Exception as exc:  # never break a turn
+        report["error"] = f"{type(exc).__name__}: {exc}"[:300]
+    report["seconds"] = round(time.time() - started, 3)
+    return out
+
+
+def gold_event(direction: str, amount: int, status: str, reason: str = "", evidence: str = "") -> dict[str, Any]:
+    """A gold event: the player pays ("out") or receives ("in") ``amount``, the engine's number."""
+    return {
+        "kind": KIND_GOLD,
+        "subject": {"type": "player", "code": "", "name": "player"},
+        "direction": direction,
+        "amount": abs(int(amount)),
+        "evidence": str(evidence or "")[-400:],
+        "status": status,
+        "reason": reason,
+    }
 
 
 # ---------------------------------------------------------------------------
