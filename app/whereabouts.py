@@ -23,16 +23,22 @@ place is final (``decide``):
   * Someone already on record elsewhere is moved there only when the turn
     shows them with the player: the scene cast and the called person
     (world._move_cast_here, conversation.bring_called_here, as before), or the
-    interpreter's measured hold ask "Does <Name> say or do anything in it?"
-    answering yes (interpreter.with_player, ``file_shown_people``).
+    interpreter's presence pair, "Is <Name> with the player at the end of
+    it?" yes and "Has the player walked away from <Name> at the end of it?"
+    no (interpreter.with_player, ``file_shown_people``).
 
 Unless the records say plainly they are elsewhere (no model ask, the records
 and the prose's own structure):
 
-  * shown at another place: a sentence names them and a place on record that
-    is not the player's and not one the player's place stands in (a clinic is
-    in its town), or the place the player left this turn ("Kim [[B]] waves
-    from the Sanctuary [[L1]] gate as you go in");
+  * shown at another place: the last sentence that names them and a place
+    (``places_named``: the engine's place matching, by code, a full or
+    two-word name only one place has, or the one place near the player of
+    that kind or head word, "the clinic", "the town hall") names the place
+    they are filed at and not the player's ("Through the window you see Bram
+    crossing the Sanctuary [[L1]]" from inside the clinic keeps Bram in the
+    town), or names the place the player left this turn ("Kim [[B]] waves
+    from the Sanctuary [[L1]] gate as you go in"). A sentence that names the
+    player's place puts them here;
   * talked about: every mention of them is inside quoted speech ("The mayor's
     at the town hall," Kim says);
   * left behind: the player left their place this turn and the prose names
@@ -49,7 +55,7 @@ from typing import Any, Iterable
 
 from app import turn_ledger
 
-# How far up the place tree "the place the player's place stands in" goes.
+# How far up the place tree "the places the player's place stands in" goes.
 _MAX_DEPTH = 8
 
 
@@ -61,23 +67,6 @@ def here_id(conn) -> int:
         return 0
 
 
-def around(conn, place_id: int) -> set[int]:
-    """The places ``place_id`` stands in (its parent, the parent's parent, ...), not itself."""
-    out: set[int] = set()
-    at = int(place_id or 0)
-    for _ in range(_MAX_DEPTH):
-        try:
-            row = conn.execute("SELECT parent_id FROM locations WHERE id = ?", (at,)).fetchone()
-        except Exception:
-            break
-        up = int((row[0] if row else 0) or 0)
-        if not up or up in out or up == int(place_id or 0):
-            break
-        out.add(up)
-        at = up
-    return out
-
-
 def _matcher(conn):
     """The interpreter's matcher over the whole roster: a code, or a full name only one row has."""
     from app.interpreter import Matcher, clean_name
@@ -87,10 +76,102 @@ def _matcher(conn):
         for r in conn.execute("SELECT id, code, name FROM npcs").fetchall()
     ]
     places = [
-        {"id": int(r["id"]), "code": str(r["code"] or ""), "name": clean_name(r["name"])}
-        for r in conn.execute("SELECT id, code, name FROM locations").fetchall()
+        {"id": int(r["id"]), "code": str(r.get("code") or ""), "name": clean_name(r.get("name")),
+         "parent_id": int(r.get("parent_id") or 0), "kind": str(r.get("kind") or ""), "plot_id": str(r.get("plot_id") or "")}
+        for r in (dict(row) for row in conn.execute("SELECT * FROM locations").fetchall())
     ]
     return Matcher(people, places)
+
+
+def near(match, here: int, also: Iterable[int] = ()) -> set[int]:
+    """The places a short common noun can mean from where the player is: the
+    player's place, the places it stands in, what stands in any of those, and ``also``."""
+    by_id = {p["id"]: p for p in match.places}
+    chain: list[int] = []
+    at = int(here or 0)
+    while at and at in by_id and at not in chain and len(chain) < _MAX_DEPTH:
+        chain.append(at)
+        at = int(by_id[at].get("parent_id") or 0)
+    out = set(chain) | {p["id"] for p in match.places if int(p.get("parent_id") or 0) in chain}
+    return out | {int(i) for i in also if int(i or 0) in by_id}
+
+
+def _blank(text: str, spans: Iterable[tuple[int, int]]) -> str:
+    for start, end in spans:
+        text = text[:start] + " " * (end - start) + text[end:]
+    return text
+
+
+def places_named(sentence: str, match, near_ids: Iterable[int]) -> set[int]:
+    """The recorded places a sentence names outside quoted speech, by the engine's place matching.
+
+    Longest first, each mention used once: a [[L#]] code or a full name only
+    one place has (interpreter.Matcher); the last two words of a name side by
+    side when only one place has them ("the town hall" for "Radiation Fenced
+    Sanctuary Town Hall", world.place_pair_span, as a move is read); then a
+    head word (the last word of a place's name, world._place_words) or the
+    labels of its kind (venues.kind_family_labels) when only one place in
+    ``near_ids`` has it ("the clinic"). A word two places share names neither.
+    """
+    import re
+
+    from app import venues
+    from app.world import _place_words, place_pair_span
+
+    text = venues.strip_speech(str(sentence or ""))
+    found: set[int] = set()
+    for place in sorted(match.places, key=lambda p: -len(str(p.get("name") or ""))):
+        spans = match.spans(text, place)
+        if spans:
+            found.add(place["id"])
+            text = _blank(text, spans)
+    low = text.lower()
+    words = {p["id"]: _place_words(str(p.get("name") or "")) for p in match.places}
+    pairs: dict[tuple[str, str], list[int]] = {}
+    for pid, w in words.items():
+        if len(w) >= 2:
+            pairs.setdefault((w[-2], w[-1]), []).append(pid)
+    for pair, ids in pairs.items():
+        span = place_pair_span(low, list(pair)) if len(ids) == 1 else None
+        if span is not None:
+            found.add(ids[0])
+            low = _blank(low, [span])
+    by_id = {p["id"]: p for p in match.places}
+    heads: dict[str, set[int]] = {}
+    for pid in near_ids:
+        place = by_id.get(int(pid))
+        if place is None:
+            continue
+        own = set(words.get(place["id"])[-1:]) | set(venues.kind_family_labels(venues.row_kind(place)))
+        for head in own:
+            if len(head) >= 3:
+                heads.setdefault(head, set()).add(place["id"])
+    for head, ids in heads.items():
+        if len(ids) == 1 and re.search(rf"(?<![\w'’-]){re.escape(head)}(?:e?s)?(?![\w-])", low):
+            found |= ids
+    return found
+
+
+def placed_by_prose(text: str, person: dict[str, Any], filed: int, here: int, left: int, match) -> str:
+    """"elsewhere", "here" or "": what the last sentence naming this person and a place says.
+
+    "elsewhere": it names the place they are filed at and not the player's
+    (or names the place the player just left). "here": it names the player's place.
+    """
+    from app.interpreter import units
+    from app.venues import strip_speech
+
+    around_here = near(match, here, (filed, left))
+    verdict = ""
+    for _a, _b, sentence in units(text):
+        if not match.names(strip_speech(sentence), person):
+            continue
+        named = places_named(sentence, match, around_here)
+        if filed and filed != here and filed in named and (filed == left or here not in named):
+            verdict = "elsewhere"
+        elif here in named:
+            verdict = "here"
+    return verdict
 
 
 def _person(match, npc_id: int) -> dict[str, Any] | None:
@@ -102,16 +183,6 @@ def talked_about(text: str, person: dict[str, Any], match) -> bool:
     from app.venues import strip_speech
 
     return match.names(text, person) and not match.names(strip_speech(text), person)
-
-
-def shown_at(text: str, person: dict[str, Any], place_id: int, match) -> bool:
-    """A sentence of the prose names both the person and the place."""
-    from app.interpreter import units
-
-    place = next((p for p in match.places if p["id"] == int(place_id or 0)), None)
-    if place is None:
-        return False
-    return any(match.names(s, person) and match.names(s, place) for _a, _b, s in units(text))
 
 
 def decide(conn, npc_id: int, text: str, *, here: int, here_at_start: int = 0, match=None) -> tuple[int, str]:
@@ -131,8 +202,11 @@ def decide(conn, npc_id: int, text: str, *, here: int, here_at_start: int = 0, m
     if talked_about(text, person, match):
         return filed, "talked_about"
     left = int(here_at_start or 0) if int(here_at_start or 0) != here else 0
-    if filed and (filed not in around(conn, here) or filed == left) and shown_at(text, person, filed, match):
+    verdict = placed_by_prose(text, person, filed, here, left, match)
+    if verdict == "elsewhere":
         return filed, "shown_elsewhere"
+    # "You thank Aldric and step out onto Low Street" names the player's new
+    # place in the leaving sentence; he is still left behind.
     if left and filed == left and match.names(text, person):
         from app.world import after_player_leaves
 
