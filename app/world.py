@@ -25237,6 +25237,9 @@ def apply_turn(
                 numbered_now = unnamed.file_figures(conn, result, narration, loc_id_seed, int(max_npc_before or 0))
                 if numbered_now:
                     seeded = list(seeded or []) + numbered_now
+                # The figures the prose shows again ("the ghoul circles you")
+                # are brought back, so they do not fade while in the scene.
+                touched_npc_ids.update(int(i) for i in result.get("_figures_shown") or [])
             except Exception as exc:
                 turn_ledger.note("npc", "unnamed_figures_failed", error=f"{type(exc).__name__}: {exc}"[:200])
             # A person filed this turn whose name the prose tagged with a place
