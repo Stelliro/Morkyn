@@ -151,7 +151,9 @@ belong to, with the date).
 - **Where the player is, the people met are** (2026-10-24, #33): "play state needs to be in the
   same location as npc and hadded to the llm to ensure that the llm knows where the player is". A
   person the player meets is filed at the player's place, and the narrator is always told plainly
-  where the player is.
+  where the player is. Stell, same day, on scenes drifting to other places: "the story should be
+  told where the player is, fix the drift": the place is the first of the facts_to_keep (held like
+  the hour), not only a field in the place data.
 - **Death is a 0/1 state the narrator is told only when it is 1** (2026-10-24, #154): "npc death
   state needs to be changed from 0 to 1 ... if not the llm should assume all npc's state is 0 (we
   dont need to tell it that npc's are alive as it already asumes that, we just need to tell it
