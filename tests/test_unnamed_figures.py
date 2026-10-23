@@ -406,10 +406,14 @@ class TheFigureGate(unittest.TestCase):
         _fresh_world()
 
     def test_an_object_or_a_noun_in_a_phrase_is_never_asked(self):
+        # Yes to every noun that is no figure: an object of something else's verb, a noun after
+        # "is", the head of a prepositional phrase. Only what the player sees or hears is asked
+        # (the scream, the buildings), and the pair answers those no: nothing is filed.
         for prose in SCENERY_OBJECTS:
-            asker = _Asker(figures=("warning", "door", "half", "building"))
+            asker = _Asker(figures=("warning", "door", "half"))
             _play(prose, "i look around", asker)
-            self.assertEqual(asker.asked("figure_kind"), [], prose)
+            asked = [u.split('is "')[1].split('"')[0] for u in asker.asked("figure_kind")]
+            self.assertEqual([n for n in asked if n not in {"scream", "building"}], [], prose)
         self.assertEqual(_names(), [])
 
     def test_the_structure_reads_the_subject(self):
@@ -430,13 +434,13 @@ class TheFigureGate(unittest.TestCase):
     def test_one_yes_files_nothing(self):
         # A yes-leaning first ask: the second, differently worded one says no.
         for prose in SCENERY_SUBJECTS + (T2_PROSE,):
-            asker = _Asker(figures=("counter", "tear", "look", "ping"), checked=())
+            asker = _Asker(figures=("counter", "tear", "look", "ping", "cry"), checked=())
             _play(prose, "i look around", asker)
             self.assertEqual(len(asker.asked("figure_kind_check")), len(asker.asked("figure_kind")), prose)
             self.assertTrue(asker.asked("figure_kind"), prose)
         # The woman behind the counter is a figure the hints know (Woman 1); no scenery is.
         self.assertEqual([n for n in _names() if not n.startswith("Woman ")], [])
-        self.assertEqual(_names("kind IN ('Ping', 'Counter', 'Tear', 'Look')"), [])
+        self.assertEqual(_names("kind IN ('Ping', 'Counter', 'Tear', 'Look', 'Cry')"), [])
 
     def test_both_asks_yes_files_the_figure(self):
         asker = _Asker(figures=("ghoul",), hostile=("ghoul",))
@@ -873,6 +877,114 @@ class MoreAndReferredBack(unittest.TestCase):
         _play("The deathclaw charges you, roaring.", "i brace", asker,
               ops='SUMMARY: "A deathclaw charges."\nNPC_NEW NAME "Deathclaw" ROLE "monster" ATTITUDE hostile')
         self.assertEqual(_names(), ["Deathclaw 1"])
+
+
+# Live run unnamed2 T1 on Hermes 3 8B (turns/001.json), verbatim: the ghouls are what the player sees.
+UNNAMED2_T1_LINE = "I creep into the ruined subway tunnel where a pack of ghouls is feeding on a carcass"
+UNNAMED2_T1_PROSE = (
+    "Morning mist drifts across the cracked asphalt of the old highway as you creep into the ruined subway tunnel "
+    "entrance. The rusted metal door hangs partway off its hinges. Through the gap, you see a pack of ghouls feasting "
+    "on a bloated corpse. Their milky eyes stare in your direction as you move silently in your X-01 power armor "
+    "[[I2]]. They are not hungry enough to abandon their meal to attack you.\n\nAs you slip past, a faint voice calls "
+    "out from deeper in the shadows, \"You're going the wrong way. The other tunnel leads to the old power plant. It's "
+    "got salvageable tech inside, if you know how to use it.\"\n\nCarlos Khan [[A]] steps into the pale morning light, "
+    "his ranger's bow in hand. He is not a friend."
+)
+
+
+class _RecordedAsker(_Asker):
+    """The replies Hermes 3 8B gave (live-eval-5 and the unnamed2 trace), keyed by the exact prompt.
+
+    unnamed2 T1's own figure_kind reply was 'Yes, "gh'. Its figure_kind_check reply was "No.";
+    here it is the "Yes, you could" the same wording got on 4 ghouls eating someone (2 of 3),
+    so the test is of the engine, not of that reply. figure_hostile was never asked live on
+    this sentence; the reply is the one measured on "You see 4 ghouls eating someone" (3 of 3).
+    """
+
+    REPLIES = {
+        ("figure_kind", "Through the gap, you see a pack of ghouls feasting on a bloated corpse.", "ghoul"): 'Yes, "gh',
+        ("figure_kind_check", "Through the gap, you see a pack of ghouls feasting on a bloated corpse.", "ghoul"):
+            "Yes, you could",
+        ("figure_hostile", "Through the gap, you see a pack of ghouls feasting on a bloated corpse.", "ghoul"):
+            "No, the text",
+    }
+
+    def __call__(self, system, user, *, trace=None, usage=None, phase="", max_tokens=None):
+        sentence = user.split("\n")[0][len("Text: "):]
+        for (p, s, noun), reply in self.REPLIES.items():
+            if p == phase and s == sentence and noun in user.split("\n")[-1]:
+                self.calls.append((phase, user))
+                return reply
+        return super().__call__(system, user, trace=trace, usage=usage, phase=phase, max_tokens=max_tokens)
+
+
+class WhatThePlayerSees(unittest.TestCase):
+    """A figure the prose shows present is asked about: the object of the player's seeing, an -ing
+    or a relative clause after it, not only the subject of a verb (unnamed2 T1)."""
+
+    def setUp(self):
+        _fresh_world()
+
+    def test_unnamed2_t1_mints_two_ghouls(self):
+        asker = _RecordedAsker()
+        _play(UNNAMED2_T1_PROSE, UNNAMED2_T1_LINE, asker)
+        rows = _rows()
+        self.assertEqual([r["name"] for r in rows], ["Ghoul 1", "Ghoul 2"])
+        # figure_hostile said no: feasting on a corpse is no threat to the player.
+        self.assertEqual([r["attitude"] for r in rows if r["attitude"] == "hostile"], [])
+        self.assertEqual(asker.asked("figure_kind"),
+                         ['Text: Through the gap, you see a pack of ghouls feasting on a bloated corpse.\n'
+                          'In this text, is "ghoul" a being that can act on its own?'])
+        # The group was not counted: two now; later prose that counts more adds the rest.
+        _play("Another ghoul drops from the ceiling behind you.", "i back away", _Asker(hostile=("ghoul",)))
+        self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3"])
+        _play("Some ghouls shamble toward you.", "i back away", _Asker())
+        self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3"])
+
+    def test_the_third_ghoul_after_an_uncounted_pack(self):
+        _play("You see a pack of ghouls.", "i look", _Asker(figures=("ghoul",)))
+        self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2"])
+        _play("The third ghoul lunges at you.", "i fight", _Asker())
+        self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3"])
+
+    def test_a_door_the_player_sees_is_asked_and_files_nothing(self):
+        asker = _Asker(figures=())
+        _play("You see a rusted door hanging off its hinges.", "i look around", asker)
+        self.assertEqual(len(asker.asked("figure_kind")), 1)
+        self.assertEqual(asker.asked("figure_kind_check"), [])
+        self.assertEqual(_names(), [])
+
+    def test_the_shapes_that_show_one_present(self):
+        from app import unnamed
+
+        def read(text):
+            return [(m["kind"], m["count"], m["subject"], m["seen"]) for m in unnamed.mentions(text)]
+
+        self.assertEqual(read("You spot two raiders behind the wreck."), [("raider", 2, False, True)])
+        self.assertEqual(read("You look up to face a deathclaw."), [("deathclaw", 1, False, True)])
+        self.assertEqual(read("You hear a ghoul that shrieks in the dark."), [("ghoul", 1, True, False)])
+        self.assertEqual(read("You meet a crowd of refugees at the gate."), [("refugee", 2, False, True)])
+        # Not the player's own verb's object: "hands you", "behind you stands", "shoot at".
+        self.assertEqual([k for k, *_ in read("The guard hands you a knife.")], ["guard"])
+        self.assertEqual(read("Behind you stands a raider."), [])
+        self.assertEqual(read("You shoot at a ghoul in the doorway."), [])
+
+    def test_a_crowd_is_asked_as_itself(self):
+        asker = _Asker(figures=())
+        _play("A crowd gathers around you, muttering.", "i wait", asker)
+        self.assertIn('is "crowd" a being', " ".join(asker.asked("figure_kind")))
+        self.assertEqual(_names(), [])
+
+    def test_the_figure_asks_are_capped(self):
+        from app import unnamed
+
+        prose = ("You see a ghoul, a raider, a drifter, a mutant and a robot by the gate. "
+                 "You spot a deathclaw and a scorpion on the ridge.")
+        asker = _Asker(figures=("ghoul", "raider", "drifter", "mutant", "robot", "deathclaw", "scorpion"))
+        _play(prose, "i look around", asker)
+        asks = len(asker.asked("figure_kind")) + len(asker.asked("figure_kind_check"))
+        self.assertLessEqual(asks, unnamed.MAX_FIGURE_ASKS)
+        self.assertEqual(len(asker.asked("figure_kind")), len(asker.asked("figure_kind_check")))
 
 
 class OldSaves(unittest.TestCase):
