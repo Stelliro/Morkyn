@@ -2064,6 +2064,7 @@ def create_shell_npc(
     summary: str = "",
     sex: str = "",
     name: str = "",
+    kind: str = "",
 ) -> dict[str, Any]:
     """
     Minimal NPC for crowd / one-shot drama. No portrait, no deep stats.
@@ -2073,6 +2074,10 @@ def create_shell_npc(
     `summary` is what the prose said about them (playtest #34: a fixed
     placeholder gave every seeded face the same nothing); `sex` steers the
     drawn name; `name` is one the prose already gave them.
+
+    `kind` (an unnamed figure's kind, "Ghoul"): with no name given, the row is
+    named by its kind and the next number for that kind across the save
+    ("Ghoul 3"), not a drawn name (app/unnamed.py, Stell 2026-10-24).
     """
     presence = presence if presence in {"nameless", "background", "event_worthy"} else "nameless"
     sex = sex if sex in {"female", "male"} else ""
@@ -2082,6 +2087,16 @@ def create_shell_npc(
         or conn.execute("SELECT 1 FROM npcs WHERE name = ? COLLATE NOCASE", (wanted,)).fetchone()
     ):
         wanted = ""
+    kind_number = 0
+    kind = str(kind or "").strip()
+    if kind and not wanted:
+        from app import unnamed
+
+        kind = unnamed.kind_title(kind)
+        kind_number = unnamed.next_number(conn, kind) if kind else 0
+        wanted = unnamed.numbered(kind, kind_number) if kind else ""
+    if not kind_number:
+        kind = ""
     # Uniqueness is world-wide, not per-location: the pool is 20x20, and a run
     # with sixteen seeded faces produced three separate people all called
     # "Grainwick". Two of anyone reads as one character in two places.
@@ -2119,6 +2134,8 @@ def create_shell_npc(
             {"female": "she", "male": "he"}.get(sex, ""),
         ),
     )
+    if kind_number:
+        conn.execute("UPDATE npcs SET kind = ?, kind_number = ? WHERE id = ?", (kind, kind_number, int(cur.lastrowid)))
     try:
         from app.local_intel import ensure_npc_clock
 
@@ -4628,6 +4645,17 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             # invents one -- which is how an apothecary appeared in a hamlet.
             current_location = dict(current_location)
             inside_id = int(current_location.get("parent_id") or 0)
+            # The places this one stands in, nearest first (the narrator's
+            # "player_is_in" line, #33): the context's place list is a slice.
+            by_id = {int(loc["id"]): loc for loc in locations}
+            stands_in: list[dict[str, str]] = []
+            up = inside_id
+            while up and up in by_id and up != int(current_location["id"]) and len(stands_in) < 3:
+                if any(p["code"] == str(by_id[up].get("code") or "") for p in stands_in):
+                    break
+                stands_in.append({"code": str(by_id[up].get("code") or ""), "name": str(by_id[up].get("name") or "")})
+                up = int(by_id[up].get("parent_id") or 0)
+            current_location["stands_in"] = stands_in
             current_location["venues_here"] = venues_at(conn, int(current_location["id"]))
             if inside_id:
                 parent = next((loc for loc in locations if loc["id"] == inside_id), None)
@@ -4989,6 +5017,26 @@ def _cast_off_minor_faces(conn, cast: dict[str, Any]) -> list[str]:
     return gone
 
 
+def after_player_leaves(narration: str) -> str:
+    """The prose from the sentence the player leaves in (that sentence too when they go with someone).
+
+    Named only up to the sentence the player leaves in is left behind: "You
+    thank Elenya [[B]] and step out of the clerk's booth" walked the harbour
+    clerk out to the wreck on the flats, where she watched for two turns (8B
+    run 152e, T7-T9). Only the prose after the leaving puts someone here.
+    With no leaving, the whole prose.
+    """
+    text = re.sub(r"\s+", " ", str(narration or ""))
+    sentences = re.split(r"(?<=[.!?])[\"”']?\s+", text)
+    for index, sentence in enumerate(sentences):
+        if _PLAYER_DEPARTS_RE.search(_unspoken(sentence)) and not _PERFECT_TENSE_RE.search(sentence):
+            # "You follow Rafe [[B]] down to the boat": the leaving brings them.
+            together = re.search(r"\b(?:follow\w*|with|alongside|beside|together|lead\w*|led|behind\s+you|at\s+your\s+side)\b",
+                                 _unspoken(sentence), re.I)
+            return " ".join(sentences[index if together else index + 1:])
+    return text
+
+
 def _move_cast_here(conn, cast: dict[str, Any], narration: str) -> list[str]:
     """CAST present / interacting is the GM saying who is in the scene
     (Saltmarrow #105): a person cast present whose record sits elsewhere, and
@@ -5003,18 +5051,7 @@ def _move_cast_here(conn, cast: dict[str, Any], narration: str) -> list[str]:
     if not here_id:
         return []
     off = {re.sub(r"^\[+|\]+$", "", str(c).strip()).upper() for c in cast.get("off") or []}
-    # Named only up to the sentence the player leaves in is left behind: "You
-    # thank Elenya [[B]] and step out of the clerk's booth" walked the harbour
-    # clerk out to the wreck on the flats, where she watched for two turns (8B
-    # run 152e, T7-T9). Only the prose after the leaving puts someone here.
-    sentences = re.split(r"(?<=[.!?])[\"”']?\s+", text)
-    for index, sentence in enumerate(sentences):
-        if _PLAYER_DEPARTS_RE.search(_unspoken(sentence)) and not _PERFECT_TENSE_RE.search(sentence):
-            # "You follow Rafe [[B]] down to the boat": the leaving brings them.
-            together = re.search(r"\b(?:follow\w*|with|alongside|beside|together|lead\w*|led|behind\s+you|at\s+your\s+side)\b",
-                                 _unspoken(sentence), re.I)
-            text = " ".join(sentences[index if together else index + 1:])
-            break
+    text = after_player_leaves(text)
     moved: list[str] = []
     for bucket in ("present", "interacting"):
         for code in cast.get(bucket) or []:
@@ -5146,6 +5183,10 @@ def _clear_playthrough(conn) -> None:
         "equipment_slots",
         "inventory_capacity_modifiers",
         "npcs",
+        # The people who faded out of the last game are that game's: a new
+        # one could bring them back by name, and the unnamed figures' count
+        # (app/unnamed.next_number reads them) started the new game at Ghoul 2.
+        "faded_people",
         "player",
         "locations",
         # A new campaign has seen no streets, and its era may differ.
@@ -5156,7 +5197,7 @@ def _clear_playthrough(conn) -> None:
     conn.execute(
         """
         DELETE FROM sqlite_sequence
-        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships', 'town_seen')
+        WHERE name IN ('locations', 'npcs', 'faded_people', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships', 'town_seen')
         """
     )
     conn.execute("DELETE FROM pacing")
@@ -10422,6 +10463,98 @@ def _invites_to_place(player_input: str, rows: list[Any], current_name: str = ""
     return False
 
 
+def _line_acts(player_input: str) -> tuple[str, str]:
+    """The player's line without quoted questions, and the clauses it narrates the player doing now."""
+    line = _without_quoted_questions(str(player_input or ""))
+    acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", _player_line(line))
+    try:
+        from app.act_clauses import acts_now
+
+        acts = acts_now(acts)
+    except Exception:
+        pass
+    return line, acts
+
+
+def line_asks_to_go(conn, player_input: str) -> bool:
+    """The movement code's own reading of the player's line: it asks to go somewhere.
+
+    The same readers resolve_movement and _unasked_unshown_move hold a move to
+    (its movement intent, travel, a doorway, a follow, business at another known
+    place, an invitation to one), over the narrated clauses the player does now.
+    """
+    line, acts = _line_acts(player_input)
+    if travel_intent(acts) or venue_move_intent(acts) or _turn_intent(acts)[0] == "travel":
+        return True
+    try:
+        # resolve_movement's own intent: "I ask Mara to take me to the clinic".
+        if _movement_intent(conn, line) == "travel":
+            return True
+    except Exception:
+        pass
+    try:
+        rows = conn.execute("SELECT id, code, name FROM locations").fetchall()
+        here = conn.execute(
+            "SELECT l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+        ).fetchone()
+    except Exception:
+        return False
+    current_name = str(here["name"] or "") if here is not None else ""
+    return _acts_at_known_place(acts, rows, current_name) or _invites_to_place(line, rows, current_name)
+
+
+# The turn intents whose act is done where the player stands: a blow, a deal,
+# words, a look or search. Not inventory: its verbs are also ways of going
+# ("take the stairs", "pack up", "draw near"); and not rest, training, ability,
+# claim_check or "general" (a line the intent keywords do not read).
+_STAYING_INTENTS = ("combat", "trade", "conversation", "investigation")
+
+# The verb that leads each act of the line: the word after the player's own
+# "I"/"we" (past one -ly adverb), and the word that opens the line, a comma
+# stretch or an and/then/but clause.
+_ACT_HEAD_AFTER_SUBJECT_RE = re.compile(r"\b(?:i|we)\s+(?:[a-z]+ly\s+)?([a-z][a-z'’-]*)", re.I)
+_ACT_HEAD_OPENING_RE = re.compile(
+    r"(?:^|[,;]|\b(?:and|then|but)\b)\s*(?:(?:and|then)\s+)?(?:[a-z]+ly\s+)?([a-z][a-z'’-]*)", re.I
+)
+
+
+def _act_heads(acts: str) -> list[str]:
+    heads = [m.group(1).lower() for m in _ACT_HEAD_AFTER_SUBJECT_RE.finditer(acts)]
+    heads += [
+        m.group(1).lower() for m in _ACT_HEAD_OPENING_RE.finditer(acts)
+        if m.group(1).lower() not in {"i", "we", "and", "then", "but"}
+    ]
+    return heads
+
+
+def line_stays_here(conn, player_input: str) -> bool:
+    """The player's line is clearly a staying act by the turn's own intent reading, with no movement read at all.
+
+    app/scene_drift.py re-drafts a scene that ended elsewhere only on such a line.
+    Both the line's intent and the verb leading each of its acts must be a
+    staying one, and no movement reader may read a move in it. Anything else is
+    "not clearly staying": a way of going the keywords do not know ("I make for
+    the docks", "I limp back to camp", "I creep into the tunnel where a pack of
+    ghouls ...") is left alone, so the error this makes is a missed re-draft (the
+    draft stands, as it did before the check), never a move taken from the player.
+    """
+    line, acts = _line_acts(player_input)
+    readings = [_turn_intent(text) for text in (acts, line)]
+    if any(primary not in _STAYING_INTENTS or "travel" in secondary for primary, secondary in readings):
+        return False
+    staying_words = set().union(*(TURN_INTENT_KEYWORDS[intent] for intent in _STAYING_INTENTS))
+    heads = _act_heads(acts)
+    if not heads or any(not (_intent_tokens(head) & staying_words) for head in heads):
+        return False
+    try:
+        # resolve_movement's own intent turns to travel on a walk inside another act.
+        if _movement_intent(conn, line) != readings[1][0]:
+            return False
+        return not line_asks_to_go(conn, player_input)
+    except Exception:
+        return False
+
+
 def _acts_at_known_place(acts: str, rows: list[Any], current_name: str = "") -> bool:
     """The narrated line does its business at a known place that is not here: "report to Ulric at the Reeves' Office"."""
     text = str(acts or "")
@@ -10668,11 +10801,19 @@ def _line_names_place(line: str, words: list[str]) -> bool:
         # The whole word, plural or possessive: "dock" is not named by "the old
         # dockyard", which walked the player to The Dock (8B run 154, T7).
         return bool(re.search(rf"\b{re.escape(words[0])}(?:s|es|['’]s|s['’])?\b", line))
+    return place_pair_span(line, words) is not None
+
+
+def place_pair_span(line: str, words: list[str]) -> tuple[int, int] | None:
+    """Where a lower-cased line names a place by its last two words side by side (_line_names_place)."""
+    if len(words) < 2:
+        return None
     # Filler words between them still name it: "the drowned lower district"
     # for "Drowned Lower District", whose words skip "lower" (8B run 17, T1).
     filler = "|".join(sorted(_PLACE_FILLER_WORDS, key=len, reverse=True))
     pair = rf"\b{re.escape(words[-2])}(?:['’]s)?[\s-]+(?:(?:{filler})[\s-]+){{0,2}}{re.escape(words[-1])}"
-    return bool(re.search(pair, line))
+    found = re.search(pair, line)
+    return found.span() if found else None
 
 
 _REACH_WORDS_RE = re.compile(r"\b(?:into|inside|in\s+through|up\s+to|out\s+to|reach\w*|arriv\w*)\b", re.IGNORECASE)
@@ -13912,6 +14053,7 @@ def _upsert_location(
     refusal: dict[str, Any] | None = None,
     here_line: str | None = None,
     move_to: str = "",
+    left_for: dict[str, Any] | None = None,
 ) -> int:
     """Find or create a place. ``refusal``, when given, is filled in when the
     name is refused and another place id is handed back instead (playtest #46).
@@ -13919,7 +14061,8 @@ def _upsert_location(
     ``here_line`` is the player's line on a turn path that knows it; with it a
     new place named by a part of a structure (a hold, a corner, a cellar, a
     passage) is made a part of the place it belongs to (``_part_anchor``).
-    ``move_to`` is the turn's move, when the name is not its destination."""
+    ``move_to`` is the turn's move, when the name is not its destination;
+    ``left_for`` where_ended's checked answer when it is out of here."""
     name = humanize_place_name(name)
     if not name:
         raise ValueError("Location name is required.")
@@ -13961,12 +14104,15 @@ def _upsert_location(
     # the town (8B run 150: "The Hold" at T49, "The Hidden Passage" from a
     # search of the Hold at T85).
     if here_line is not None and kind is None and parent_id is None:
-        anchor = _part_anchor(conn, name, summary, here_line, move_to)
+        anchor = _part_anchor(conn, name, summary, here_line, move_to, left_for=left_for)
         if anchor:
             cursor = conn.execute(
                 "INSERT INTO locations (code, name, summary, visit_count, parent_id) VALUES (?, ?, ?, 0, ?)",
-                (_next_code(conn, "locations", "L"), name, summary[:1400] if len(summary or "") < 500 else summary[:200], anchor),
+                (_next_code(conn, "locations", "L"), name, summary[:1400] if len(summary or "") < 500 else summary[:200],
+                 max(0, anchor)),
             )
+            if anchor < 0:
+                return int(cursor.lastrowid)
             anchor_row = _location_row(conn, anchor)
             turn_ledger.note("place", "part_of_place", name=name,
                              parent=str(anchor_row["name"] or "") if anchor_row is not None else anchor)
@@ -14265,8 +14411,12 @@ def _part_head(name: str) -> str:
     return words[-1] if words and words[-1] in _PART_WORDS else ""
 
 
-def _part_anchor(conn, name: str, summary: str, player_input: str, move_to: str = "") -> int:
-    """The place a new part-of-a-structure place belongs to, or 0 to mint it as before.
+def _part_anchor(
+    conn, name: str, summary: str, player_input: str, move_to: str = "", left_for: dict[str, Any] | None = None
+) -> int:
+    """The place a new part-of-a-structure place belongs to, or 0 to mint it as before (-1: a place of its
+    own, with no parent: the line left a top-level place). ``left_for`` is where_ended's checked answer
+    when it puts the player out of the place stood in.
 
     Decided from engine facts, not phrasing: the name's last word is a part
     of a vessel or building; the owner the name gives ("The Mistral's Hold")
@@ -14293,7 +14443,111 @@ def _part_anchor(conn, name: str, summary: str, player_input: str, move_to: str 
         row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     except Exception:
         return 0
-    return int((row[0] if row else 0) or 0)
+    here_id = int((row[0] if row else 0) or 0)
+    # A part reached after leaving the place stood in is not inside it (drift
+    # eval, combined T2: "I leave the clinic and creep into the ruined subway
+    # tunnel" filed the tunnel inside the clinic, and every later scene read
+    # "inside ... Clinic" and went back there). One decision, in this order:
+    #   * where_ended checked "still here": here, whatever the line's words.
+    #   * it checked a known place the ending names: in that place.
+    #   * it checked "outside", settle moved the player there and the line or
+    #     the prose leaves: in the engine's outside place (found, never made
+    #     here: #46).
+    #   * it checked "up" or "outside" and the line or the prose leaves the
+    #     place stood in: in the place one left stands in ("up" names it).
+    #   * no checked answer: the line's own leaving does the same.
+    # A model answer alone moves no part out (a wrong "up" on "I head down to
+    # the cellar" kept the cellar in the tavern on dd527e4 and must still).
+    left = left_for if isinstance(left_for, dict) else {}
+    kind = str(left.get("kind") or "")
+    if kind == "here":
+        return here_id
+    here_row = _location_row(conn, here_id) if here_id else None
+    up = int(venues._field(here_row, "parent_id", 0) or 0) if here_row is not None else 0
+    anchor, by = 0, ""
+    if kind == "known" and int(left.get("id") or 0) and int(left.get("id") or 0) != here_id:
+        anchor, by = int(left["id"]), "where_ended"
+    elif kind == "outside" and left.get("moved") and left.get("leaves"):
+        found = conn.execute("SELECT id FROM locations WHERE LOWER(name) = LOWER(?)",
+                             (str(left.get("name") or ""),)).fetchone()
+        if found is not None and int(found["id"]) != here_id:
+            anchor, by = int(found["id"]), "where_ended"
+    if not anchor and kind in {"up", "outside"}:
+        if left.get("leaves"):
+            anchor = int(left.get("id") or 0) if kind == "up" else up
+            anchor, by = (anchor or -1), "where_ended"
+    elif not anchor and not kind and here_row is not None and _line_leaves_here(acts, here_row):
+        anchor, by = (up or -1), "line"
+    if not anchor or anchor == here_id:
+        return here_id
+    turn_ledger.note("place", "part_outside_place_left", name=name, left=str(here_row["name"] or "") if here_row is not None else "",
+                     parent=anchor, answer=kind, by=by)
+    if left_for is not None and anchor > 0:
+        # _apply_player reaches the part through this place (gate_venue_move's via).
+        left_for["anchor"] = anchor
+    return anchor
+
+
+def _where_left_for(conn, movement_report: Any, player_input: str = "", narration: str = "") -> dict[str, Any] | None:
+    """where_ended's checked answer on this turn's movement report, for _part_anchor.
+
+    ``moved``: settle moved the player to it. ``leaves``: the player's line or the
+    prose's own "you" sentences go out of the place stood in.
+    """
+    choice = movement_report.get("where_ended_choice") if isinstance(movement_report, dict) else None
+    if not isinstance(choice, dict) or choice.get("kind") not in {"here", "up", "outside", "known"}:
+        return None
+    out = dict(choice)
+    out["moved"] = str(movement_report.get("rule") or "") in {"where_ended", "where_ended_outside"}
+    if out["kind"] in {"up", "outside"}:
+        try:
+            here_row = _location_row(conn, int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0] or 0))
+        except Exception:
+            here_row = None
+        acts = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input))
+        out["leaves"] = here_row is not None and (_line_leaves_here(acts, here_row) or _prose_leaves_here(narration, here_row))
+    return out
+
+
+def _prose_leaves_here(narration: str, here_row: Any) -> bool:
+    """The prose's own sentences about "you" go out of the place stood in (_line_leaves_here's reading)."""
+    text = _unspoken(str(narration or ""))
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if re.match(r"^\s*(?:[\w'’,-]+\s+){0,3}you\b", sentence, re.I) and _line_leaves_here(sentence, here_row):
+            return True
+    return False
+
+
+def _line_leaves_here(acts: str, here_row: Any) -> bool:
+    """The narrated line goes out of the place stood in: a doorway exit in any of its clauses
+    (venue_move_intent's own reading), or leaving it by a word of its name or kind ("I leave the clinic").
+
+    Going out of something else is not leaving here: "I step out of my cabin" on the Mistral, "I leave
+    the tavern's common room" in the tavern (a part of here, named by its possessive)."""
+    own = {w for w in re.findall(r"[a-z]+", str(here_row["name"] or "").lower()) if len(w) >= 3} - {"the"}
+    kind = str(venues._field(here_row, "kind", "") or "")
+    if kind:
+        own |= set(re.findall(r"[a-z]+", venues.kind_label(kind).lower()))
+
+    def names_here(obj: str) -> bool:
+        words = re.findall(r"[a-z]+(?:['’]s)?", obj.lower())
+        bases = [re.sub(r"['’]s$", "", w) for w in words]
+        if not any(b in own for b in bases):
+            return False
+        # "the tavern's common room": a part of here, not here.
+        return not any(w != b and b in own for w, b in zip(words[:-1], bases[:-1]))
+
+    for clause in re.split(r"\s*(?:,|;|\band\b|\bthen\b)\s*", str(acts or ""), flags=re.I):
+        if clause.strip() and venue_move_intent(clause) == "exit":
+            obj = re.search(r"\bout\s+of\s+(?:the\s+|this\s+|my\s+|our\s+|his\s+|her\s+|their\s+)?((?:[a-z'’-]+\s*){1,3})",
+                            clause, re.I)
+            if obj is None or names_here(obj.group(1)):
+                return True
+    for m in re.finditer(r"\b(?:leave|leaves|leaving|exit|exits|exiting|depart|departs|departing)\s+"
+                         r"(?:the\s+|this\s+|my\s+|our\s+)?((?:[a-z'’-]+\s*){1,3})", str(acts or "").lower()):
+        if names_here(m.group(1)):
+            return True
+    return False
 
 
 def _within(conn, place_id: int, ancestor_id: int) -> bool:
@@ -14438,7 +14692,8 @@ def _unstore_dropped_move_places(conn, max_place_at_start: int, model_move: str)
 
 
 def _find_location_id(
-    conn, name_or_code: str | None, *, refusal: dict[str, Any] | None = None, here_line: str | None = None
+    conn, name_or_code: str | None, *, refusal: dict[str, Any] | None = None, here_line: str | None = None,
+    left_for: dict[str, Any] | None = None,
 ) -> int:
     if name_or_code:
         # Slugs must resolve to the same row as their readable form, or
@@ -14495,7 +14750,7 @@ def _find_location_id(
             if player and player["current_location_id"]:
                 return int(player["current_location_id"])
             value = "Nearby street"
-        return _upsert_location(conn, value, refusal=refusal, here_line=here_line)
+        return _upsert_location(conn, value, refusal=refusal, here_line=here_line, left_for=left_for)
     player = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     return int(player["current_location_id"])
 
@@ -15397,6 +15652,7 @@ def _file_people_at_unshown_places(conn, npcs: list[Any], narration: str, player
         if town_row is None:
             return
         npc[key] = str(town_row["code"] or "")
+        npc["_spoken_of"] = True  # someone talked about, not met: not filed with the player (app/whereabouts.py)
         turn_ledger.note("place", "place_only_spoken_of", place=ref, person=str(npc.get("name") or npc.get("code") or ""))
 
 
@@ -18720,6 +18976,7 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     venue_note: dict[str, Any] | None = None
     via = int(player_patch.pop("_enter_via", 0) or 0)
     turn_line = player_patch.pop("_turn_line", None)
+    left_for = player_patch.pop("_left_for", None)
     if move_to:
         refusal: dict[str, Any] = {}
         try:
@@ -18727,8 +18984,17 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
         except Exception:
             top_before = 0
         location_id = _find_location_id(
-            conn, str(move_to), refusal=refusal, here_line=str(turn_line) if turn_line is not None else None
+            conn, str(move_to), refusal=refusal, here_line=str(turn_line) if turn_line is not None else None,
+            left_for=left_for if isinstance(left_for, dict) else None,
         )
+        # A part filed this turn in the place the scene went out to (_part_anchor)
+        # is reached through that place, as the prose shows both: the tunnel off
+        # the sanctuary, entered from the clinic (review of the drift fix, T3).
+        anchor = int(left_for.get("anchor") or 0) if isinstance(left_for, dict) else 0
+        if not via and anchor and anchor != previous_location_id:
+            dest_row = _location_row(conn, int(location_id or 0))
+            if dest_row is not None and int(venues._field(dest_row, "parent_id", 0) or 0) == anchor:
+                via = anchor
         gate = gate_venue_move(conn, previous_location_id, location_id, via=via)
         minted = int(location_id or 0) if top_before and int(location_id or 0) > top_before else 0
         location_id = int(gate["location_id"] or previous_location_id)
@@ -21116,6 +21382,21 @@ def _ensure_npcs_from_narration(
             parent = int(venues._field(here_row, "parent_id", 0) or 0) if here_row is not None else 0
             if parent:
                 intro_at = parent
+        # A name told for a numbered figure here is that figure's name now:
+        # "the raider, who says his name is Kade" (app/unnamed.py).
+        try:
+            from app import unnamed
+
+            renamed = unnamed.rename_told(conn, text, introduced["name"], int(location_id))
+        except Exception:
+            renamed = None
+        if renamed:
+            created_intro.append({
+                "code": renamed["code"], "name": renamed["name"], "role": renamed["role"], "summary": "",
+                "attitude": renamed["attitude"], "location": "", "presence": "event_worthy", "shell": False, "power_rank": 8,
+                "_seeded_from_narration": True,
+            })
+            continue
         try:
             shell = create_shell_npc(
                 conn,
@@ -21212,6 +21493,13 @@ def _ensure_npcs_from_narration(
                 existing.append({"code": known_row["code"], "name": known_row["name"], "role": known_row["role"]})
                 continue
             turn_ledger.note("npc", "figure_named_in_cut_part", hint=hint, name=given_name, role=told.get("role") or "")
+        # An unnamed figure is named by its kind and the next number for it
+        # ("a guard" -> Guard 1), not a drawn name (app/unnamed.py, 2026-10-24).
+        hint_words = hint.lower().split() if hint else []
+        hint_kind = ""
+        if hint_words and not given_name:
+            hint_kind = hint_words[-2] if len(hint_words) > 1 and re.match(
+                r"(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)$", hint_words[-1]) else hint_words[-1]
         try:
             shell = create_shell_npc(
                 conn,
@@ -21224,6 +21512,7 @@ def _ensure_npcs_from_narration(
                 summary=summary,
                 sex=_hint_sex(hint, sentence + " " + (told or {}).get("sentence", "")),
                 name=given_name,
+                kind=hint_kind,
             )
         except Exception:
             continue
@@ -22179,6 +22468,9 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
     rows = _mention_catalog(context)
     scene = _active_scene(context)
     resolved_notes: list[str] = []
+    from app import unnamed
+
+    story = unnamed.story_names(context)
     # The conversation line goes first: the brief trims this footer, and who
     # the player is talking to is the part a writer must not lose.
     conversation_turn = context.get("conversation_turn")
@@ -22218,7 +22510,7 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
         code = hit["code"]
         shown = f"{name} [[{code}]]" if code else name
         resolved_notes.append(f"@{kind}{hit['slug']} = {name} ({code or 'no code'}, {hit['label']})")
-        return shown
+        return unnamed.story_view(shown, story) if story else shown
 
     text = re.sub(r"@([CILSAEQ])([a-z0-9_]+)", replace_mention, text, flags=re.IGNORECASE)
 
@@ -22245,6 +22537,12 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
     if not notes:
         return text
     expansions = "; ".join(notes)
+    # The engine's notes name an unnamed figure as what it is ("an unnamed
+    # ghoul [[B]]"), as the context does: "Ghoul 2" reached the narrator here
+    # ("Also present, listening ...: Ghoul 1 [[A]]") and the player's own
+    # words around them are left as written (app/unnamed.py).
+    if story:
+        expansions = unnamed.story_view(expansions, story)
     return f"{text}\n\nResolved player references: {expansions}"
 
 
@@ -24572,6 +24870,11 @@ def apply_turn(
             max_npc_before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
         except Exception:
             max_npc_before = 0
+        # Where the player stood when the turn began: someone left there is not
+        # filed with the player after the move (app/whereabouts.py, #33).
+        from app import whereabouts
+
+        here_at_start = whereabouts.here_id(conn)
         # Places that exist before this turn, and the move the model asked for:
         # a place made under that move's name is not kept if the move is not.
         try:
@@ -24805,6 +25108,12 @@ def apply_turn(
             max_place_before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
         except Exception:
             max_place_before = 0
+        # where_ended's checked answer, read once for this turn's new parts and
+        # its move (one dict, so the move can reach a part through its anchor).
+        try:
+            left_for = _where_left_for(conn, movement_report, player_input, narration) if input_kind == "player" else None
+        except Exception:
+            left_for = None
         for location in result.get("locations") or []:
             if not isinstance(location, dict):
                 continue
@@ -24872,6 +25181,7 @@ def apply_turn(
             new_place_id = _upsert_location(
                 conn, loc_name, str(location.get("summary") or ""),
                 here_line=str(player_input or "") if input_kind == "player" else None, move_to=turn_move,
+                left_for=left_for,
             )
             try:
                 if int(new_place_id or 0) > max_place_before:
@@ -24912,6 +25222,15 @@ def apply_turn(
 
         # Flatten nested locations[].npcs + conversation speakers; drop place-as-person junk
         collected_npcs = _collect_npcs_from_turn_result(result)
+        # An op's "name" that is only a kind the prose shows (NPC_NEW "Ghoul"
+        # over "a ghoul lunges at you") is not filed by name: the figure is
+        # numbered below by unnamed.file_figures, with the op's attitude.
+        try:
+            from app import unnamed
+
+            collected_npcs = unnamed.take_op_figures(collected_npcs, result)
+        except Exception:
+            pass
         # A new person the prose never shows is not stored (playtest #34).
         try:
             collected_npcs = _npcs_shown_in_prose(conn, collected_npcs, narration)
@@ -25101,6 +25420,8 @@ def apply_turn(
             here_before = 0
         if isinstance(result.get("player"), dict) and input_kind == "player":
             result["player"]["_turn_line"] = str(player_input or "")
+            if left_for:
+                result["player"]["_left_for"] = left_for
         _apply_player(conn, result.get("player") or {})
         try:
             # The engine's place outside the town is not a part of it (#46).
@@ -25179,6 +25500,31 @@ def apply_turn(
             )
             if seeded and keeperless:
                 bind_venue_keeper(conn, int(loc_id_seed), seed_companions)
+            # Every unnamed figure the prose shows (a creature, raiders, a
+            # guard) is matched to the ones here or numbered per kind
+            # (app/unnamed.py, Stell 2026-10-24).
+            try:
+                from app import unnamed
+
+                numbered_now = unnamed.file_figures(conn, result, narration, loc_id_seed, int(max_npc_before or 0),
+                                                    turn=turn)
+                if numbered_now:
+                    seeded = list(seeded or []) + numbered_now
+                # A group the prose did not count was rolled, and the count written
+                # into the prose ("Four ghouls lunge at you"): everything after reads
+                # that prose, and the roll is shown with the turn's other dice.
+                count_rolls = result.pop("_unnamed_rolls", None) or []
+                if count_rolls:
+                    narration = _narration_text(result)
+                    if isinstance(band_report, dict):
+                        band_report.setdefault("rolls", []).extend(
+                            {k: v for k, v in r.items() if k != "line"} for r in count_rolls)
+                        band_report.setdefault("lines", []).extend(r["line"] for r in count_rolls)
+                # The figures the prose shows again ("the ghoul circles you")
+                # are brought back, so they do not fade while in the scene.
+                touched_npc_ids.update(int(i) for i in result.get("_figures_shown") or [])
+            except Exception as exc:
+                turn_ledger.note("npc", "unnamed_figures_failed", error=f"{type(exc).__name__}: {exc}"[:200])
             # A person filed this turn whose name the prose tagged with a place
             # or item code ("Jonah [[L1]]", cc87dd29 T14) gets the repair too,
             # now that they have their own code (#155).
@@ -25328,6 +25674,13 @@ def apply_turn(
         # reads. Its events are checked against the records, applied or
         # refused, before the summary and the scene cast, so someone who died
         # this turn is not left present.
+        # First, the people this turn introduced are filed where the player
+        # now is (#33): the ops ran before the move. The interpreter then
+        # reads the right roster; someone filed before this turn (a sketch
+        # from an earlier turn too) moves only on its yes, below.
+        whereabouts.file_new_people(
+            conn, turn, max_npc_before, narration, result.get("npcs"), here_at_start=here_at_start
+        )
         pending = result.pop("_interpreter_pending", None)
         if isinstance(pending, dict):
             try:
@@ -25361,6 +25714,11 @@ def apply_turn(
             carry_bodies(conn, turn)
         except Exception as exc:
             turn_ledger.note("interpreter", "carry_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        # Someone on record elsewhere whom the scene shows acting with the
+        # player is here now (#33; the interpreter's hold ask, app/whereabouts.py).
+        whereabouts.file_shown_people(
+            conn, turn, result.pop("_shown_with_player", None) or [], _narration_text(result), here_at_start=here_at_start
+        )
         _write_turn_summary(conn, turn, result, player_input)
         _write_model_usage(conn, turn, result)
         _write_verification_memory(conn, turn, result, prompt_context, used_fallback)
@@ -27831,8 +28189,13 @@ def play_turn(
         try:
             from app import where_ended
 
-            with connect().closing() as _conn_where:
-                where_ended.ask_where(_conn_where, result, actual_player_input, _narration_text_of(result))
+            asked = result.get("_where_ended")
+            # The drift check after the draft (app/scene_drift.py) asked already;
+            # its answer stands for the prose it read, and only that prose.
+            if not (isinstance(asked, dict) and asked.get("text") == _narration_text_of(result)):
+                result.pop("_where_ended", None)
+                with connect().closing() as _conn_where:
+                    where_ended.ask_where(_conn_where, result, actual_player_input, _narration_text_of(result))
         except Exception as exc:
             turn_ledger.note("movement", "where_ended_failed", error=f"{type(exc).__name__}: {exc}"[:200])
     state = apply_turn(
