@@ -12867,36 +12867,22 @@ def _resolve_verified_turn(
 def _broad_verifier_enabled() -> bool:
     """AI_RPG_BROAD_VERIFIER=1 brings back the one-verdict verifier (VERIFY_PROMPT), for comparing on a replay.
 
-    Off by default since playtest #157 (b) / #77: the engine's questions in
-    app/turn_checks.py replace it.
+    Off by default since playtest #157 (b) / #77: the engine's own checks in
+    app/turn_checks.py write self_check instead, with no model ask.
     """
     return _env_bool("AI_RPG_BROAD_VERIFIER", False)
 
 
 def _run_turn_checks(
     result: dict[str, Any],
-    player_input: str,
-    timeout: int,
-    usage: list[dict[str, Any]],
+    policy: dict[str, Any] | None,
     trace: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
-    """The engine's fixed questions about the finished scene (app/turn_checks.py).
-
-    Each ask goes through _chat_text, so its prompt, raw reply and seconds are
-    in the turn's trace and model_usage like every other model call.
-    """
+    """The engine's checks of the finished scene write self_check (app/turn_checks.py); no model call."""
     from app import turn_checks
-    from app.turn_dsl import player_line_of
 
-    def ask(system: str, user: str, phase: str, max_tokens: int) -> str:
-        return strip_reasoning(
-            _chat_text(system, user, timeout=timeout, usage=usage, phase=phase, max_tokens=max_tokens, trace=trace, temperature=0.0)
-        )
-
-    checked, report = turn_checks.check_turn(result, player_line_of(player_input), ask)
-    if report["checks"]:
-        _note_verify_outcome(report["usable"], "checker reply unreadable")
-    _append_trace(trace, {"phase": "verify", "event": "turn_checks", **report})
+    checked, report = turn_checks.check_turn(result, policy)
+    _append_trace(trace, {"phase": "verify", "event": "engine_checks", **report})
     return checked
 
 
@@ -13048,6 +13034,10 @@ def _nonempty_turn_keys(turn: dict[str, Any], keys: set[str]) -> list[str]:
 
 
 def _verification_memory_covered_checks(context: dict[str, Any], checks: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    if not _broad_verifier_enabled():
+        # Rows are the broad verifier's (and its skip policy's); with it off no
+        # model re-checks what a row would clear (#157 b, app/turn_checks.py).
+        return [], []
     memory = context.get("verification_memory") or {}
     entries = memory.get("entries") if isinstance(memory, dict) else []
     if not isinstance(entries, list):
@@ -17832,9 +17822,8 @@ def _generate_turn_body(
                 result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_retry", trace
             )
             if not _broad_verifier_enabled():
-                # The engine's questions read the prose the player will read.
-                progress_update("verify", "Checking the scene against your line…", step=5, line="Turn checks.")
-                result = _run_turn_checks(result, player_input, verify_timeout, usage, trace)
+                # The engine's checks read the prose the player will read.
+                result = _run_turn_checks(result, verification_policy, trace)
             result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
             result["_verification_policy"] = verification_policy
             result["_draft_mode"] = "dsl"
@@ -17853,7 +17842,7 @@ def _generate_turn_body(
             result["_model_trace"] = trace
             return result
         except LlmError as exc:
-            if _broad_verifier_enabled():  # the turn checks count their own replies
+            if _broad_verifier_enabled():  # only a verifier ask is charged to its breaker
                 _note_verify_outcome(False, _trim_text(str(exc), 120))
             draft = _normalize_turn(draft, active_context)
             draft["self_check"] = {
@@ -18080,8 +18069,7 @@ def _generate_turn_body(
         )
         result = ensure_quality(result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_retry", trace)
         if not _broad_verifier_enabled():
-            progress_update("verify", "Checking the scene against your line…", step=5, line="Turn checks.")
-            result = _run_turn_checks(result, player_input, verify_timeout, usage, trace)
+            result = _run_turn_checks(result, verification_policy, trace)
         result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
         result["_verification_policy"] = verification_policy
         _append_trace(
@@ -18135,7 +18123,7 @@ def _generate_turn_body(
                 return result
             except LlmError:
                 pass
-        if _broad_verifier_enabled():  # the turn checks count their own replies
+        if _broad_verifier_enabled():  # only a verifier ask is charged to its breaker
             _note_verify_outcome(False, _trim_text(str(exc), 120))
         draft = _normalize_turn(draft, active_context)
         draft["self_check"] = {
