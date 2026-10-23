@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -1175,7 +1176,40 @@ def api_model_config():
 def api_update_model_config(request: ModelConfigRequest):
     # Only keys the client sent. A full dump would reset lora_path / theme maps
     # to empty defaults on partial posts (Ensure adapter, older clients).
-    return update_model_config(request.model_dump(exclude_unset=True))
+    sent = request.model_dump(exclude_unset=True)
+    config = update_model_config(sent)
+    _mirror_model_config_to_prefs(sent)
+    return config
+
+
+# Model setting -> launcher pref of the same meaning. /api/launcher-prefs pushes
+# these into the model config; this is the other way, so a save in LLM details
+# reaches the Gatehouse, Settings and the launcher's next start (Stell,
+# 2026-10-23: the Gatehouse "stays as default" after choosing the cloud API).
+_MODEL_CONFIG_PREFS = {
+    "provider": "model_provider",
+    "mle_model": "mle_model",
+    "gguf_model_path": "gguf_model_path",
+    "api_base_url": "api_base_url",
+    "api_model": "api_model",
+    "api_preset": "api_preset",
+}
+
+
+def _mirror_model_config_to_prefs(sent: dict[str, Any]) -> None:
+    updates = {pref: sent[key] for key, pref in _MODEL_CONFIG_PREFS.items() if sent.get(key) not in (None, "")}
+    if updates.get("model_provider", "mle") not in ("mle", "llama_cpp", "openai"):
+        updates.pop("model_provider")  # a provider the launcher has no name for is not forced onto it
+    if not updates:
+        return
+    try:
+        current = load_prefs()
+        changed = {key: value for key, value in updates.items() if current.get(key) != value}
+        if changed:
+            apply_prefs_to_env(save_prefs(changed))
+    except Exception as exc:
+        # The model settings are saved either way; the prefs catch up on the next save.
+        print(f"model-config: launcher prefs not updated: {exc.__class__.__name__}: {exc}", file=sys.stderr)
 
 
 class ModelLimitsRequest(BaseModel):
