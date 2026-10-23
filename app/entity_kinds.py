@@ -24,6 +24,11 @@ its write block:
    ("I go into the clinic" after "... clinic [[L3]]"). That reference is a
    candidate; one ask checks the player is the one going there ('I tell Beth
    to go to the clinic' is not the player going).
+4. Unnamed figures (app/unnamed.py, 2026-10-24): an op's "name" the prose
+   only shows as a common noun (NPC_NEW "Ghoul" over "a ghoul lunges at you")
+   is a kind, not asked person-or-place (that ask answered "place" for a
+   creature); unnamed.settle asks which other acting nouns are figures and
+   whether new ones are hostile, and apply_turn numbers them per kind.
 
 Each ask goes through llm._chat_text, so its prompt, raw reply and seconds are
 in the turn's trace (model_trace) and model_usage like every other call, and
@@ -236,9 +241,25 @@ def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True)
     roster_keys = {_norm(n) for n in roster} - {""}
     place_keys = {_norm(n) for n in places} - {""}
     op_places = turn_place_names(result)
+    # An op's "name" the prose only shows as a common noun ("a ghoul", "the
+    # ghoul") is a kind of figure, numbered by app/unnamed.py: not asked
+    # person-or-place (a creature was answered "place"), not filed by name.
+    from app import unnamed
+
+    for npc in result.get("npcs") or []:
+        if not isinstance(npc, dict) or str(npc.get("code") or "").strip():
+            continue
+        name = str(npc.get("name") or "").strip()
+        if not name or _norm(name) in roster_keys:
+            continue
+        kind = unnamed.op_kind(name, narration)
+        if kind:
+            npc["_unnamed_kind"] = kind
+            turn_ledger.note("npc", "op_name_is_a_kind", name=name, kind=kind)
     op_people = [
         str(n.get("name") or "").strip() for n in result.get("npcs") or []
         if isinstance(n, dict) and str(n.get("name") or "").strip() and not str(n.get("code") or "").strip()
+        and not n.get("_unnamed_kind")
     ]
 
     # (name, why it is asked about)
@@ -290,6 +311,15 @@ def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True)
         turn_ledger.note("npc", "name_is_a_place" if kind == "place" else "name_is_a_person", name=name, by="ask", why=why)
     if kinds:
         result["_entity_kinds"] = {**_kinds(result), **kinds}
+
+    # Unnamed figures (app/unnamed.py): which nouns the prose shows acting are
+    # figures, and whether the new ones are hostile, asked here, outside the
+    # write block; apply_turn files them.
+    try:
+        with connect().closing() as conn:
+            unnamed.settle(result, narration, conn, ask=ask, call=_call, trace=trace, usage=usage, line=line)
+    except Exception as exc:
+        turn_ledger.note("npc", "figure_settle_failed", error=f"{type(exc).__name__}: {exc}"[:160])
 
     # The speaker check: only when the turn files nobody, so a quote is all
     # that would seed a stranger.

@@ -12327,13 +12327,26 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
         out = _coded_names_in_stored_case(out, code_map)
         return out
 
+    # An unnamed figure the repair writes in (a bare "[[B]]" filled with its
+    # record's name) is written as what it is, "the ghoul [[B]]": "Ghoul 2" is
+    # the engine's label for the save and the UI, never story (app/unnamed.py).
+    try:
+        from app.unnamed import prose_view, story_names
+
+        story = story_names(context, definite=True)
+    except Exception:
+        story, prose_view = {}, None  # type: ignore[assignment]
+
+    def as_story(text: str) -> str:
+        return prose_view(text, story) if story and prose_view else text
+
     segments = result.get("narration_segments")
     if isinstance(segments, list) and segments:
         new_segments: list[Any] = []
         for seg in segments:
             if isinstance(seg, dict):
                 text = rewrite_names(str(seg.get("text") or ""))
-                text = _repair_prose_entity_labels(text, code_map)
+                text = as_story(_repair_prose_entity_labels(text, code_map))
                 new_segments.append({**seg, "text": text})
             else:
                 new_segments.append(seg)
@@ -12345,11 +12358,11 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
             result["narration"] = joined[:5600]
     elif result.get("narration"):
         text = rewrite_names(str(result.get("narration") or ""))
-        result["narration"] = _repair_prose_entity_labels(text, code_map)[:5600]
+        result["narration"] = as_story(_repair_prose_entity_labels(text, code_map))[:5600]
 
     if result.get("turn_summary"):
         text = rewrite_names(str(result.get("turn_summary") or ""))
-        result["turn_summary"] = _repair_prose_entity_labels(text, code_map)[:700]
+        result["turn_summary"] = as_story(_repair_prose_entity_labels(text, code_map))[:700]
 
     mismatches = _role_mismatches(str(result.get("narration") or ""), code_roles)
     if mismatches:
@@ -15294,8 +15307,12 @@ def _make_pipeline_consolidator(
     from app.conversation import writer_view
     from app.scene_thread import writer_view as thread_writer_view
 
-    talk = writer_view((context or {}).get("conversation_turn"))
-    thread = thread_writer_view((context or {}).get("scene_thread"))
+    from app.unnamed import story_names, story_view
+
+    # Who answers, as the scene knows them: "an unnamed ghoul [[B]]", never "Ghoul 2" (app/unnamed.py).
+    story = story_names(context)
+    talk = story_view(writer_view((context or {}).get("conversation_turn")), story)
+    thread = story_view(thread_writer_view((context or {}).get("scene_thread")), story)
     system = (
         "You are the scene consolidator. Read all paragraphs together. "
         "Fix doubling, contradictions, and simultaneous dual intents. "
@@ -15529,6 +15546,41 @@ def _drop_question_recap(
     return turn
 
 
+def _drop_fact_echo(
+    turn: dict[str, Any], context: dict[str, Any], phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """Drop opening sentences that copy a facts_to_keep entry word for word (turn_dsl.drop_fact_echo_opening)."""
+    if not isinstance(turn, dict) or not isinstance(context, dict):
+        return turn
+    try:
+        from app.turn_dsl import drop_fact_echo_opening, facts_to_keep
+
+        facts = facts_to_keep(context)
+    except Exception:
+        return turn
+    text = str(turn.get("narration") or "")
+    fixed, dropped = drop_fact_echo_opening(text, facts)
+    segments = turn.get("narration_segments")
+    if not dropped and not text.strip() and isinstance(segments, list) and segments and isinstance(segments[0], dict):
+        head, dropped = drop_fact_echo_opening(str(segments[0].get("text") or ""), facts)
+        if dropped:
+            turn["narration_segments"] = [{**segments[0], "text": head}] + list(segments[1:])
+    elif dropped:
+        turn["narration"] = fixed
+        if isinstance(segments, list) and segments and isinstance(segments[0], dict):
+            head = str(segments[0].get("text") or "")
+            for sentence in dropped:
+                if sentence in head:
+                    head = head.replace(sentence, "", 1).strip()
+            turn["narration_segments"] = ([{**segments[0], "text": head}] if head else []) + list(segments[1:])
+    if dropped:
+        from app import turn_ledger
+
+        turn_ledger.note("prose", "fact_echo_dropped", sentences=[s[:160] for s in dropped])
+        _append_trace(trace, {"phase": phase, "event": "fact_echo_dropped", "sentences": [s[:200] for s in dropped]})
+    return turn
+
+
 # Playtest #44: the 8B's stock line, in two games of one batch: "You're not the
 # first to follow that path, but you may be the last." The first half is the
 # speaker's real point and stays; only the stock flourish after it goes.
@@ -15584,7 +15636,7 @@ def _engine_prose_cleanups(
     final = _drop_player_overreach(trimmed, player_input, phase, trace, context)
     # The speech-memory drops come last; the player's words are checked once more after them.
     final = _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
-    return _close_open_quotes(final, phase, trace)
+    return _close_open_quotes(_drop_fact_echo(final, context, phase, trace), phase, trace)
 
 
 def _ensure_narration_quality(
@@ -15646,7 +15698,7 @@ def _ensure_narration_quality(
         final = _drop_player_overreach(deeper, player_input, phase, trace, context, asks=asks)
     final = _drop_retold_paragraphs(final, asks, phase, trace)
     final = _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
-    return _close_open_quotes(final, phase, trace)
+    return _close_open_quotes(_drop_fact_echo(final, context, phase, trace), phase, trace)
 
 
 def _apply_speech_memory(
@@ -17711,6 +17763,34 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 progress_end=progress_end,
                 progress_fail=progress_fail,
             )
+            # The story is told where the player is (Stell, 2026-10-24): a
+            # scene where_ended checks as ending elsewhere, on a line that asked
+            # to go nowhere, is re-drafted once with one correction riding on
+            # the re-draft only (app/scene_drift.py).
+            from app import scene_drift
+
+            def _redraft(note: str) -> dict[str, Any]:
+                extra = f"\n\n{note}"
+                return _generate_turn_body(
+                    context,
+                    player_input,
+                    usage=usage,
+                    trace=trace,
+                    timeout=timeout,
+                    verify_timeout=verify_timeout,
+                    config=config,
+                    system_prompt=f"{system_prompt.rstrip()}{extra}",
+                    verify_prompt=verify_prompt,
+                    dsl_system_prompt=f"{(dsl_system_prompt or DSL_SYSTEM_PROMPT).rstrip()}{extra}",
+                    prose_system_prompt=f"{(prose_system_prompt or PROSE_REPAIR_SYSTEM_PROMPT).rstrip()}{extra}",
+                    depth_system_prompt=f"{(depth_system_prompt or system_prompt).rstrip()}{extra}",
+                    progress_update=progress_update,
+                    progress_preview=progress_preview,
+                    progress_end=progress_end,
+                    progress_fail=progress_fail,
+                )
+
+            result = scene_drift.check(result, player_input, _redraft, usage=usage, trace=trace)
             # The narration is final here (pipeline, prose repairs and the
             # verifier are done), so the parser reads what the player reads.
             result = _run_quest_parser(
@@ -17860,6 +17940,8 @@ def _run_interpreter(
             # The turn's rolls ride along: a death the attack roll did not allow is refused (#85, #129).
             out = interpreter.run(narration, records, ask, turn)
             events = out["events"]
+            if out.get("with_player"):
+                turn["_shown_with_player"] = list(out["with_player"])
             record.update(out["report"])
             record["event"] = "read"
             if out["narration"] != narration:

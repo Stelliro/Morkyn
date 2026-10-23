@@ -434,10 +434,14 @@ class TheAsksAreTraced(unittest.TestCase):
         with mock.patch("app.llm._chat_content", side_effect=_reply):
             entity_kinds.settle_kinds(turn, T2_LINE)
         self.assertEqual(turn["_entity_kinds"], {"new vegas": "place"})
-        self.assertEqual([u["phase"] for u in usage], ["entity_kind", "quote_speaker"])
+        # figure_kind (app/unnamed.py): "a sudden ping from your power armor's
+        # readouts pulls you up short" is asked about once, answered no.
+        self.assertEqual([u["phase"] for u in usage], ["entity_kind", "figure_kind", "quote_speaker"])
         self.assertEqual([(t["phase"], t["event"]) for t in trace],
                          [("entity_kind", "request"), ("entity_kind", "response"),
+                          ("figure_kind", "request"), ("figure_kind", "response"),
                           ("quote_speaker", "request"), ("quote_speaker", "response")])
+        self.assertFalse(any(v.get("figure") for v in (turn.get("_figures") or {}).values()))
 
 
 class AWrongKindCodeIsRetagged(unittest.TestCase):
