@@ -142,6 +142,9 @@ _PAIR_NOUNS = frozenset({"couple", "pair"})
 _QUANTITY_NOUNS = frozenset({"handful", "bunch", "number", "lot"})  # "a handful of raiders"
 _QUANTITY_OF = frozenset({"dozens", "scores", "lots", "hundreds", "masses"})  # "dozens of ghouls"
 _QUANTIFIERS = frozenset({"some", "several", "many", "countless", "numerous", "multiple", "various"})
+# A quantifier after these is no count of figures here: "so many ghouls that you lose count",
+# "how many raiders remain", "one of many ghouls" (reviewer, rolled counts). Grammar words.
+_NOT_A_COUNT_AFTER = frozenset({"so", "how", "as", "too", "of"})
 # A relative pronoun right before a word makes it the relative clause's verb ("who remains calm").
 _RELATIVES = frozenset({"who", "which", "whom", "whose"})
 # English function words (grammar, not meaning): never a head noun, a modifier or a verb.
@@ -422,6 +425,11 @@ def mentions(text: str, objects: Any = (), names: Any = ()) -> list[dict[str, An
                 end = head + 1
             found.pop("_ing", None)
             stop = min([k for k in range(end, len(toks)) if toks[k] in _CLAUSE_MARKS] + [len(toks)])
+            if _not_now(toks, start, stop):
+                # A memory or the past, not figures here now: "You have killed many ghouls",
+                # "Hundreds of years ago, ghouls roamed these tunnels" (reviewer, rolled counts).
+                i = end
+                continue
             found["sentence"] = sentence
             found["subject"] = bool(subject)
             found["seen"] = bool(seen and not subject)
@@ -432,6 +440,25 @@ def mentions(text: str, objects: Any = (), names: Any = ()) -> list[dict[str, An
             out.append(found)
             i = end
     return out
+
+
+# Grammar, not meaning: the perfect auxiliaries and the one past-time adverb.
+_PERFECT = frozenset({"have", "has", "had", "'ve", "’ve", "'d", "’d"})
+
+
+def _not_now(toks: list[str], start: int, stop: int) -> bool:
+    """The player's own perfect ("you have killed", "you've seen": a memory), or the sentence says "ago".
+
+    Only with the player as its subject: "Ghouls have surrounded you" is the scene now.
+    """
+    clause = [t.lower() for t in toks[start:stop]]
+    for k, word in enumerate(clause[:-1]):
+        if word in {"you've", "you’ve", "you'd", "you’d"}:
+            if re.fullmatch(r"[a-z]+(?:ed|en|n|t)", clause[k + 1] or ""):
+                return True
+        elif word == "you" and clause[k + 1] in _PERFECT and k + 2 < len(clause) and re.fullmatch(r"[a-z]+(?:ed|en|n|t)", clause[k + 2]):
+            return True
+    return any(t.lower() == "ago" for t in toks)
 
 
 def _opens_clause(before: list[str]) -> bool:
@@ -569,7 +596,7 @@ def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = fr
         form, count, plural_needed = "another", 1, False
     elif low in {"a", "an"}:
         form, count, plural_needed = "count", 1, False
-    elif low in _QUANTIFIERS:
+    elif low in _QUANTIFIERS and not (i > 0 and toks[i - 1].lower() in _NOT_A_COUNT_AFTER):
         form, count, plural_needed, stated = "count", UNSTATED_PLURAL, True, False
     elif low in _QUANTITY_OF and nxt == "of":
         form, count, plural_needed, j, stated = "count", UNSTATED_PLURAL, True, i + 2, False
