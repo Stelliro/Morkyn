@@ -178,6 +178,98 @@ def http_ok(url: str, timeout: float = 1.5) -> bool:
         return False
 
 
+def shared_address(plan: dict[str, Any]) -> str:
+    """The address other devices use: the VPN one under VPN reach, the LAN one under LAN reach, else none."""
+    reach = plan.get("reach")
+    return str(plan.get("vpn_url") or "") if reach == "vpn" else str(plan.get("lan_url") or "") if reach == "lan" else ""
+
+
+def address_qr_svg(plan: dict[str, Any]) -> bytes | None:
+    """The shared address as a QR code (SVG), or None when the server is for this PC only."""
+    url = shared_address(plan)
+    if not url:
+        return None
+    import io
+
+    import segno
+
+    buf = io.BytesIO()
+    # Dark on pale: the void-on-thread inverse scans badly on some phone cameras.
+    segno.make(url, error="m").save(buf, kind="svg", scale=5, border=3, dark="#0b0711", light="#ece6fb", xmldecl=False)
+    return buf.getvalue()
+
+
+def print_address_qr(url: str) -> None:
+    """The phone address as a QR code in the terminal: scan it instead of typing "http://" (#149)."""
+    out = sys.stdout
+    if not url or out is None or not getattr(out, "isatty", lambda: False)():
+        return
+    try:
+        import segno
+
+        print("  Scan to open it on a phone:", flush=True)
+        segno.make(url, error="m").terminal(out=out, compact=True, border=2)
+        out.flush()
+    except Exception:
+        pass  # a missing library or a console that cannot draw the blocks: the address is printed above
+
+
+def http_json(url: str, timeout: float = 1.5) -> dict[str, Any] | None:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def server_is_stale(status: dict[str, Any]) -> bool:
+    """A running server booted from another build, or before the packs on disk now (#147)."""
+    from app.runtime_packs import boot_identity
+
+    return status.get("identity") != boot_identity()
+
+
+def _is_morkyn_process(pid: int) -> bool:
+    """Only a Mørkyn process is closed; the pid came from the server itself a moment ago."""
+    try:
+        if sys.platform.startswith("linux"):
+            args = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace").split("\0")
+        elif sys.platform == "darwin":
+            args = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5).stdout.split()
+        else:
+            return True
+    except Exception:
+        return False
+    # The program itself, not any path that has "Morkyn" in a folder name.
+    names = {Path(a).name for a in args if a}
+    return bool(names & {"Morkyn", "Morkyn.exe", "morkyn_app.py", "app.main:app"}) or any(
+        n.startswith("morkyn_app") and n.endswith(".py") for n in names
+    )
+
+
+def close_stale_server(status: dict[str, Any], port: int, timeout: float = 15.0) -> bool:
+    """Close a stale server and the launcher that owns it (its window goes with it). True once the port is free."""
+    import signal
+
+    pids = [p for p in (status.get("launcher_pid"), status.get("pid")) if isinstance(p, int) and p > 1 and p != os.getpid()]
+    pids = [p for p in pids if _is_morkyn_process(p)]
+    if not pids:
+        return False
+    for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not port_open("127.0.0.1", port):
+                return True
+            time.sleep(0.3)
+    return not port_open("127.0.0.1", port)
+
+
 def saved_model_config() -> dict[str, str]:
     """model_config from world.db, read without importing the app (the Gatehouse did the same)."""
     db_path = Path(os.getenv("AI_RPG_DB") or (ROOT / "data" / "world.db"))
@@ -495,6 +587,7 @@ class Supervisor:
                          else "No VPN adapter found. Set AI_RPG_PUBLIC_URL if your overlay network uses another name.")
             elif plan["lan_url"]:
                 self.log(f"Phone / tablet: {plan['lan_url']} ({plan['lan_adapter']})")
+            print_address_qr(shared_address(plan))
         else:
             self.log(f"Address: {plan['local_url']}")
 
@@ -514,7 +607,21 @@ class Supervisor:
 
         port = int(plan["port"])
         if port_open("127.0.0.1", port):
-            if http_ok(f"{plan['local_url']}/api/model-config"):
+            status = http_json(f"{plan['local_url']}/api/launcher/status")
+            if status is not None and server_is_stale(status):
+                if not status.get("identity"):
+                    raise RuntimeError(
+                        f"An older Mørkyn is still running on port {port}. Close its window or terminal "
+                        "(or restart the computer), then retry."
+                    )
+                self.log(f"An older Mørkyn is still running on port {port} (another build, or the engine "
+                         "packs changed since it started); closing it…")
+                if not close_stale_server(status, port):
+                    raise RuntimeError(
+                        f"The older Mørkyn on port {port} would not close. Close its window or terminal, then retry."
+                    )
+                self.log("Closed it.")
+            elif http_ok(f"{plan['local_url']}/api/model-config"):
                 # A Mørkyn server someone started by hand. Use it, but say that
                 # settings needing a restart cannot be applied from here.
                 self.attached = True
@@ -522,7 +629,8 @@ class Supervisor:
                 self.log("Settings that need a restart will not apply until that server is restarted.")
                 self._set("ready")
                 return True
-            raise RuntimeError(f"Port {port} is already used by another program. Pick another port below and retry.")
+            else:
+                raise RuntimeError(f"Port {port} is already used by another program. Pick another port below and retry.")
 
         if prefs["model_provider"] == "llama_cpp":
             self._start_llama(prefs, env)

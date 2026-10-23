@@ -208,6 +208,32 @@ def installed() -> list[dict[str, Any]]:
     return out
 
 
+def boot_identity() -> dict[str, Any]:
+    """What a server started now would run: the build and the installed packs.
+
+    The server keeps the one it booted with; a launcher that finds a server
+    already running compares it with its own and replaces a stale one. A
+    server left behind by a closed window kept serving the old build without
+    the packs installed since (Linux .deb, 2026-10-23, #147).
+    """
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable)
+        try:
+            stat = exe.stat()
+            build = f"{exe.resolve()}:{stat.st_size}:{stat.st_mtime_ns}"
+        except OSError:
+            build = str(exe)
+    else:
+        build = str(ROOT.resolve())  # a source checkout: edits do not make a running server stale
+    packs = []
+    try:
+        for pack in installed():
+            packs.append(f"{pack.get('id')}:{pack.get('built') or ''}:{pack.get('installed_at') or ''}")
+    except Exception:
+        pass
+    return {"build": build, "packs": packs}
+
+
 def _custom_site(custom: str) -> Path | None:
     """The importable folder of a custom engine: the folder itself, its site/, or a zip unpacked under runtime/custom/."""
     if not custom:

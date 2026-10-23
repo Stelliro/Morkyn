@@ -29493,9 +29493,21 @@ function launcherAddressText() {
 
 function renderLauncherAddress() {
   const text = launcherAddressText();
+  const plan = launcherState.plan || {};
+  const shared = (plan.reach === "lan" && plan.lan_url) || (plan.reach === "vpn" && plan.vpn_url) || "";
   ["#mainMenuGateAddress", "#appSettingsAddress"].forEach((selector) => {
     const el = document.querySelector(selector);
-    if (el) el.textContent = text;
+    if (!el) return;
+    el.textContent = text;
+    if (shared) {
+      // Scan instead of typing: "http" read as "https" fails on a phone (#149).
+      const qr = document.createElement("img");
+      qr.className = "addressQr";
+      qr.alt = `QR code for ${shared}`;
+      qr.src = `/api/address-qr.svg?u=${encodeURIComponent(shared)}`;
+      qr.onerror = () => qr.remove();
+      el.append(qr);
+    }
   });
 }
 
