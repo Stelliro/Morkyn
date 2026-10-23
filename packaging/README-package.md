@@ -5,8 +5,9 @@ This folder is Mørkyn ready to run: no Python, no pip.
 - **Windows:** double-click `Morkyn.exe`. The game opens in its own window; any browser on this
   PC can also open the address it shows (and phones on your network when *Where* says so).
 - **macOS:** open `Morkyn.app`.
-- **Linux:** run `./Morkyn`. It opens the game in your browser (the native window needs
-  PyGObject and WebKit2GTK, which most distributions ship as `python3-gi gir1.2-webkit2-4.1`).
+- **Linux:** run `./Morkyn`. The game's own window is an add-on (Qt WebEngine, about 200 MB):
+  the first start fetches it and opens your browser meanwhile; from the next start the game
+  has its own window. Settings → Updates lists it as "Mørkyn window".
   Run `./install.sh` to install it for your user with a menu entry (`./install.sh --uninstall`
   removes it). The installed game, like the `.deb`, `.rpm` and `.AppImage`, keeps your saves
   and engine packs in `~/.local/share/morkyn` instead of beside the program.

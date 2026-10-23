@@ -306,6 +306,30 @@ def _child_options() -> dict[str, Any]:
     return opts
 
 
+# PR_SET_PDEATHSIG fires when the *thread* that forked the child exits, not the
+# process. The window starts the server from the short-lived morkyn-start
+# thread, so on Linux the server got SIGTERM about a second after it was ready
+# and the window showed "127.0.0.1 refused to connect" (Stell, 2026-10-23, the
+# first Linux window). Every child is forked from this one thread, which lives
+# as long as the launcher.
+_SPAWNER: Any = None
+_SPAWNER_LOCK = threading.Lock()
+
+
+def _spawn(args: list[str], **kwargs: Any) -> subprocess.Popen:
+    """subprocess.Popen with _child_options(), forked from the launcher's long-lived spawner thread on Linux."""
+    kwargs.update(_child_options())
+    if not sys.platform.startswith("linux"):
+        return subprocess.Popen(args, **kwargs)
+    global _SPAWNER
+    with _SPAWNER_LOCK:
+        if _SPAWNER is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            _SPAWNER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="morkyn-spawner")
+    return _SPAWNER.submit(subprocess.Popen, args, **kwargs).result()
+
+
 def server_command(host: str, port: int) -> list[str]:
     if getattr(sys, "frozen", False):
         # A packaged build has no `-m uvicorn`; the exe serves when asked to.
@@ -491,14 +515,13 @@ class Supervisor:
         self._rotate_server_log()
         log_fh = self.server_log.open("ab")
         try:
-            self._app = subprocess.Popen(
+            self._app = _spawn(
                 server_command(plan["host"], port),
                 cwd=str(ROOT),
                 env=env,
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                **_child_options(),
             )
         finally:
             log_fh.close()
@@ -563,8 +586,8 @@ class Supervisor:
             "--verbose", "False",
         ]
         with out_path.open("ab") as fh:
-            self._llm = subprocess.Popen(args, cwd=str(ROOT), env=env, stdout=fh, stderr=subprocess.STDOUT,
-                                         stdin=subprocess.DEVNULL, **_child_options())
+            self._llm = _spawn(args, cwd=str(ROOT), env=env, stdout=fh, stderr=subprocess.STDOUT,
+                               stdin=subprocess.DEVNULL)
         self._job.add(self._llm)
         self._wait_llama(base_url, self._llm, timeout)
 

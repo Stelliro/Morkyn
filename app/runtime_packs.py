@@ -77,6 +77,18 @@ CATALOG: list[dict[str, Any]] = [
         "provides": "piper",
         "kind": "addon",
     },
+    # Linux has no web view of its own for Python: without this the game opens
+    # in the browser (Stell, 2026-10-23, on Pop!_OS: "it doesnt have a
+    # standalone application on linux"). pywebview with Qt WebEngine is all
+    # pip wheels, so it needs nothing from the distribution.
+    {
+        "id": "qt-window",
+        "title": "Mørkyn window (Qt WebEngine)",
+        "summary": "Opens the game in its own window instead of the browser. About 200 MB; fetched on its own the first time the window is needed.",
+        "os": ["linux"],
+        "provides": "webview",
+        "kind": "addon",
+    },
 ]
 
 
@@ -370,6 +382,13 @@ def _unpack(zip_path: Path, target: Path) -> dict[str, Any]:
         if "pack.json" not in names or not any(n.startswith("site/") for n in names):
             raise ValueError("not a Mørkyn runtime pack (pack.json and site/ expected)")
         zf.extractall(tmp)
+        if os.name != "nt":
+            # extractall drops the mode bits; a pack's helper programs (Qt's
+            # QtWebEngineProcess) then fail with "failed to execvp".
+            for info in zf.infolist():
+                mode = (info.external_attr >> 16) & 0o777
+                if mode and not info.is_dir():
+                    (tmp / info.filename).chmod(mode)
     meta = _read_json(tmp / "pack.json")
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)
@@ -432,6 +451,20 @@ def remove(pack_id: str) -> dict[str, Any]:
     shutil.rmtree(folder, ignore_errors=True)
     _PROGRESS.pop(pack_id, None)
     return {"ok": True, "note": "Restart Mørkyn to unload the engine."}
+
+
+def auto_install_window_if_needed() -> dict[str, Any]:
+    """A packaged Linux start that wants the window but cannot import pywebview: fetch the window pack.
+
+    This start opens the browser; the next one opens the window.
+    """
+    if not getattr(sys, "frozen", False) or os_tag() != "linux" or os.getenv("MORKYN_NO_AUTO_PACK"):
+        return {"ok": True, "skipped": "not a packaged Linux build"}
+    if provides("webview"):
+        return {"ok": True, "skipped": "not needed"}
+    if any(p["id"] == "qt-window" and p.get("fits") for p in installed()):
+        return {"ok": True, "skipped": "installed"}
+    return install("qt-window")
 
 
 def auto_install_if_needed() -> dict[str, Any]:

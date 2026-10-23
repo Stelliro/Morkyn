@@ -109,6 +109,9 @@ jobs:
             acc: piper
           - os: macos-15-intel
             acc: piper
+          # The Linux window (pywebview on Qt WebEngine); Windows and macOS ship theirs.
+          - os: ubuntu-22.04
+            acc: window
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

@@ -401,11 +401,20 @@ class Shell:
                     pass
             self.sup.start_async()
 
+        start_opts: dict[str, Any] = {}
+        if sys.platform.startswith("linux"):
+            import importlib.util
+
+            # pywebview tries GTK first; without its bindings (the packaged
+            # build, the qt-window pack) that only logs a traceback.
+            if importlib.util.find_spec("gi") is None:
+                start_opts["gui"] = "qt"
         self.webview.start(
             started,
             private_mode=False,  # keep localStorage (theme, layout, tutorial flags) between launches
             storage_path=str(WEBVIEW_DIR / "profile"),
             icon=self.icon,
+            **start_opts,
         )
         self.sup.stop()
         return 0
@@ -583,8 +592,21 @@ def main(argv: list[str]) -> int:
     try:
         import webview
     except ImportError:
+        fetching = {}
+        if window_mode == "app":
+            try:
+                from app.runtime_packs import auto_install_window_if_needed
+
+                fetching = auto_install_window_if_needed()
+            except Exception:
+                fetching = {}
         if sys.stdout is not None:
-            print("  The Mørkyn window needs pywebview:  python -m pip install pywebview")
+            if fetching.get("started"):
+                print("  Fetching the Mørkyn window (Settings → Updates shows it); it opens from the next start.")
+            elif getattr(sys, "frozen", False):
+                print("  The Mørkyn window is not installed: Settings → Updates → Mørkyn window.")
+            else:
+                print("  The Mørkyn window needs pywebview:  python -m pip install pywebview")
             print("  Running in this terminal and opening your browser instead.\n")
         return run_console(opts, open_browser=window_mode != "none")
     _keep_paste_working(webview)

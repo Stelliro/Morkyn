@@ -57,8 +57,9 @@ def python_tag() -> str:
 
 
 # Add-on packs (app/runtime_packs.CATALOG kind "addon"): the local speech engine
-# for the packaged app, which has no pip (Stell, 2026-10-22).
-ADDONS = {"piper": ("piper-speech", "piper-tts==1.8.0")}
+# for the packaged app, which has no pip (Stell, 2026-10-22), and the Linux
+# window, pywebview on Qt WebEngine (2026-10-23; Linux only).
+ADDONS = {"piper": ("piper-speech", "piper-tts==1.8.0"), "window": ("qt-window", "pywebview[qt]==6.2.1")}
 
 
 def build(acc: str, out_dir: Path) -> Path:

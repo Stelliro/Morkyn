@@ -239,6 +239,12 @@ def _extract(archive: Path, target: Path) -> None:
     if archive.name.endswith(".zip"):
         with zipfile.ZipFile(archive) as zf:
             zf.extractall(tmp)
+            if os.name != "nt":
+                # extractall drops the mode bits: the macOS build's executable would not start.
+                for info in zf.infolist():
+                    mode = (info.external_attr >> 16) & 0o777
+                    if mode and not info.is_dir():
+                        (tmp / info.filename).chmod(mode)
     else:
         with tarfile.open(archive, "r:gz") as tf:
             tf.extractall(tmp)
