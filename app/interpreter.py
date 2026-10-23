@@ -72,6 +72,31 @@ read by prose_state, else the band roll). A gold event adds "direction"
 world.apply_turn refuses a loss the scene does not show (out confirmed) and
 logs both answers beside _settle_stated_gold in shadow mode.
 
+The dead leave a body (CLAUDE.md, Design decisions, 2026-10-24): the row stays
+where the person died (location_id; npcs.body '' = lies there), so the place's
+records and the next scene carry the body (hold_context: each place's
+"bodies", the "here" mark on the_dead, facts_to_keep "The body of Beth [[B]]
+lies here."), never as someone to talk to: the living lists, the keeper, the
+talk roster and the scene cast leave the dead out as before; an NPC op does
+not move a body (world._upsert_npc). The roster can have the place wrong, so
+a death recorded with the row at another place than the player's asks where
+the body is (place_bodies); a confirmed yes puts it where the player is, no
+answer keeps the record's place. What becomes of a body is read only when the
+player's own line names the dead person and the body is here or carried. Each
+is one plain question and a differently worded check, as for a death:
+
+    here     "Is Beth's body with the player at the end of it?"        yes, then
+             "Has the player left Beth's body behind at the end of it?"  must be no
+    buried   "Is Beth's body buried at the end of it?"        yes, then
+             "Can Beth's body be seen at the end of it?"      must be no
+    carried  "Is the player carrying Beth's body at the end of it?"  yes, then
+             "Is Beth's body lying on the ground at the end of it?"  must be no
+
+A carried body goes where the player goes (carry_bodies, every turn) until a
+turn whose line names her has the carry ask answer no: it is set down there.
+Each is a "body" event ({"kind": "body", "state": "buried"|"carried"|"lies"})
+applied by apply_events, kept for rewind like a death.
+
 Every ask goes through the model call path the caller gives (app/llm.py passes
 _chat_text with the turn's usage and trace, so each prompt, raw reply and its
 seconds are in the turn trace and model_usage). A turn asks at most MAX_ASKS
@@ -101,11 +126,24 @@ PHASE_GOLD_OUT = "interpreter_gold_out"
 PHASE_GOLD_IN = "interpreter_gold_in"
 PHASE_GOLD_CHECK = "interpreter_gold_check"
 PHASE_REFUSED_DEATH = "interpreter_refused_death"
+PHASE_BODY_HERE = "interpreter_body_here"
+PHASE_BODY_HERE_CHECK = "interpreter_body_here_check"
+PHASE_BODY_BURIED = "interpreter_body_buried"
+PHASE_BODY_BURIED_CHECK = "interpreter_body_buried_check"
+PHASE_BODY_CARRIED = "interpreter_body_carried"
+PHASE_BODY_CARRIED_CHECK = "interpreter_body_carried_check"
 
 KIND_DIED = "died"
 KIND_DESTROYED = "destroyed"
 KIND_RETURNED = "returned"
 KIND_GOLD = "gold"
+KIND_BODY = "body"
+
+# What a body is doing (npcs.body): "" lies where it fell, or carried, or buried.
+BODY_LIES = "lies"
+BODY_CARRIED = "carried"
+BODY_BURIED = "buried"
+BODY_STATES = (BODY_LIES, BODY_CARRIED, BODY_BURIED)
 
 # The gold asks read the whole scene (a payment can sit in any paragraph).
 GOLD_PASSAGE_CHARS = 4000
@@ -136,9 +174,22 @@ def load_records(conn) -> dict[str, Any]:
     people: list[dict[str, Any]] = []
     places: list[dict[str, Any]] = []
     player_names: list[str] = []
+    here_id = 0
     try:
-        for row in conn.execute("SELECT code, name, died_turn FROM npcs").fetchall():
-            people.append({"code": str(row["code"] or ""), "name": clean_name(row["name"]), "died_turn": int(row["died_turn"] or 0)})
+        for row in conn.execute("SELECT code, name, died_turn, location_id, body FROM npcs").fetchall():
+            people.append({
+                "code": str(row["code"] or ""), "name": clean_name(row["name"]), "died_turn": int(row["died_turn"] or 0),
+                "location_id": int(row["location_id"] or 0), "body": body_state(row["body"]),
+            })
+    except Exception:  # a save from before the body column
+        try:
+            for row in conn.execute("SELECT code, name, died_turn FROM npcs").fetchall():
+                people.append({"code": str(row["code"] or ""), "name": clean_name(row["name"]), "died_turn": int(row["died_turn"] or 0)})
+        except Exception:
+            pass
+    try:
+        found = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        here_id = int((found["current_location_id"] if found else 0) or 0)
     except Exception:
         pass
     try:
@@ -152,7 +203,13 @@ def load_records(conn) -> dict[str, Any]:
             player_names = [str(row["name"] or ""), str(row["public_name"] or "")]
     except Exception:
         pass
-    return {"people": people, "places": places, "player_names": [n for n in player_names if n.strip()]}
+    return {"people": people, "places": places, "player_names": [n for n in player_names if n.strip()], "here_id": here_id}
+
+
+def body_state(value: Any) -> str:
+    """npcs.body as one of BODY_STATES ('' and anything unknown: the body lies where it fell)."""
+    text = str(value or "").strip().lower()
+    return text if text in BODY_STATES else BODY_LIES
 
 
 def clean_name(value: Any) -> str:
@@ -391,6 +448,30 @@ def ask_returned(name: str, turn: int, passage: str) -> str:
 
 def ask_returned_check(name: str, passage: str) -> str:
     return f"Read this.\n\n{passage}\n\nIs {name} still dead at the end of it? Answer yes or no."
+
+
+def ask_body_here(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nIs {name}'s body with the player at the end of it? Answer yes or no."
+
+
+def ask_body_here_check(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nHas the player left {name}'s body behind at the end of it? Answer yes or no."
+
+
+def ask_body_buried(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nIs {name}'s body buried at the end of it? Answer yes or no."
+
+
+def ask_body_buried_check(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nCan {name}'s body be seen at the end of it? Answer yes or no."
+
+
+def ask_body_carried(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nIs the player carrying {name}'s body at the end of it? Answer yes or no."
+
+
+def ask_body_carried_check(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nIs {name}'s body lying on the ground at the end of it? Answer yes or no."
 
 
 def ask_which(name: str, paragraph: str, sentence: str) -> str:
@@ -649,6 +730,87 @@ def hold_the_dead(text: str, records: dict[str, Any], ask: Ask, report: dict[str
     return text, events
 
 
+def place_bodies(
+    text: str, events: list[dict[str, Any]], records: dict[str, Any], ask: Ask, report: dict[str, Any],
+    matcher: Matcher | None = None,
+) -> None:
+    """For a death recorded with the row at another place than the player's, whether the body is with the player.
+
+    The roster can have the place wrong (final replay T3: Nate on record in the
+    town, the player in the clinic); the scene says where the body is. Asked
+    only then, one plain question and a differently worded check; the answer
+    rides on the event ("body_here"), and apply_events moves the row only on a
+    confirmed yes. No answer keeps the record's place.
+    """
+    match = matcher or Matcher(records.get("people"), records.get("places"))
+    here_id = int(records.get("here_id") or 0)
+    if not here_id:
+        return
+    by_code = {str(row.get("code") or ""): row for row in match.people}
+    for event in events:
+        if event.get("kind") != KIND_DIED or event.get("status") == "refused":
+            continue
+        row = by_code.get(str((event.get("subject") or {}).get("code") or ""))
+        if row is None or not int(row.get("location_id") or 0) or int(row.get("location_id") or 0) == here_id:
+            continue
+        name = str(row.get("name") or "").strip()
+        passage = passage_for(text, row, matcher=match)
+        if not name or not passage:
+            continue
+        here = yes_no(_ask(ask, report, PHASE_BODY_HERE, ask_body_here(name, passage))) is True and _confirmed(
+            ask, report, PHASE_BODY_HERE_CHECK, ask_body_here_check(name, passage), row, "body_here"
+        )
+        event["body_here"] = here
+        report.setdefault("bodies", []).append({"code": row.get("code"), "name": name, "with_player": here})
+
+
+def read_bodies(
+    text: str, records: dict[str, Any], ask: Ask, report: dict[str, Any], matcher: Matcher | None = None,
+    skip_codes: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """What became of the bodies the player's own line acts on: buried, carried, or set down ("body" events).
+
+    Candidates are the records' dead that the player's line names (code or a
+    name only that row has) whose body is at the player's place or carried, and
+    that the prose names too; a buried body is done. Nothing is asked otherwise.
+    """
+    match = matcher or Matcher(records.get("people"), records.get("places"))
+    line = str(records.get("player_line") or "")
+    here_id = int(records.get("here_id") or 0)
+    skip = {str(c).upper() for c in skip_codes or ()}
+    if not line.strip():
+        return []
+    events: list[dict[str, Any]] = []
+    dead = [row for row in match.people if is_dead(row) and str(row.get("code") or "").upper() not in skip]
+    for row in match.named(line, dead, records.get("player_names"))[:MAX_HELD]:
+        state = body_state(row.get("body"))
+        here = bool(here_id) and int(row.get("location_id") or 0) == here_id
+        if state == BODY_BURIED or not (here or state == BODY_CARRIED):
+            continue
+        name = str(row.get("name") or "").strip()
+        passage = passage_for(text, row, matcher=match)
+        if not name or not passage:
+            continue
+        seen: dict[str, Any] = {"code": row.get("code"), "name": name, "was": state}
+        report.setdefault("bodies", []).append(seen)
+        if yes_no(_ask(ask, report, PHASE_BODY_BURIED, ask_body_buried(name, passage))) is True and _confirmed(
+            ask, report, PHASE_BODY_BURIED_CHECK, ask_body_buried_check(name, passage), row, KIND_BODY
+        ):
+            seen["now"] = BODY_BURIED
+            events.append({**_event(KIND_BODY, "npc", row, passage), "state": BODY_BURIED})
+            continue
+        carried = yes_no(_ask(ask, report, PHASE_BODY_CARRIED, ask_body_carried(name, passage)))
+        if carried is True and state != BODY_CARRIED and _confirmed(
+            ask, report, PHASE_BODY_CARRIED_CHECK, ask_body_carried_check(name, passage), row, KIND_BODY
+        ):
+            seen["now"] = BODY_CARRIED
+            events.append({**_event(KIND_BODY, "npc", row, passage), "state": BODY_CARRIED})
+        elif carried is False and state == BODY_CARRIED:
+            seen["now"] = BODY_LIES  # set down where the player is
+            events.append({**_event(KIND_BODY, "npc", row, passage), "state": BODY_LIES})
+    return events
+
+
 def _cut_acts(
     text: str, row: dict[str, Any], name: str, ask: Ask, report: dict[str, Any], keep: list[str], match: Matcher
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -870,8 +1032,13 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
         # The other way round: an attack the prose never shows its target in
         # gets the roll's outcome line (no ask: the records and the codes).
         text = show_unnamed_attacks(text, turn_result, match, report)
+        # Where the body lies when the roster has the person elsewhere than the player.
+        place_bodies(text, events, records, ask, report, match)
         text, returned = hold_the_dead(text, records, ask, report, match)
         events.extend(returned)
+        # What became of a body the player's line acts on (read from the held prose).
+        back = {str((e.get("subject") or {}).get("code") or "") for e in returned}
+        events.extend(read_bodies(text, records, ask, report, match, back))
     except Exception as exc:  # never break a turn
         report["error"] = f"{type(exc).__name__}: {exc}"[:300]
     report["events"] = [dict(e) for e in events]
@@ -898,6 +1065,14 @@ def event_line(event: dict[str, Any]) -> str:
         return f"{label} was destroyed."
     if kind == KIND_RETURNED:
         return f"{label} came back from death."
+    if kind == KIND_BODY:
+        state = event.get("state")
+        if state == BODY_BURIED:
+            return f"{label} was buried."
+        if state == BODY_CARRIED:
+            return f"You carry the body of {label}."
+        if state == BODY_LIES:
+            return f"You set down the body of {label}."
     return ""
 
 
@@ -1044,9 +1219,18 @@ def keep_for_rewind(conn, turn: int, table: str, row_id: int) -> None:
         _note("rewind_record_failed", table=table, error=f"{type(exc).__name__}: {exc}"[:200])
 
 
+def _here_id(conn) -> int:
+    try:
+        row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        return int((row["current_location_id"] if row else 0) or 0)
+    except Exception:
+        return 0
+
+
 def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Check each event against the records and write it, or refuse it with a ledger note."""
     out: list[dict[str, Any]] = []
+    here_id = _here_id(conn)
     for raw in events or []:
         if not isinstance(raw, dict):
             continue
@@ -1059,16 +1243,20 @@ def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dic
         kind = str(event.get("kind") or "")
         reason = allow_event(event, turn_result)
         row = None
-        table = "npcs" if kind in (KIND_DIED, KIND_RETURNED) else "locations"
+        table = "npcs" if kind in (KIND_DIED, KIND_RETURNED, KIND_BODY) else "locations"
         if not reason:
-            if kind in (KIND_DIED, KIND_RETURNED):
-                row = conn.execute("SELECT id, died_turn FROM npcs WHERE code = ?", (code,)).fetchone() if code else None
+            if kind in (KIND_DIED, KIND_RETURNED, KIND_BODY):
+                row = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone() if code else None
                 if row is None:
                     reason = "no such person"
                 elif kind == KIND_DIED and int(row["died_turn"] or 0) > 0:
                     reason = "already dead"
-                elif kind == KIND_RETURNED and int(row["died_turn"] or 0) == 0:
+                elif kind in (KIND_RETURNED, KIND_BODY) and int(row["died_turn"] or 0) == 0:
                     reason = "not dead"
+                elif kind == KIND_BODY and event.get("state") not in BODY_STATES:
+                    reason = "unknown body state"
+                elif kind == KIND_BODY and "body" in row.keys() and body_state(row["body"]) == event.get("state"):
+                    reason = "no change"
             elif kind == KIND_DESTROYED:
                 row = conn.execute("SELECT id, destroyed_turn FROM locations WHERE code = ?", (code,)).fetchone() if code else None
                 if row is None:
@@ -1085,8 +1273,24 @@ def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dic
             keep_for_rewind(conn, turn, table, int(row["id"]))
             if kind == KIND_DIED:
                 conn.execute("UPDATE npcs SET died_turn = ? WHERE id = ?", (int(turn), int(row["id"])))
+                # The body lies where the prose leaves it (place_bodies): a row the
+                # roster kept at another place than the player's moves here only
+                # when the scene has the body with the player.
+                at = int(row["location_id"] or 0)
+                if here_id and at != here_id and event.get("body_here") is True:
+                    conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(row["id"])))
+                    event["body_at"] = here_id
+                    _note("body_placed", code=code, was=at, now=here_id)
             elif kind == KIND_RETURNED:
                 conn.execute("UPDATE npcs SET died_turn = 0 WHERE id = ?", (int(row["id"]),))
+                if "body" in row.keys():
+                    conn.execute("UPDATE npcs SET body = '' WHERE id = ?", (int(row["id"]),))
+            elif kind == KIND_BODY:
+                state = str(event.get("state"))
+                conn.execute(
+                    "UPDATE npcs SET body = ?, location_id = ? WHERE id = ?",
+                    ("" if state == BODY_LIES else state, here_id or int(row["location_id"] or 0), int(row["id"])),
+                )
             elif kind == KIND_DESTROYED:
                 conn.execute("UPDATE locations SET destroyed_turn = ? WHERE id = ?", (int(turn), int(row["id"])))
             event["status"] = "applied"
@@ -1095,18 +1299,54 @@ def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dic
     return out
 
 
+def carry_bodies(conn, turn: int) -> list[str]:
+    """A carried body goes where the player goes: each turn, after the moves. Returns the codes moved."""
+    here_id = _here_id(conn)
+    if not here_id:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT id, code, location_id FROM npcs WHERE died_turn > 0 AND body = ? AND location_id != ?",
+            (BODY_CARRIED, here_id),
+        ).fetchall()
+    except Exception:  # a save from before the body column
+        return []
+    moved: list[str] = []
+    for row in rows:
+        keep_for_rewind(conn, turn, "npcs", int(row["id"]))
+        conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(row["id"])))
+        moved.append(str(row["code"] or ""))
+    if moved:
+        _note("bodies_carried", codes=moved, now=here_id)
+    return moved
+
+
 # ---------------------------------------------------------------------------
 # Later turns: what the next scene is told, who is no longer present
 # ---------------------------------------------------------------------------
 
 
 def dead_and_destroyed(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """The dead people and destroyed places in a world state (get_state shape)."""
+    """The dead people and destroyed places in a world state (get_state shape).
+
+    Each dead person carries where the body is ("location_id", "location_code")
+    and what it is doing ("body": lies / carried / buried); "here" marks a body
+    at the player's place.
+    """
+    current = state.get("current_location") if isinstance(state.get("current_location"), dict) else {}
+    here_id = int(current.get("id") or 0)
+    here_code = str(current.get("code") or "")
     people: list[dict[str, Any]] = []
     for location in state.get("locations") or []:
         for npc in (location.get("npcs") or []) if isinstance(location, dict) else []:
             if isinstance(npc, dict) and int(npc.get("died_turn") or 0) > 0:
-                people.append({"code": str(npc.get("code") or ""), "name": clean_name(npc.get("name")), "turn": int(npc["died_turn"])})
+                at_id = int(npc.get("location_id") or location.get("id") or 0)
+                at_code = str(location.get("code") or "")
+                people.append({
+                    "code": str(npc.get("code") or ""), "name": clean_name(npc.get("name")), "turn": int(npc["died_turn"]),
+                    "body": body_state(npc.get("body")), "location_id": at_id, "location_code": at_code,
+                    "here": bool((here_id and at_id == here_id) or (not here_id and here_code and at_code == here_code)),
+                })
     places = [
         {"code": str(loc.get("code") or ""), "name": str(loc.get("name") or ""), "turn": int(loc.get("destroyed_turn") or 0)}
         for loc in state.get("locations") or []
@@ -1117,8 +1357,20 @@ def dead_and_destroyed(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
     return {"people": people, "places": places}
 
 
+def body_entry(person: dict[str, Any]) -> dict[str, Any]:
+    """A body as a place lists it: who, since when, and what it is doing."""
+    return {"code": person.get("code") or "", "name": person.get("name") or "", "died_turn": int(person.get("turn") or 0),
+            "body": person.get("body") or BODY_LIES}
+
+
 def hold_context(state: dict[str, Any], context: dict[str, Any]) -> None:
-    """The next turn's context: who is dead (context["the_dead"]), and the dead off the people lists."""
+    """The next turn's context: who is dead (context["the_dead"]), each place's bodies, and the living lists.
+
+    The dead leave a body (CLAUDE.md 2026-10-24): a place's dead move from its
+    "npcs" (the living, whom the scene can talk to and roll against) to its
+    "bodies"; the place the player is in carries its bodies too, and a dead
+    keeper is no keeper (a dead doctor sells nothing).
+    """
     found = dead_and_destroyed(state)
     if not found["people"] and not found["places"]:
         return
@@ -1126,10 +1378,16 @@ def hold_context(state: dict[str, Any], context: dict[str, Any]) -> None:
     dead_codes = {p["code"] for p in found["people"] if p["code"]}
     if not dead_codes:
         return
+    by_place: dict[Any, list[dict[str, Any]]] = {}
+    for person in found["people"]:
+        by_place.setdefault(person.get("location_id") or person.get("location_code"), []).append(body_entry(person))
     locations = []
     for location in context.get("locations") or []:
         if isinstance(location, dict) and isinstance(location.get("npcs"), list):
             location = {**location, "npcs": [n for n in location["npcs"] if not (isinstance(n, dict) and n.get("code") in dead_codes)]}
+            bodies = by_place.get(location.get("id")) or by_place.get(location.get("code")) or []
+            if bodies:
+                location["bodies"] = bodies
         locations.append(location)
     context["locations"] = locations
     here = context.get("current_location")
@@ -1140,11 +1398,21 @@ def hold_context(state: dict[str, Any], context: dict[str, Any]) -> None:
             here.pop("keeper", None)
         if isinstance(here.get("npcs"), list):
             here["npcs"] = [n for n in here["npcs"] if not (isinstance(n, dict) and n.get("code") in dead_codes)]
+        bodies = [body_entry(p) for p in found["people"] if p.get("here")]
+        if bodies:
+            here["bodies"] = bodies
         context["current_location"] = here
 
 
-def facts(context: Any, limit: int = 4) -> list[str]:
-    """The dead and the destroyed as sentences for facts_to_keep."""
+_BODY_FACTS = {
+    BODY_LIES: "The body of {label} lies here.",
+    BODY_CARRIED: "You carry the body of {label}.",
+    BODY_BURIED: "{label} is buried here.",
+}
+
+
+def facts(context: Any, limit: int = 6) -> list[str]:
+    """The dead and the destroyed as sentences for facts_to_keep; a body here is said after its death."""
     found = context.get("the_dead") if isinstance(context, dict) else None
     if not isinstance(found, dict):
         return []
@@ -1153,6 +1421,8 @@ def facts(context: Any, limit: int = 4) -> list[str]:
         label = f"{person.get('name')} [[{person.get('code')}]]" if person.get("code") else str(person.get("name") or "")
         if label.strip():
             out.append(f"{label} died in turn {person.get('turn')} and is dead.")
+            if person.get("here"):
+                out.append(_BODY_FACTS.get(str(person.get("body") or BODY_LIES), _BODY_FACTS[BODY_LIES]).format(label=label))
     for place in found.get("places") or []:
         label = f"{place.get('name')} [[{place.get('code')}]]" if place.get("code") else str(place.get("name") or "")
         if label.strip():

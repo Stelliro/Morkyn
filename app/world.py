@@ -4636,7 +4636,9 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
                 current_location["exit_to"] = str((parent or {}).get("name") or "")
                 keeper_id = int(current_location.get("keeper_npc_id") or 0)
                 keeper = next((n for n in npcs if int(n.get("id") or 0) == keeper_id), None) if keeper_id else None
-                if keeper:
+                # A dead keeper keeps nothing (the dead leave a body, 2026-10-24):
+                # the body stays in the place's people, the keeper pointer for rewind.
+                if keeper and not int(keeper.get("died_turn") or 0) > 0:
                     current_location["keeper"] = {
                         "code": str(keeper.get("code") or ""),
                         "name": str(keeper.get("name") or ""),
@@ -4882,7 +4884,9 @@ def _apply_scene_cast(conn, cast: Any, narration: str = "") -> None:
         if bucket in cast:
             cast[bucket] = cleaned
     # The dead are never present (app/interpreter.py, #154): not moved here,
-    # not kept in the scene from an earlier turn.
+    # not kept in the scene from an earlier turn. The body stays where it lies
+    # (the place's "bodies" in the next context); a carried one follows the
+    # player through interpreter.carry_bodies, never through CAST.
     from app.interpreter import dead_codes as _dead_codes
 
     dead = _dead_codes(conn)
@@ -15392,6 +15396,14 @@ def _file_people_at_unshown_places(conn, npcs: list[Any], narration: str, player
         turn_ledger.note("place", "place_only_spoken_of", place=ref, person=str(npc.get("name") or npc.get("code") or ""))
 
 
+def _dead_row(row: Any) -> bool:
+    """An npcs row the interpreter recorded dead (a save without the column: alive)."""
+    try:
+        return "died_turn" in row.keys() and int(row["died_turn"] or 0) > 0
+    except Exception:
+        return False
+
+
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     if not isinstance(npc, dict):
         return None
@@ -15558,7 +15570,11 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
                 name = str(existing["name"] or name)
                 npc["name"] = name
                 role = str(existing["role"] or role)
-        if existing is not None and int(existing["location_id"] or 0) != int(location_id or 0):
+        if (
+            existing is not None
+            and int(existing["location_id"] or 0) != int(location_id or 0)
+            and not _dead_row(existing)
+        ):
             try:
                 conn.execute(
                     "UPDATE npcs SET location_id = ? WHERE id = ?",
@@ -15566,6 +15582,14 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
                 )
             except Exception:
                 pass
+
+    # A body stays where it lies (the dead leave a body, 2026-10-24): an NPC op
+    # does not walk the dead elsewhere; a carried body follows the player
+    # through interpreter.carry_bodies.
+    if existing is not None and _dead_row(existing) and int(existing["location_id"] or 0):
+        if int(location_id or 0) != int(existing["location_id"] or 0):
+            turn_ledger.note("npc", "body_not_moved", code=str(existing["code"] or ""), asked=location_id)
+        location_id = int(existing["location_id"])
 
     if existing:
         # Shell / nameless / background: refuse full-cast promotion from LLM dumps
@@ -25326,6 +25350,13 @@ def apply_turn(
                 result["turn_summary"] = without_refused(result.get("turn_summary"), result["interpreted_events"])
             except Exception as exc:
                 turn_ledger.note("interpreter", "apply_failed", error=f"{type(exc).__name__}: {exc}")
+        # A body the player carries goes where the player went this turn.
+        try:
+            from app.interpreter import carry_bodies
+
+            carry_bodies(conn, turn)
+        except Exception as exc:
+            turn_ledger.note("interpreter", "carry_failed", error=f"{type(exc).__name__}: {exc}"[:200])
         _write_turn_summary(conn, turn, result, player_input)
         _write_model_usage(conn, turn, result)
         _write_verification_memory(conn, turn, result, prompt_context, used_fallback)

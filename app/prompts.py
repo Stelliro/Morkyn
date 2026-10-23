@@ -868,6 +868,14 @@ def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
         people.append(entry)
     if people:
         place["people"] = people
+    # The dead leave a body (app/interpreter.hold_context, 2026-10-24): here, not someone here.
+    bodies = [
+        {"name": str(b.get("name") or ""), "code": str(b.get("code") or ""), "body": str(b.get("body") or "lies")}
+        for b in (current.get("bodies") or source.get("bodies") or [])[:6]
+        if isinstance(b, dict) and str(b.get("name") or "").strip()
+    ]
+    if bodies:
+        place["bodies"] = bodies
     return place or None
 
 

@@ -828,6 +828,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         # The turn the interpreter recorded this person dead (app/interpreter.py, #154);
         # 0 = alive. A later "returned" event sets it back to 0.
         ("died_turn", "INTEGER NOT NULL DEFAULT 0"),
+        # What a dead person's body is doing (app/interpreter.py, the dead leave a
+        # body, 2026-10-24): '' lies where it fell, 'carried', 'buried'.
+        ("body", "TEXT NOT NULL DEFAULT ''"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
