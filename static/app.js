@@ -25580,8 +25580,25 @@ const _watchedNpcIds = new Set();
 // ---------------------------------------------------------------------------
 // Settlement view. The server sends only what the player knows: wards of the
 // tiles they have seen, outline for the rest. Light is a line; nothing filled.
+// Playtest #161 (Stell, 2026-10-23): the Settlement view is only for the
+// settlement the player is in. The engine's town_position says whether they
+// are; outside, the button is hidden and the map falls back to World.
+function playerInSettlement() {
+  return Boolean(townPositionFromState());
+}
+
+function syncSettlementViewButton() {
+  const inside = playerInSettlement();
+  const btn = document.querySelector('#mapViewBar [data-map-view="settlement"]');
+  if (btn) {
+    btn.hidden = !inside;
+    btn.disabled = !inside;
+  }
+  if (!inside && mapViewMode === "settlement") setMapViewMode("world");
+}
+
 function setMapViewMode(mode) {
-  mapViewMode = mode === "settlement" ? "settlement" : "world";
+  mapViewMode = mode === "settlement" && playerInSettlement() ? "settlement" : "world";
   const on = mapViewMode === "settlement";
   document.querySelectorAll("#mapViewBar [data-map-view]").forEach((btn) => {
     const active = btn.getAttribute("data-map-view") === mapViewMode;
@@ -25608,6 +25625,12 @@ async function refreshSettlementView() {
     data = res.ok ? await res.json() : null;
   } catch (_) {
     data = null;
+  }
+  // The server found the player outside every settlement: back to World.
+  if (data && !data.here) {
+    settlementData = data;
+    setMapViewMode("world");
+    return;
   }
   settlementData = data || { available: false, reason: "The settlement map could not be loaded.", settlements: [] };
   paintSettlementPicker(settlementData);
@@ -26885,6 +26908,7 @@ if (typeof ResizeObserver === "function") {
 async function refreshLocalMap() {
   const canvas = document.querySelector("#playMapCanvas");
   // The settlement view follows the player too; entering a town zooms to its streets once.
+  syncSettlementViewButton();
   if (!townAutoZoomCheck() && mapViewMode === "settlement") refreshSettlementView();
   const meta = document.querySelector("#playMapMeta");
   // Playtest #82: the line under the map header repeated this Tile row word for word.

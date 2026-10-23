@@ -18,6 +18,7 @@ happening, before the heavy server modules load.
 from __future__ import annotations
 
 import collections
+import contextlib
 import json
 import os
 import socket
@@ -276,7 +277,8 @@ def saved_model_config() -> dict[str, str]:
     if not db_path.is_file():
         return {}
     try:
-        with sqlite3.connect(db_path) as conn:
+        # sqlite3's own `with` only commits; closing() shuts the handle (#162).
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'model_config'").fetchone()
         raw = json.loads(row[0]) if row else {}
     except Exception:

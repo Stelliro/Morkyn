@@ -12148,7 +12148,7 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
                     from app.db import connect as _connect
                     from app.world import unique_person_name as _unique_person_name
 
-                    with _connect() as _conn:
+                    with _connect().closing() as _conn:
                         fallback = _unique_person_name(_conn, name_seed(code, name, npc.get("role") or ""))
                 except Exception:
                     fallback = invent_person_name(seed=name_seed(code, name, npc.get("role") or ""))

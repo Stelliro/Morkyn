@@ -26374,7 +26374,7 @@ def play_turn(
                         try:
                             from app.db import connect as _c
 
-                            with _c() as c2:
+                            with _c().closing() as c2:
                                 loc_id = None
                                 prow = c2.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
                                 if prow:
