@@ -179,6 +179,47 @@ def _attack_people(line: str) -> tuple[dict | None, dict]:
     return attack_intent.decide(line, _context(line), None, ask)
 
 
+def setUpModule():
+    # The presence pair (interpreter.with_player) is off by default after its live measurement
+    # (live-eval-8: 27 wrong moves in 69); these tests are of that code path, so it is on here.
+    global _PAIR_ON
+    _PAIR_ON = mock.patch.dict(os.environ, {"AI_RPG_WITH_PLAYER": "on"})
+    _PAIR_ON.start()
+
+
+def tearDownModule():
+    _PAIR_ON.stop()
+
+
+class TheCastBringsNateWithThePairOff(unittest.TestCase):
+    """The default path: Hermes's own CAST line (live/final T1 'CAST:"present interacting A"'), read by
+    the CAST slot-chain repair, puts Nate in the scene, and the cast moves him to the player."""
+
+    def setUp(self):
+        self.town = _fresh_world()
+        self.clinic, self.clinic_code = _add_place(CLINIC, parent_id=self.town, kind="clinic")
+        self.nate = _add_npc("Nate", self.town, role="field tech", sketch_turn=1)
+        self.t1 = FINAL_T1.replace("[[A]]", f"[[{self.nate}]]")
+
+    def test_t1_the_real_cast_line_files_nate_in_the_clinic(self):
+        from app.turn_dsl import parse_dsl_turn
+
+        cast = parse_dsl_turn(f'===NAR===\n{self.t1}\n\n===OPS===\nCAST:"present interacting {self.nate}"\n', FINAL_T1_LINE)["scene_cast"]
+        self.assertIn(self.nate, cast["present"])
+        model = Model()
+        with mock.patch.dict(os.environ, {"AI_RPG_WITH_PLAYER": "off"}):
+            _play(_turn(self.t1, move_to=CLINIC, cast=cast), FINAL_T1_LINE, model)
+        self.assertEqual(_place_of(self.nate), self.clinic)
+        self.assertFalse(any("walked away from" in c for c in model.calls), "the pair is off")
+        check, report = _attack_people(FINAL_T3_LINE)
+        self.assertIn(self.nate, report.get("people") or [])
+
+    def test_without_a_cast_he_stays_where_the_records_have_him(self):
+        with mock.patch.dict(os.environ, {"AI_RPG_WITH_PLAYER": "off"}):
+            _play(_turn(self.t1, move_to=CLINIC), FINAL_T1_LINE, Model({"Nate": "Yes"}))
+        self.assertEqual(_place_of(self.nate), self.town)
+
+
 class FinalReplayNateIsWhereThePlayerMetHim(unittest.TestCase):
     """live/final T1 then T3."""
 

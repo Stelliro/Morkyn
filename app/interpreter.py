@@ -761,6 +761,12 @@ def hold_the_dead(text: str, records: dict[str, Any], ask: Ask, report: dict[str
     return text, events
 
 
+def with_player_enabled() -> bool:
+    import os
+
+    return str(os.getenv("AI_RPG_WITH_PLAYER", "off")).strip().lower() in {"1", "on", "true", "yes"}
+
+
 def with_player(
     text: str, events: list[dict[str, Any]], records: dict[str, Any], ask: Ask, report: dict[str, Any],
     matcher: Matcher | None = None,
@@ -1118,8 +1124,12 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
         # What became of a body the player's line acts on (read from the held prose).
         back = {str((e.get("subject") or {}).get("code") or "") for e in returned}
         events.extend(read_bodies(text, records, ask, report, match, back))
-        # Who on record elsewhere the scene shows with the player (#33, app/whereabouts.py).
-        shown = with_player(text, events, records, ask, report, match)
+        # Who on record elsewhere the scene shows with the player (#33, app/whereabouts.py). Off by
+        # default: measured live on Hermes 3 8B (live-eval-8) the presence pair moved the wrong
+        # person in 27 of 69 tries (calls from a doorway, a radio, someone talked about) and missed
+        # both real traces; "has the player walked away from X?" is honestly no whenever the two
+        # were never together. New people are still filed where the player is (no ask needed).
+        shown = with_player(text, events, records, ask, report, match) if with_player_enabled() else []
     except Exception as exc:  # never break a turn
         report["error"] = f"{type(exc).__name__}: {exc}"[:300]
     report["events"] = [dict(e) for e in events]

@@ -329,3 +329,26 @@ class TheReplayedTurnsFileOneTheoAndNoNone(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheCastSlotChain(unittest.TestCase):
+    """Hermes 3 8B chains CAST slots before the code; every live replay of 2026-10-24 has it."""
+
+    def _cast(self, line):
+        from app.turn_dsl import parse_dsl_turn
+
+        return parse_dsl_turn(f"===NAR===\nYou step in. Nate [[A]] looks up.\n\n===OPS===\n{line}\n", "hi")["scene_cast"]
+
+    def test_the_recorded_shapes(self):
+        for line in ('CAST:"present interacting A"', "CAST: present, interacting, A", "CAST: present interacting A"):
+            cast = self._cast(line)
+            self.assertEqual((cast["present"], cast["interacting"]), (["A"], ["A"]), line)
+
+    def test_the_ordinary_shapes_are_unchanged(self):
+        self.assertEqual(self._cast("CAST interacting A")["interacting"], ["A"])
+        self.assertEqual(self._cast("CAST present A")["present"], ["A"])
+        self.assertEqual(self._cast('CAST present "Nate Moss"')["present"], ["Nate Moss"])
+
+    def test_two_groups(self):
+        cast = self._cast("CAST: present A B interacting A")
+        self.assertEqual((cast["present"], cast["interacting"]), (["A", "B"], ["A"]))
