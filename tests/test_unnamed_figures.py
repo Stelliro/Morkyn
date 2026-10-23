@@ -102,7 +102,7 @@ class _Asker:
         if phase == "figure_kind":
             return "Yes, in this" if any(f'is "{f}" a being' in user for f in self.figures) else "No, in this"
         if phase == "figure_kind_check":
-            return "Yes, you could" if any(f"talk to the {f}?" in user for f in self.checked) else "No."
+            return "Yes." if any(f"is the {f} a creature or a person?" in user for f in self.checked) else "No."
         if phase == "figure_speaks":
             return "Yes." if any(f"spoken by the {s}?" in user for s in self.speaks) else "No."
         if phase == "figure_hostile":
@@ -448,7 +448,7 @@ class TheFigureGate(unittest.TestCase):
         self.assertEqual(_names(), ["Ghoul 1"])
         self.assertEqual(asker.asked("figure_kind_check"),
                          ["Text: A rotting ghoul lunges at you from the shadows.\n"
-                          "In this text, could you fight or talk to the ghoul? Answer yes or no."])
+                          "In this text, is the ghoul a creature or a person? Answer yes or no."])
         # Only the first said yes: no ghoul.
         _fresh_world()
         _play("A rotting ghoul lunges at you from the shadows.", "i look around", _Asker(figures=("ghoul",), checked=()))
@@ -607,7 +607,7 @@ class TheMeasuredAsks(unittest.TestCase):
                          'Text: A ghoul lunges at you.\nIn this text, is "ghoul" a being that can act on its own?')
         self.assertEqual(unnamed.kind_check_prompt("A ghoul lunges at you.", "ghoul"),
                          "Text: A ghoul lunges at you.\n"
-                         "In this text, could you fight or talk to the ghoul? Answer yes or no.")
+                         "In this text, is the ghoul a creature or a person? Answer yes or no.")
         self.assertEqual(unnamed.hostile_prompt("A ghoul lunges at you.", "A ghoul"),
                          'Text: A ghoul lunges at you.\nIn this text, does "A ghoul" attack or threaten the player?')
 
@@ -895,16 +895,16 @@ UNNAMED2_T1_PROSE = (
 class _RecordedAsker(_Asker):
     """The replies Hermes 3 8B gave (live-eval-5 and the unnamed2 trace), keyed by the exact prompt.
 
-    unnamed2 T1's own figure_kind reply was 'Yes, "gh'. Its figure_kind_check reply was "No.";
-    here it is the "Yes, you could" the same wording got on 4 ghouls eating someone (2 of 3),
-    so the test is of the engine, not of that reply. figure_hostile was never asked live on
+    unnamed2 T1's own figure_kind reply was 'Yes, "gh'. Its check, with the wording measured in
+    live-eval-7 ("is the ghoul a creature or a person?"), answered 'Yes, a gh' on this exact
+    sentence (the old "could you fight or talk to" answered "No."). figure_hostile was never asked live on
     this sentence; the reply is the one measured on "You see 4 ghouls eating someone" (3 of 3).
     """
 
     REPLIES = {
         ("figure_kind", "Through the gap, you see a pack of ghouls feasting on a bloated corpse.", "ghoul"): 'Yes, "gh',
         ("figure_kind_check", "Through the gap, you see a pack of ghouls feasting on a bloated corpse.", "ghoul"):
-            "Yes, you could",
+            "Yes, a gh",
         ("figure_hostile", "Through the gap, you see a pack of ghouls feasting on a bloated corpse.", "ghoul"):
             "No, the text",
     }
