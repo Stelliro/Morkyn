@@ -17750,6 +17750,60 @@ def _interpreter_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _interpreter_ask(
+    *,
+    usage: list[dict[str, Any]] | None,
+    trace: list[dict[str, Any]] | None,
+    timeout: int,
+    config: dict[str, Any] | None,
+):
+    """One interpreter ask through _chat_text (prompt, reply and seconds in the trace and model_usage)."""
+    from app import interpreter
+
+    def ask(phase: str, prompt: str, max_tokens: int) -> str:
+        call = lambda: _chat_text(  # noqa: E731
+            interpreter.SYSTEM_PROMPT,
+            prompt,
+            timeout=timeout,
+            usage=usage,
+            phase=phase,
+            max_tokens=max_tokens,
+            trace=trace,
+            temperature=0.0,
+        )
+        if config:
+            with model_config_scope(config):
+                return call()
+        return call()
+
+    return ask
+
+
+def _read_gold(
+    narration: str,
+    *,
+    usage: list[dict[str, Any]] | None = None,
+    trace: list[dict[str, Any]] | None = None,
+    timeout: int = 60,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """
+    The interpreter's gold asks over the scene (app/interpreter.read_gold, #41):
+    does money leave the player, does money reach them, each confirmed by a
+    second ask. None when the interpreter is off or there is no prose (the
+    engine then keeps what its own rules decided). world.apply_turn calls it.
+    """
+    if not _interpreter_enabled() or not str(narration or "").strip():
+        return None
+    from app import interpreter
+
+    try:
+        ask = _interpreter_ask(usage=usage, trace=trace, timeout=timeout, config=config)
+        return interpreter.read_gold(str(narration), ask)
+    except Exception as exc:  # never break a turn
+        return {"out": None, "in": None, "answers": {}, "report": {"error": _trim_text(f"{exc.__class__.__name__}: {exc}", 300)}}
+
+
 def _run_interpreter(
     turn: Any,
     player_input: str,
@@ -17795,23 +17849,7 @@ def _run_interpreter(
                 with connect().closing() as conn:
                     records = interpreter.load_records(conn)
             records = {**records, "player_quotes": quotes}
-
-            def ask(phase: str, prompt: str, max_tokens: int) -> str:
-                call = lambda: _chat_text(  # noqa: E731
-                    interpreter.SYSTEM_PROMPT,
-                    prompt,
-                    timeout=timeout,
-                    usage=usage,
-                    phase=phase,
-                    max_tokens=max_tokens,
-                    trace=trace,
-                    temperature=0.0,
-                )
-                if config:
-                    with model_config_scope(config):
-                        return call()
-                return call()
-
+            ask = _interpreter_ask(usage=usage, trace=trace, timeout=timeout, config=config)
             out = interpreter.run(narration, records, ask)
             events = out["events"]
             record.update(out["report"])

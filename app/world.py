@@ -22630,12 +22630,21 @@ def _void_unbought_spend(
     band_report: dict[str, Any] | None,
     player_input: str = "",
     narration: str = "",
+    loss_shown: bool | None = None,
 ) -> bool:
     """
     A GOLD loss paid for GRANTs. When every one of them was removed (the
     verifier patch, the grounding gate), nothing was bought, and the loss goes
     too (playtest #41: gold fell 12 to 1 for coal, cloth and oddities the player
     never received). Structural: a purchase with nothing purchased.
+
+    And any loss the scene does not show (#41 reopened, baseline replay: the
+    purse went 12 -> 2 -> 0 over "i shoot Marisol" and the rip-in-half line,
+    a draft GOLD -10 and -2 rolled as loss bands with no coin in the prose).
+    ``loss_shown`` is the interpreter's gold answer (interpreter.read_gold,
+    "out", confirmed by its second ask): False voids the loss here, the one
+    place a loss is voided; None (the interpreter off or the model down)
+    leaves the rules below to decide, as before.
 
     A loss on a turn that granted nothing (a toll, a bribe, a fine) is left alone.
     So is a sum the player's own line counts out: "I count six gold coins
@@ -22651,6 +22660,15 @@ def _void_unbought_spend(
         return False
     if gold >= 0:
         return False
+    if loss_shown is False:
+        player["gold_delta"] = 0
+        line = f"gold loss refused ({gold}): the scene shows no money leaving you"
+        if isinstance(band_report, dict):
+            band_report.setdefault("lines", []).append(line)
+            band_report["voided_spend"] = {"gold_delta": gold, "why": "loss_not_shown"}
+        turn_ledger.note("gold", "loss_not_shown", gold_delta=gold,
+                         why="the interpreter's confirmed gold ask found no money leaving the player")
+        return True
     # The player's own counted-out sum stands when the other side takes it; a
     # sum set down and refused ("You'll pay for it", the coins left on the
     # counter, 8B run 146 T16) is still the player's.
@@ -22702,6 +22720,95 @@ def _void_unbought_spend(
         band_report.setdefault("lines", []).append(line)
         band_report["voided_spend"] = {"gold_delta": gold, "items": bought[:8]}
     return True
+
+
+def _read_gold_evidence(conn, result: dict[str, Any]) -> dict[str, Any] | None:
+    """The interpreter's gold answers for this turn's prose (llm._read_gold), or None.
+
+    Asked only on a model turn (generate_turn left ``_interpreter_pending``)
+    with the economy on; the asks go into the turn's own trace and usage.
+    """
+    pending = result.get("_interpreter_pending") if isinstance(result, dict) else None
+    if not isinstance(pending, dict) or not _play_system_enabled(conn, "economy_enabled", True):
+        return None
+    try:
+        from app.llm import _model_timeout, _read_gold
+
+        return _read_gold(
+            _narration_text(result),
+            usage=result.setdefault("_model_usage", []),
+            trace=result.setdefault("_model_trace", []),
+            timeout=_model_timeout(45, 120, "AI_RPG_INTERPRETER_TIMEOUT"),
+            config=pending.get("config") or None,
+        )
+    except Exception as exc:
+        turn_ledger.note("interpreter", "gold_read_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        return None
+
+
+def _log_gold_shadow(
+    result: dict[str, Any],
+    gold_read: dict[str, Any] | None,
+    settled: int,
+    gold_note: dict[str, Any] | None,
+    narration: str,
+) -> None:
+    """
+    Shadow mode for the interpreter's gold (CLAUDE.md, "Narrator, interpreter,
+    engine": gold first, logged beside _settle_stated_gold before it decides
+    more). Records what the engine's rules settled (``settled``: the draft's
+    op through _settle_stated_gold and the band roll), what the prose readers
+    found (prose_state.stated_coin_amounts), what the interpreter's confirmed
+    asks said, and whether they agree, in a ledger note and a trace record
+    ("interpreter_gold"), with the turn's gold events. Writes nothing.
+    """
+    if not isinstance(gold_read, dict):
+        return
+    try:
+        from app import interpreter, prose_state
+        from app.llm import _append_trace
+
+        final = int(_float((result.get("player") or {}).get("gold_delta"), 0)) if isinstance(result.get("player"), dict) else 0
+        said = prose_state.stated_coin_amounts(narration)
+        shown_out, shown_in = gold_read.get("out"), gold_read.get("in")
+        engine_out, engine_in = settled < 0, settled > 0
+        agree = None if shown_out is None or shown_in is None else (engine_out == shown_out and engine_in == shown_in)
+        events: list[dict[str, Any]] = []
+        if shown_out:
+            events.append(interpreter.gold_event("out", -settled if settled < 0 else 0,
+                                                 "applied" if final < 0 else "proposed"))
+        elif settled < 0:
+            why = (
+                "the scene shows no money leaving the player" if shown_out is False and final == 0
+                else "refused by the engine's own rules" if final == 0
+                else "the interpreter could not be asked"
+            )
+            events.append(interpreter.gold_event("out", -settled, "refused" if final == 0 else "applied", reason=why))
+        if shown_in or settled > 0:
+            # A gain stays as the engine's own rules decide (shadow only).
+            events.append(interpreter.gold_event("in", settled if settled > 0 else 0, "applied" if final > 0 else "proposed",
+                                                 reason="" if shown_in else "the interpreter did not confirm it (shadow)"))
+        detail = {
+            "interpreter": {"out": shown_out, "in": shown_in, "answers": gold_read.get("answers") or {}},
+            "engine": {"settled": settled, "final": final, "source": (gold_note or {}).get("source")},
+            "readers": {"paid": said.get("paid") or [], "received": said.get("received") or [], "priced": said.get("priced") or []},
+            "agree": agree,
+        }
+        turn_ledger.note("interpreter", "gold_shadow", **detail)
+        report = gold_read.get("report") if isinstance(gold_read.get("report"), dict) else {}
+        _append_trace(result.setdefault("_model_trace", []), {
+            "phase": "interpreter_gold",
+            "event": "read",
+            **detail,
+            "events": events,
+            "asks": report.get("asks") or [],
+            "unconfirmed": report.get("unconfirmed") or [],
+            "seconds": report.get("seconds"),
+            **({"error": report["error"]} if report.get("error") else {}),
+        })
+        result["interpreted_gold"] = events
+    except Exception as exc:
+        turn_ledger.note("interpreter", "gold_shadow_failed", error=f"{type(exc).__name__}: {exc}"[:200])
 
 
 _DOING_INTENTS = {"inventory", "trade", "combat", "travel", "training"}
@@ -24053,6 +24160,9 @@ def _reconcile_prose_with_state(
         isinstance(gold_note, dict)
         and int(_float(gold_note.get("stated_delta"), 0)) < 0
         and int(_float(gold_note.get("gold_delta"), 0)) == 0
+        # The interpreter found no payment in the scene: there is no paying
+        # sentence to take out, and a missed one is left, not cut (#41).
+        and gold_note.get("changed_by") != "loss_not_shown"
     ):
         new_text, dropped = prose_state.drop_sentences(text, prose_state.shows_payment)
         if dropped:
@@ -24758,7 +24868,13 @@ def apply_turn(
                 inv_changes = _remove_shown_gives(conn, inv_changes, narration, player_input)
             except Exception:
                 pass
-        voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report, player_input, narration)
+        # Does the scene show money leaving or reaching the player (the
+        # interpreter's gold asks, #41)? A loss it does not show is voided
+        # below; both answers are logged beside _settle_stated_gold's.
+        gold_read = _read_gold_evidence(conn, result)
+        gold_settled = int(_float((result.get("player") or {}).get("gold_delta"), 0)) if isinstance(result.get("player"), dict) else 0
+        voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report, player_input, narration,
+                                      loss_shown=(gold_read or {}).get("out"))
         purse_note = None
         try:
             inv_changes, purse_note = _settle_purse(conn, result, inv_changes, band_report, inv_rejected,
@@ -24772,10 +24888,13 @@ def apply_turn(
             if final != int(_float(gold_note.get("gold_delta"), 0)):
                 gold_note["stated_delta"] = gold_note.get("gold_delta")
                 gold_note["gold_delta"] = final
+                not_shown = (band_report or {}).get("voided_spend", {}).get("why") == "loss_not_shown" if isinstance(band_report, dict) else False
                 gold_note["changed_by"] = (
-                    "voided" if voided else "refused_purchase" if (purse_note or {}).get("refused_purchase")
+                    "loss_not_shown" if voided and not_shown else "voided" if voided
+                    else "refused_purchase" if (purse_note or {}).get("refused_purchase")
                     else "clamped_to_purse" if (purse_note or {}).get("clamped") else "later_gate"
                 )
+        _log_gold_shadow(result, gold_read, gold_settled, gold_note if isinstance(gold_note, dict) else None, narration)
         # Decisions that write nothing go in the turn's engine ledger.
         for item in inv_rejected:
             turn_ledger.note("inventory", "refused", item=item)
