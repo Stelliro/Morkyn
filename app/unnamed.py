@@ -132,6 +132,18 @@ _NUMBER_WORDS = {
     "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
 }
 _ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8}
+# The English words that say only how many, like _NUMBER_WORDS: a closed set of
+# orthography (quantifiers), not of meaning. "a couple of" / "a pair of" is a
+# stated two. The rest say "more than one" and no number, so the rolled count
+# takes their place ("Countless rats swarm" -> "Five rats swarm", "A handful
+# of raiders" -> "Five raiders"). Any other "a <noun> of" is a group noun ("a
+# pack of", "a horde of"), which keeps its noun: "a pack of four ghouls".
+_PAIR_NOUNS = frozenset({"couple", "pair"})
+_QUANTITY_NOUNS = frozenset({"handful", "bunch", "number", "lot"})  # "a handful of raiders"
+_QUANTITY_OF = frozenset({"dozens", "scores", "lots", "hundreds", "masses"})  # "dozens of ghouls"
+_QUANTIFIERS = frozenset({"some", "several", "many", "countless", "numerous", "multiple", "various"})
+# A relative pronoun right before a word makes it the relative clause's verb ("who remains calm").
+_RELATIVES = frozenset({"who", "which", "whom", "whose"})
 # English function words (grammar, not meaning): never a head noun, a modifier or a verb.
 _CLOSED = frozenset({
     "of", "and", "or", "but", "nor", "with", "without", "in", "inside", "on", "at", "from", "to", "by", "for",
@@ -303,6 +315,41 @@ def _verb_shaped(tok: str, plural: bool) -> bool:
     return len(low) > 2 and low.endswith("s") and not low.endswith(("ss", "us", "is"))
 
 
+def _singular_verb(verb: str) -> bool:
+    """A third-person singular verb form (agreement): "lunges", "is", "was", "has"; "lunge", "are" are not."""
+    low = str(verb or "").lower()
+    if low in {"is", "was", "has", "does"}:
+        return True
+    return len(low) > 2 and low.endswith("s") and not low.endswith(("ss", "us", "is"))
+
+
+def _prose_names(text: str) -> set[str]:
+    """The words this prose shows as names: one with a [[code]] after it, or one capitalised inside a sentence."""
+    out = {m.group(1).lower() for m in re.finditer(r"([A-Za-z][\w'’-]*)\s*\[\[", str(text or ""))}
+    for sentence in _sentences(text):
+        toks = [m.group(0) for m in _TOKEN_RE.finditer(sentence)]
+        out.update(t.lower() for t in toks[1:] if _word(t) and t[:1].isupper() and t != "I")
+    return out
+
+
+def _roster_names(conn) -> set[str]:
+    """The words of the named people the roster holds ("Silas Reed" -> silas, reed); numbered figures are kinds."""
+    try:
+        rows = conn.execute("SELECT name FROM npcs WHERE COALESCE(kind, '') = ''").fetchall()
+    except Exception:
+        return set()
+    return {w.lower() for (name,) in rows for w in re.findall(r"[A-Za-z][\w'’-]*", str(name or "")) if w[:1].isupper()}
+
+
+def _is_name(toks: list[str], k: int, names: Any) -> bool:
+    """A capitalised word that is a name: another capitalised word follows it, or the roster or the prose names it."""
+    tok = toks[k] if 0 <= k < len(toks) else ""
+    if not tok[:1].isupper():
+        return False
+    nxt = toks[k + 1] if k + 1 < len(toks) else ""
+    return (_word(nxt) and nxt[:1].isupper()) or tok.lower() in names
+
+
 def _count_of(tok: str) -> int:
     low = str(tok or "").lower()
     if low.isdigit():
@@ -310,7 +357,7 @@ def _count_of(tok: str) -> int:
     return _NUMBER_WORDS.get(low, 0)
 
 
-def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
+def mentions(text: str, objects: Any = (), names: Any = ()) -> list[dict[str, Any]]:
     """Every figure the prose shows doing something, in order.
 
     A figure does something when its noun phrase is the subject of a verb in
@@ -343,6 +390,7 @@ def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
     """
     kinds = {singular(k) for k in objects or () if str(k or "").strip()}
     out: list[dict[str, Any]] = []
+    names = {str(n).lower() for n in names or ()} | _prose_names(text)
     for sentence in _sentences(text):
         toks = [m.group(0) for m in _TOKEN_RE.finditer(sentence)]
         i = 0
@@ -350,7 +398,7 @@ def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
             # The clause the mention stands in (between punctuation marks).
             start = max([k for k in range(i) if toks[k] in _CLAUSE_MARKS] + [-1]) + 1
             seen = _players_object(toks[start:i])
-            found = _mention_at(toks, i, kinds, bare=seen)
+            found = _mention_at(toks, i, kinds, bare=seen, names=names)
             if found is None:
                 i += 1
                 continue
@@ -492,7 +540,7 @@ def player_objects(line: str) -> set[str]:
 
 
 def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = frozenset(),
-                bare: bool = False) -> dict[str, Any] | None:
+                bare: bool = False, names: Any = ()) -> dict[str, Any] | None:
     low = toks[i].lower()
     if i > 0 and toks[i - 1].lower() in {"of"} and low in {"the"}:
         return None  # "one of the ghouls": the ghouls already met
@@ -504,6 +552,8 @@ def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = fr
         n = _count_of(toks[j]) if j < len(toks) else 0
         if n:
             j += 1
+        elif toks[i + 1].lower() in _PAIR_NOUNS:
+            n = 2  # "a couple of raiders": two, said by the prose
         form, count, plural_needed, stated = "count", n or UNSTATED_PLURAL, True, bool(n)
         found = _head_at(toks, i, j, form, count, 0, True, bool(n), objects, bare)
         if found is not None:
@@ -519,8 +569,10 @@ def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = fr
         form, count, plural_needed = "another", 1, False
     elif low in {"a", "an"}:
         form, count, plural_needed = "count", 1, False
-    elif low in {"some", "several"}:
+    elif low in _QUANTIFIERS:
         form, count, plural_needed, stated = "count", UNSTATED_PLURAL, True, False
+    elif low in _QUANTITY_OF and nxt == "of":
+        form, count, plural_needed, j, stated = "count", UNSTATED_PLURAL, True, i + 2, False
     elif _count_of(low):
         if nxt == "of":
             return None
@@ -543,14 +595,23 @@ def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = fr
         # a sentence is a name, never a kind.
         tok = toks[i]
         if (not _word(tok) or low in _CLOSED or low in _PREPOSITIONS or low.endswith(("'s", "’s"))
-                or (i > 0 and tok[:1].isupper())):
+                or (i > 0 and tok[:1].isupper()) or (i > 0 and toks[i - 1].lower() in _RELATIVES)):
             return None
         found = _head_at(toks, i, i, "count", UNSTATED_PLURAL, 0, True, False)
         if found is None or found["_bare"] or found["_object"]:
             return None
+        head = found["_head"]
+        if any(t.endswith(("'", "’")) for t in toks[i:head]):
+            return None  # "Raiders' bullets": a possessive is a determiner, the head is no bare group
+        if any(_is_name(toks, k, names) for k in range(i, head + 1)):
+            # "Carlos steps toward you", "Silas glares": a name, never a bare plural.
+            return None
         verb = toks[found["_end"] - 1].lower()
         if verb.endswith("ing") and verb not in _BE_HAVE:
             # "..., claws raking the asphalt": a participle phrase, no clause of its own.
+            return None
+        if found["_end"] - 1 > head and _singular_verb(verb):
+            # Agreement (grammar): "Thomas lunges", "James was" have a singular subject.
             return None
         found["_bare_plural"] = True
         return found
@@ -772,7 +833,7 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
     objects = sorted(player_objects(line)) if line else []
     if objects:
         result["_figure_objects"] = objects
-    found = mentions(narration, objects)
+    found = mentions(narration, objects, _roster_names(conn))
     if not found:
         return {}
     people = _person_words()
@@ -1112,18 +1173,19 @@ def count_word(number: int, capital: bool = False) -> str:
 def _counted(span: str, count: int) -> str:
     """The unstated group's own words with the count in them, nothing else changed.
 
-    "some raiders" / "several raiders" / "a few raiders" -> "three raiders";
-    "a pack of ghouls" -> "a pack of four ghouls"; "Ghouls" -> "Four ghouls".
+    "some raiders" / "several raiders" / "a few raiders" / "countless rats" /
+    "a handful of raiders" / "dozens of ghouls" -> "three raiders": the words
+    that only say how many give way to the number; "a pack of ghouls" -> "a
+    pack of four ghouls"; "Ghouls" -> "Four ghouls".
     """
     parts = re.split(r"(\s+)", span)
     words = parts[0::2]
     low = [w.lower() for w in words]
     cap = span[:1].isupper()
-    if low[0] in {"some", "several"}:
-        return count_word(count, cap) + span[len(words[0]):]
-    if len(low) > 2 and low[0] in {"a", "an"} and low[1] == "few":
-        rest = re.match(r"\S+\s+\S+", span)
-        return count_word(count, cap) + span[rest.end():] if rest else span
+    replaced = _quantity_words(low)
+    if replaced and len(low) > replaced:
+        rest = re.match(r"(?:\S+\s+){%d}" % replaced, span)
+        return count_word(count, cap) + " " + span[rest.end():] if rest else span
     if len(low) > 3 and low[0] in {"a", "an"} and low[2] == "of":
         head = re.match(r"\S+\s+\S+\s+of\s+", span)
         if head:
@@ -1133,12 +1195,27 @@ def _counted(span: str, count: int) -> str:
     return count_word(count, cap) + " " + (first[:1].lower() + first[1:] if cap else first) + span[len(first):]
 
 
+def _quantity_words(low: list[str]) -> int:
+    """How many of these opening words only say how many (the quantifier sets above): 0 when none."""
+    if not low:
+        return 0
+    if low[0] in _QUANTIFIERS:
+        return 1
+    if len(low) > 1 and low[0] in _QUANTITY_OF and low[1] == "of":
+        return 2
+    if len(low) > 1 and low[0] in {"a", "an"} and low[1] == "few":
+        return 2
+    if len(low) > 2 and low[0] in {"a", "an"} and low[1] in _QUANTITY_NOUNS and low[2] == "of":
+        return 3
+    return 0
+
+
 def _count_into(text: str, phrase: str, count: int) -> str | None:
     """``text`` with the count written into the first unquoted ``phrase``, or None when it is not there."""
     words = str(phrase or "").split()
     if not words or not text:
         return None
-    bare = words[0].lower() not in {"a", "an", "some", "several"}
+    bare = words[0].lower() not in {"a", "an"} and not _quantity_words([w.lower() for w in words])
     pattern = r"(?<![\w'’-])" + r"\s+".join(re.escape(w) for w in words) + r"(?![\w'’-])"
     quoted = [(m.start(), m.end()) for m in _QUOTED_RE.finditer(text)]
     for flags in (0, re.I):
@@ -1190,7 +1267,8 @@ def _summary_count(summary: str, phrase: str, noun: str, count: int) -> str | No
         return fixed
     for hit in re.finditer(rf"(?<![\w'’-]){re.escape(noun)}(?![\w'’-])", summary, re.I):
         before = summary[: hit.start()]
-        group = re.search(r"(?<![\w'’-])(?:an?\s+few|some|several|an?\s+[A-Za-z]+\s+of)\s+$", before, re.I)
+        group = re.search(r"(?<![\w'’-])(?:an?\s+few|an?\s+[A-Za-z]+\s+of|(?:%s)\s+of|%s)\s+$" % (
+            "|".join(sorted(_QUANTITY_OF)), "|".join(sorted(_QUANTIFIERS))), before, re.I)
         if group:
             return summary[: group.start()] + _counted(summary[group.start(): hit.end()], count) + summary[hit.end():]
         prev = re.search(r"([A-Za-z0-9'’-]+)\s+$", before)
@@ -1238,7 +1316,7 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
     """
     if not location_id or not isinstance(result, dict):
         return []
-    found = mentions(narration, result.get("_figure_objects") or ())
+    found = mentions(narration, result.get("_figure_objects") or (), _roster_names(conn))
     ops = result.get("_unnamed_ops") or {}
     if not found and not ops:
         return []
