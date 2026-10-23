@@ -1796,6 +1796,18 @@ def facts_to_keep(context: Any, limit: int = 6) -> list[str]:
     if not isinstance(context, dict):
         return []
     facts: list[str] = []
+    # Where the player is, first (Stell, 2026-10-24: "the story should be told where the player is,
+    # fix the drift"). The player_is_in field in the place view was there and ignored: the combined
+    # live replay's T4 'i search the dead ghoul' in the subway tunnel was written in "the clinic's
+    # emergency lanterns" with the clinic's medic. A fact here is held like the hour.
+    here = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    here_name = str(here.get("name") or "").strip()
+    if here_name:
+        from app.prompts import _player_is_in
+
+        where = _player_is_in(context, here_name, str(here.get("code") or "").strip())
+        if where:
+            facts.append(f"You are in {where}")
     clock = context.get("world_time")
     if isinstance(clock, dict) and clock.get("hour") is not None:
         try:
@@ -1837,6 +1849,41 @@ def facts_to_keep(context: Any, limit: int = 6) -> list[str]:
             hours = str(place.get("hours") or "").strip()
             facts.append(f"{label[0].upper()}{label[1:]} is closed" + (f"; its hours are {hours}." if hours else "."))
     return facts
+
+
+def drop_fact_echo_opening(narration: str, facts: list[str]) -> tuple[str, list[str]]:
+    """The prose without the opening sentences that copy a facts_to_keep entry word for word.
+
+    A narrow repair of one shape (drift eval: 'You are in Radiation Fenced Sanctuary [[L1]]. It is
+    morning, 08:12. ...' opened a narration): the packet's own fact read back as prose. Only the
+    leading sentences, only an exact copy (with or without its [[code]]), and never the whole scene.
+    Returns (text, dropped sentences).
+    """
+    from app.narration_pipeline import _sentence_key, split_sentences
+
+    text = str(narration or "")
+
+    def key(sentence: str) -> str:
+        return _sentence_key(re.sub(r"\s*\[\[[^\]]*\]\]", "", str(sentence or "")))
+
+    wanted = {key(f) for f in facts or [] if key(f)}
+    if not wanted or not text.strip():
+        return text, []
+    first_para, sep, rest = text.lstrip().partition("\n\n")
+    dropped: list[str] = []
+    for sentence in split_sentences(first_para):
+        if key(sentence) not in wanted:
+            break
+        dropped.append(sentence)
+    if not dropped:
+        return text, []
+    head = first_para
+    for sentence in dropped:
+        head = head[head.find(sentence) + len(sentence):] if sentence in head else head
+    remaining = (head.strip() + ("\n\n" + rest if sep else "")).strip()
+    if not remaining:
+        return text, []
+    return remaining, dropped
 
 
 def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
