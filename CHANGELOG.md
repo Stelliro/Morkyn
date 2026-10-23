@@ -31,6 +31,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - [CLAUDE] The Linux window pack is built on PySide6 (LGPL-3.0) instead of PyQt6 (GPL-3.0): the packs are published and the game imports them into its own process (Stell, 2026-10-23: swap to non-GPL before uploading). - `packaging/build_packs.py`
 
 ### Fixed
+One roll decides an attack (#129): the combat math's hit or miss now follows the attack check rolled on the same person. In integ-r4 T3 the check rolled a critical success, the combat rolled a miss, and the prose wrote the miss.
+An attack the scene never shows (its target named nowhere in the final prose) gets the roll's own outcome line ('Your shot hits Vasilis [[B]].') and the turn summary follows it. No model ask, nothing cut.
+A turn whose line asks for no travel and whose rolled attack was aimed at someone in the room no longer moves the player to where drifted prose ended. Real travel still follows the prose.
+The narrator is told a roll was for 'i shoot Dr. Vasilis', no longer 'i shoot Dr.'.
 Hermes 3 op shapes are read as the op form: a field label quoted as its own part ('NPC_NEW: "NAME" "Theo" "ROLE" ...') is the label, not part of the name; an op whose only value is None, null, N/A or nothing ('MOVE: None', 'EVENT: None') is no op and is logged, so no place, event, item or quest called None is made (#163)
 A title before a name is the same person: 'Dr. Theo' resolves to the known Theo and the other way round, and 'Dr. Theo, the keeper' no longer adds a second Theo (#163)
 Smaller op-form repairs: a NAME label inside a giver or lead, single quotes around a whole part, 'Name; QTY: 2' on items, a bare 'name:' before a skill name, and a journal line with only its kind (#163, #28 class)
