@@ -136,6 +136,17 @@ belong to, with the date).
 
 ## Design decisions
 
+- **No GPL in published packs** (2026-10-23). Mørkyn is PolyForm Noncommercial and imports the
+  runtime packs into its own process, so a pack uploaded to the release carries no GPL code:
+  the Linux window is PySide6 (LGPL), not PyQt6. Piper (piper-tts 1.8.0, and espeak-ng inside
+  every Piper) is GPL-3.0, so the speech pack is not uploaded until that is solved. Check each
+  pack's dist-info licenses before an upload.
+- **Linux: the game runs in a terminal you can close** (2026-10-23): "we just need a terminal
+  we can close to ensure that the morkyn game is closed completely". The `morkyn` script opens
+  a terminal when started without one (the menu's `Terminal=true` is up to each desktop, so it
+  is not relied on). Cleaner
+  closing comes later.
+
 - **Narrator, interpreter, engine** (2026-10-23, planned; Stell's fix for prose and state
   disagreeing): the **narrator** only describes; it "cant make anything happen". The
   **interpreter** (Stell's name for it: not "translator") reads the player's line (what was

@@ -151,8 +151,9 @@ add-on pack (below), built by the packs job.
   RTLD_GLOBAL, before llama_cpp is imported. Checked on Pop!_OS 24.04 without a CUDA toolkit:
   the packaged app ran Hermes 3 8B on the RTX 4070 Ti at a 16K context.
 - Linux window (Stell, 2026-10-23, Pop!_OS: "it doesnt have a standalone application on
-  linux"): the `qt-window` add-on pack, `pywebview[qt]` (PyQt6 + Qt WebEngine 6.11, all pip
-  wheels, nothing from the distribution; 203 MB zipped, about 530 MB unpacked), built with
+  linux"): the `qt-window` add-on pack, `pywebview[pyside6]` (PySide6 + Qt WebEngine 6.12,
+  LGPL-3.0; PyQt6 is GPL-3.0 and the packs are published, so no; all pip wheels, nothing from
+  the distribution; 253 MB zipped), built with
   `packaging/build_packs.py window`. It is a pack, not part of the build, like every heavy
   dependency. A packaged Linux start that wants the window and cannot import pywebview fetches
   it (`runtime_packs.auto_install_window_if_needed`) and opens the browser that once; Settings →

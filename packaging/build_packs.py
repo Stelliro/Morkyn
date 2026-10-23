@@ -58,8 +58,10 @@ def python_tag() -> str:
 
 # Add-on packs (app/runtime_packs.CATALOG kind "addon"): the local speech engine
 # for the packaged app, which has no pip (Stell, 2026-10-22), and the Linux
-# window, pywebview on Qt WebEngine (2026-10-23; Linux only).
-ADDONS = {"piper": ("piper-speech", "piper-tts==1.8.0"), "window": ("qt-window", "pywebview[qt]==6.2.1")}
+# window, pywebview on Qt WebEngine (2026-10-23; Linux only). The window is on
+# PySide6 (LGPL), not PyQt6 (GPL-3.0): the packs are published and the game
+# imports them into its own process (Stell, 2026-10-23: no GPL in the packs).
+ADDONS = {"piper": ("piper-speech", "piper-tts==1.8.0"), "window": ("qt-window", "pywebview[pyside6]==6.2.1")}
 
 
 def build(acc: str, out_dir: Path) -> Path:
