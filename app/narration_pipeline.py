@@ -706,7 +706,17 @@ def jaccard(a: set[str], b: set[str]) -> float:
 # House idiom, matching app/world.py and app/setup_composer.py. It deliberately
 # under-splits a sentence that ends inside a quotation mark ('He said "go."'),
 # which costs a detection now and then and never mangles the prose.
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# A title before a name is not a sentence end: "Dr. Beth" split into "Dr."
+# and "Beth grabs a scalpel ...", the repeat pass dropped the second half and
+# "With surprising speed for someone her age, Dr." shipped (#29, cc87dd29
+# T13). Orthography, not meaning: the abbreviations that only ever stand
+# before a name.
+_TITLE_ABBREVIATIONS = (
+    "Dr", "Mr", "Mrs", "Ms", "Mx", "Prof", "Capt", "Lt", "Sgt", "Cpl", "Pvt", "Col", "Gen", "Adm",
+    "Cmdr", "Rev", "Fr", "Insp", "Det", "Supt", "Gov", "Sen", "Rep", "Hon", "Mt", "Ft", "St",
+)
+NOT_AFTER_TITLE = "".join(rf"(?<!\b{t}\.)" for t in _TITLE_ABBREVIATIONS)
+_SENTENCE_SPLIT_RE = re.compile(NOT_AFTER_TITLE + r"(?<=[.!?])\s+")
 _SENTENCE_NORM_RE = re.compile(r"[^a-z0-9 ]+")
 _BLOCK_SPLIT_RE = re.compile(r"\n\s*\n")
 
@@ -966,7 +976,8 @@ def _speech_runs(text: str) -> set[str]:
 # Unlike split_sentences, also splits after a closing quote ('...soon." She
 # turns'), so a spoken line and the narration after it are separate units.
 # A lowercase word after the quote is its attribution ('?" she asks') and stays.
-_UNIT_SPLIT_RE = re.compile(r'(?<=[.!?])\s+|(?<=[.!?]["\u201d])\s+(?=[A-Z"\u201c])')
+_UNIT_SPLIT_RE = re.compile(NOT_AFTER_TITLE + r'(?<=[.!?])\s+|(?<=[.!?]["\u201d])\s+(?=[A-Z"\u201c])')
+UNIT_SPLIT_RE = _UNIT_SPLIT_RE
 
 
 def speech_units(block: str) -> list[str]:
@@ -1147,6 +1158,95 @@ def drop_speech_said_before(
     return kept_paragraphs, dropped
 
 
+# A sentence of a spoken line said again in a later scene (#78, cc87dd29 T8/T9).
+# Compared sentence by sentence, on words in order, so a line stitched from
+# two earlier lines and a one-word reskin ('enemy' -> 'hostile') both count.
+LINE_REPEAT_MIN_WORDS = 4
+LINE_REPEAT_RATIO = 0.8
+LINE_REPEAT_SHARE = 0.6
+
+
+def _said_sentences(text: str) -> list[str]:
+    return [s for s in (_speech_key(p) for p in _SENTENCE_SPLIT_RE.split(str(text or ""))) if s]
+
+
+def _sentence_said_before(key: str, earlier: list[list[str]]) -> bool:
+    from difflib import SequenceMatcher
+
+    words = key.split()
+    if len(words) < LINE_REPEAT_MIN_WORDS:
+        return False
+    for prev in earlier:
+        if abs(len(prev) - len(words)) > max(3, len(words) // 2):
+            continue
+        if prev == words or SequenceMatcher(None, prev, words, autojunk=False).ratio() >= LINE_REPEAT_RATIO:
+            return True
+    return False
+
+
+def drop_lines_from_earlier_scenes(
+    paragraphs: list[str], earlier_speech: list[str], player_input: str = ""
+) -> tuple[list[str], list[str]]:
+    """
+    Remove spoken sentences that repeat a sentence spoken in an earlier scene,
+    whoever says them now (#78, cc87dd29: Beth's T8 and T9 lines were, word for
+    word, the line T7's prose had given the player).
+
+    drop_speech_said_before compares whole lines and, by design, one person's
+    line with that person's own; a reply rebuilt from two earlier lines and a
+    line moved to another speaker both got through. Here each sentence inside
+    a quotation is compared with each sentence of the earlier scenes' lines.
+    A quotation that is mostly repeats goes whole with its unit; one that only
+    holds a repeated sentence of its own loses that sentence and keeps the
+    rest. The player's own typed words are never dropped. Short sentences
+    ('What the hell?') may echo.
+    """
+    quotes = player_quotes(player_input)
+    earlier = [s.split() for line in earlier_speech or () for s in _said_sentences(line)]
+    earlier = [w for w in earlier if len(w) >= LINE_REPEAT_MIN_WORDS]
+    if not earlier:
+        return list(paragraphs), []
+    out: list[str] = []
+    dropped: list[str] = []
+    for para in paragraphs:
+        kept_blocks: list[str] = []
+        for block in _BLOCK_SPLIT_RE.split(str(para or "")):
+            kept_units: list[str] = []
+            for unit in speech_units(block):
+                spans = quoted_spans(unit)
+                if not spans or _quote_marks(unit) % 2 or any(_is_player_line(s, quotes) for s in spans):
+                    kept_units.append(unit)
+                    continue
+                pieces = [(p, _speech_key(p)) for span in spans for p in _SENTENCE_SPLIT_RE.split(span) if p.strip()]
+                said = [p for p, key in pieces if _sentence_said_before(key, earlier)]
+                if not said:
+                    kept_units.append(unit)
+                    continue
+                total = sum(len(key.split()) for _p, key in pieces) or 1
+                repeated = sum(len(_speech_key(p).split()) for p in said)
+                if repeated >= LINE_REPEAT_SHARE * total:
+                    dropped.append(unit)
+                    continue
+                # Only part of it was said before: those sentences go from
+                # inside the quotation, the new words stay.
+                trimmed = unit
+                for p in said:
+                    trimmed = re.sub(r"\s*" + re.escape(p.strip()), "", trimmed, count=1)
+                trimmed = re.sub(r'(["“])\s+', r"\1", trimmed)
+                if quoted_spans(trimmed) and _quote_marks(trimmed) % 2 == 0:
+                    dropped.extend(p.strip() for p in said)
+                    kept_units.append(trimmed)
+                else:
+                    kept_units.append(unit)
+            block_text = " ".join(kept_units).strip()
+            if block_text:
+                kept_blocks.append(block_text)
+        out.append("\n\n".join(kept_blocks).strip())
+    if dropped and not any(p.strip() for p in out):
+        return list(paragraphs), []
+    return out, dropped
+
+
 def drop_untold_name(text: str, names: list[str]) -> tuple[str, list[str]]:
     """
     Take the player's name out of one quoted line said by someone who was never
@@ -1288,7 +1388,11 @@ def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]
         # Paragraph breaks inside a single segment are structure, not noise.
         for block in _BLOCK_SPLIT_RE.split(str(para or "")):
             kept_sentences: list[str] = []
-            for sentence in split_sentences(block):
+            # Pieces end at a closing quote too, so the narration after a line
+            # is judged apart from it (#29, cc87dd29 T13: 'deadly intentions
+            # here today?" With surprising speed ...' went whole and left the
+            # quotation open).
+            for sentence in _echo_pieces(block):
                 key = _sentence_key(sentence)
                 if len(key) < REPEAT_MIN_CHARS:
                     # Short lines are exempt from the near-match tests, not from
@@ -1303,6 +1407,11 @@ def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]
                         continue
                     if fragment and len(key.split()) >= 2:
                         seen_keys.add(key)
+                    kept_sentences.append(sentence)
+                    continue
+                if _quote_marks(sentence) % 2:
+                    # Part of a quotation that runs over sentences: dropping
+                    # it would leave half a line. The speech passes judge it.
                     kept_sentences.append(sentence)
                     continue
                 if key in seen_keys:
@@ -1855,7 +1964,13 @@ def _voices_the_player(line: str, own_stems: set[str]) -> bool:
     return len(said & own_stems) * 2 >= len(said)
 
 
-def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tuple[list[str], list[str]]:
+def drop_invented_player_speech(
+    paragraphs: list[str],
+    player_input: str,
+    *,
+    says: Callable[[str], "bool | None"] | None = None,
+    voices: Callable[[str, str], "bool | None"] | None = None,
+) -> tuple[list[str], list[str]]:
     """
     Remove quotations the narration gives the player when the player did not
     say them (playtest #30).
@@ -1874,7 +1989,18 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     became five invented lines of haggling). For any other indirect speech
     the first voiced line stays too. Whole units go, so no half quote is left.
     Returns (paragraphs, dropped) with the input's length.
+
+    ``says`` and ``voices`` are the small asks of app/player_agency (#30,
+    cc87dd29 T7 and T14). ``says(unit)``: a quotation with "you" right beside
+    it whose tag word the speech-verb list does not hold ('"You're not the
+    enemy," you confirm'); yes makes it the player's line. ``voices(own,
+    line)``: on a turn that asked to speak without the words, whether a line
+    with no words of the request in it is what the player chose to say; it
+    takes the place of the length rule ('"I'm looking for work if you've got
+    something," you add' for "i say hi"). An unclear answer keeps the old rule.
     """
+    from app.player_agency import you_beside_quote
+
     raw = str(player_input or "")
     # The opening and a Continue are turns the player has not acted in: every
     # line the prose gives them is invented (7B run 10, T0: '"Good morn," you
@@ -2013,6 +2139,14 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                 tagged = bool(_YOU_SAID_RE.search(outside)) and not _OTHER_SAID_RE.search(
                     _YOU_SAID_RE.sub(" ", outside)
                 )
+                if (
+                    not tagged
+                    and says is not None
+                    and not _OTHER_SAID_RE.search(outside)
+                    and you_beside_quote(unit)
+                    and not all(_words_from_player(span, own, quotes) for span in spans)
+                ):
+                    tagged = bool(says(unit))
                 # For a voiced request only tagged lines count: the dialogue-paragraph
                 # guess read Roger's appraisal as the player's (run 5, T20).
                 if answering and not tagged and not _OTHER_SAID_RE.search(outside):
@@ -2083,6 +2217,14 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                         # he'll take" (8B run 48, T1).
                         voicing_kept = True
                         kept_units.append(unit)
+                    elif voiced and not voicing_kept and voices is not None and (
+                        heard := voices(own, " ".join(spans))
+                    ) is not None:
+                        if heard:
+                            voicing_kept = True
+                            kept_units.append(unit)
+                        else:
+                            dropped.append(unit)
                     elif voiced and not voicing_kept and (
                         ("?" in " ".join(spans)) if asked
                         # A told message voiced in other words is kept only when
