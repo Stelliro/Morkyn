@@ -4628,6 +4628,17 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             # invents one -- which is how an apothecary appeared in a hamlet.
             current_location = dict(current_location)
             inside_id = int(current_location.get("parent_id") or 0)
+            # The places this one stands in, nearest first (the narrator's
+            # "player_is_in" line, #33): the context's place list is a slice.
+            by_id = {int(loc["id"]): loc for loc in locations}
+            stands_in: list[dict[str, str]] = []
+            up = inside_id
+            while up and up in by_id and up != int(current_location["id"]) and len(stands_in) < 3:
+                if any(p["code"] == str(by_id[up].get("code") or "") for p in stands_in):
+                    break
+                stands_in.append({"code": str(by_id[up].get("code") or ""), "name": str(by_id[up].get("name") or "")})
+                up = int(by_id[up].get("parent_id") or 0)
+            current_location["stands_in"] = stands_in
             current_location["venues_here"] = venues_at(conn, int(current_location["id"]))
             if inside_id:
                 parent = next((loc for loc in locations if loc["id"] == inside_id), None)
@@ -4989,6 +5000,26 @@ def _cast_off_minor_faces(conn, cast: dict[str, Any]) -> list[str]:
     return gone
 
 
+def after_player_leaves(narration: str) -> str:
+    """The prose from the sentence the player leaves in (that sentence too when they go with someone).
+
+    Named only up to the sentence the player leaves in is left behind: "You
+    thank Elenya [[B]] and step out of the clerk's booth" walked the harbour
+    clerk out to the wreck on the flats, where she watched for two turns (8B
+    run 152e, T7-T9). Only the prose after the leaving puts someone here.
+    With no leaving, the whole prose.
+    """
+    text = re.sub(r"\s+", " ", str(narration or ""))
+    sentences = re.split(r"(?<=[.!?])[\"”']?\s+", text)
+    for index, sentence in enumerate(sentences):
+        if _PLAYER_DEPARTS_RE.search(_unspoken(sentence)) and not _PERFECT_TENSE_RE.search(sentence):
+            # "You follow Rafe [[B]] down to the boat": the leaving brings them.
+            together = re.search(r"\b(?:follow\w*|with|alongside|beside|together|lead\w*|led|behind\s+you|at\s+your\s+side)\b",
+                                 _unspoken(sentence), re.I)
+            return " ".join(sentences[index if together else index + 1:])
+    return text
+
+
 def _move_cast_here(conn, cast: dict[str, Any], narration: str) -> list[str]:
     """CAST present / interacting is the GM saying who is in the scene
     (Saltmarrow #105): a person cast present whose record sits elsewhere, and
@@ -5003,18 +5034,7 @@ def _move_cast_here(conn, cast: dict[str, Any], narration: str) -> list[str]:
     if not here_id:
         return []
     off = {re.sub(r"^\[+|\]+$", "", str(c).strip()).upper() for c in cast.get("off") or []}
-    # Named only up to the sentence the player leaves in is left behind: "You
-    # thank Elenya [[B]] and step out of the clerk's booth" walked the harbour
-    # clerk out to the wreck on the flats, where she watched for two turns (8B
-    # run 152e, T7-T9). Only the prose after the leaving puts someone here.
-    sentences = re.split(r"(?<=[.!?])[\"”']?\s+", text)
-    for index, sentence in enumerate(sentences):
-        if _PLAYER_DEPARTS_RE.search(_unspoken(sentence)) and not _PERFECT_TENSE_RE.search(sentence):
-            # "You follow Rafe [[B]] down to the boat": the leaving brings them.
-            together = re.search(r"\b(?:follow\w*|with|alongside|beside|together|lead\w*|led|behind\s+you|at\s+your\s+side)\b",
-                                 _unspoken(sentence), re.I)
-            text = " ".join(sentences[index if together else index + 1:])
-            break
+    text = after_player_leaves(text)
     moved: list[str] = []
     for bucket in ("present", "interacting"):
         for code in cast.get(bucket) or []:
@@ -10668,11 +10688,19 @@ def _line_names_place(line: str, words: list[str]) -> bool:
         # The whole word, plural or possessive: "dock" is not named by "the old
         # dockyard", which walked the player to The Dock (8B run 154, T7).
         return bool(re.search(rf"\b{re.escape(words[0])}(?:s|es|['’]s|s['’])?\b", line))
+    return place_pair_span(line, words) is not None
+
+
+def place_pair_span(line: str, words: list[str]) -> tuple[int, int] | None:
+    """Where a lower-cased line names a place by its last two words side by side (_line_names_place)."""
+    if len(words) < 2:
+        return None
     # Filler words between them still name it: "the drowned lower district"
     # for "Drowned Lower District", whose words skip "lower" (8B run 17, T1).
     filler = "|".join(sorted(_PLACE_FILLER_WORDS, key=len, reverse=True))
     pair = rf"\b{re.escape(words[-2])}(?:['’]s)?[\s-]+(?:(?:{filler})[\s-]+){{0,2}}{re.escape(words[-1])}"
-    return bool(re.search(pair, line))
+    found = re.search(pair, line)
+    return found.span() if found else None
 
 
 _REACH_WORDS_RE = re.compile(r"\b(?:into|inside|in\s+through|up\s+to|out\s+to|reach\w*|arriv\w*)\b", re.IGNORECASE)
@@ -15397,6 +15425,7 @@ def _file_people_at_unshown_places(conn, npcs: list[Any], narration: str, player
         if town_row is None:
             return
         npc[key] = str(town_row["code"] or "")
+        npc["_spoken_of"] = True  # someone talked about, not met: not filed with the player (app/whereabouts.py)
         turn_ledger.note("place", "place_only_spoken_of", place=ref, person=str(npc.get("name") or npc.get("code") or ""))
 
 
@@ -24572,6 +24601,11 @@ def apply_turn(
             max_npc_before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
         except Exception:
             max_npc_before = 0
+        # Where the player stood when the turn began: someone left there is not
+        # filed with the player after the move (app/whereabouts.py, #33).
+        from app import whereabouts
+
+        here_at_start = whereabouts.here_id(conn)
         # Places that exist before this turn, and the move the model asked for:
         # a place made under that move's name is not kept if the move is not.
         try:
@@ -25328,6 +25362,13 @@ def apply_turn(
         # reads. Its events are checked against the records, applied or
         # refused, before the summary and the scene cast, so someone who died
         # this turn is not left present.
+        # First, the people this turn introduced are filed where the player
+        # now is (#33): the ops ran before the move. The interpreter then
+        # reads the right roster; someone filed before this turn (a sketch
+        # from an earlier turn too) moves only on its yes, below.
+        whereabouts.file_new_people(
+            conn, turn, max_npc_before, narration, result.get("npcs"), here_at_start=here_at_start
+        )
         pending = result.pop("_interpreter_pending", None)
         if isinstance(pending, dict):
             try:
@@ -25361,6 +25402,11 @@ def apply_turn(
             carry_bodies(conn, turn)
         except Exception as exc:
             turn_ledger.note("interpreter", "carry_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        # Someone on record elsewhere whom the scene shows acting with the
+        # player is here now (#33; the interpreter's hold ask, app/whereabouts.py).
+        whereabouts.file_shown_people(
+            conn, turn, result.pop("_shown_with_player", None) or [], _narration_text(result), here_at_start=here_at_start
+        )
         _write_turn_summary(conn, turn, result, player_input)
         _write_model_usage(conn, turn, result)
         _write_verification_memory(conn, turn, result, prompt_context, used_fallback)
