@@ -151,3 +151,21 @@ Body outcomes as the engine reads them: 76.4% with the first wordings, 95.8% wit
 The reviewer's fear (a yes-leaning 8B filing "Ping 1" and "Counter 1" as hostile figures) was the wrong way round: on these asks Hermes did not lean yes, it failed to answer, so the branch as written filed no figures at all, real or phantom. The replacement pair: 89%, 0 false files.
 
 Lessons: a question that offers a choice is not a yes/no question, and a 4-token cap cuts the 8B off while it restates the question; "Answer yes or no." at the end does most of the work for a yes/no; a "left behind" or "carrying" word in a question is read loosely, so ask for the physical fact ("walked away from", "in the arms or over the shoulder", "in a grave").
+
+## Round 9: "did the player's line ask to go?" (the drift re-draft's gate, F184)
+
+Hermes 3 8B, temperature 0, 4 tokens, the player's line only. 42 moving lines (the reviewers' corpora,
+including the gerund and "my way out" lines the engine rule missed) and 33 staying lines (attack,
+search, talk, trade, the recorded drift turns).
+
+| Ask | Moves read right | Stays read right |
+|---|---|---|
+| `Does the player go to another place?` | 35/42 (missed: "walk over to the bar", "go up to my room", "limp back to camp" x2, "attack ... while backing out of the room", "attack while advancing to the gate", "ask Mara to take me to the clinic") | 27/33 (yes on "i search the dead ghoul", "i shoot Dr. Vasilis", "tell the guard I'm going to the docks later") |
+| `Does the player stay where they are?` | 40/42 | 18/33 (no on most attacks: "i shoot the closest ghoul", "I punch the guard") |
+
+Verdict: neither ask can gate a re-draft. A missed move re-drafts the player back in place, and the
+"go" ask misses 1 in 6. Stacking both asks with the engine rule stops every wrong re-draft in this
+corpus but also skips all three recorded true drifts. The re-draft stays off. The drift goes to
+the ask-to-move mechanism (#46/#76, Stell 2026-10-24) instead: when the scene ends somewhere the
+line did not go, offer the move. A misread there costs the player one question, not their move.
+Script and replies: scratchpad live-eval-9/run.py, results.json.
