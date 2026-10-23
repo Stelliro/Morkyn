@@ -23,6 +23,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. The next push is `0.11.1` (Stell, 2026-10-22: "later changelogs would be 0.11.1^"), then `0.11.2` and on.
 
+### Added
+- [CLAUDE] One-click local models (Stell, 2026-10-23: "is it possible to add a one click install to a good 8b model?"). LLM details has a Local models panel: Hermes 3 (Llama 3.1 8B), recommended and Stell's pick ("expecting less and getting more is our goal anyway"), Llama 3.1 8B Instruct, and Qwen3 8B, the model the 8B runs were measured on, so the baseline is one click away. Each has a fixed Hugging Face file, size and SHA-256. Install downloads into MLE's folder with progress, resumes a cut download (HTTP Range; starts over if the server ignores it), checks the SHA-256 and only then renames the file into place, so a broken download never loads as a model; it refuses to start without room. Use sets the engine to MLE with that file (launcher prefs, the live env, the model settings, and the Gatehouse follows). Hermes 3 was downloaded through it and loaded on the RTX 4070 Ti at a 16K context in the packaged app: 3.3 s for a short reply. No 8B run on it yet. - `app/model_catalog.py`, `app/main.py` (/api/models/*), `static/app.js` (renderModelCatalog), `tests/test_model_catalog.py`
+
+### Fixed
+- [CLAUDE] The Linux CUDA engine pack works on a desktop with only the NVIDIA driver. llama-cpp-python's Linux CUDA wheel links libcudart.so.12 and cuBLAS without carrying them (the Windows wheel carries its DLLs), so on Pop!_OS it failed with "libcudart.so.12: cannot open shared object file". The Linux CUDA pack now carries NVIDIA's own wheels of the CUDA 12.4 runtime and cuBLAS (1.6 GB zipped), and activating a pack loads them first so libllama.so finds them. - `packaging/build_packs.py`, `app/runtime_packs.py`
+
 ## [0.11.0] - 2026-10-23
 
 > The batch after the `0.10.0-dev` builds. The five mechanisms for the Qwen3 8B fault families (people pencilled in, places with insides, jobs filed as said with an engine pay ledger, pronoun pins that repair less, acts read from grammar) and the energy replay; API keys and settings saved per user (encrypted on Windows); Linux packages (.deb, .rpm, AppImage, AUR, a user install in the tarball) and the game's own window on Linux; settings that do nothing under another are greyed; the Gatehouse follows LLM details.

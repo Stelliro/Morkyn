@@ -13717,6 +13717,7 @@ function renderModelForm() {
         <span>MLE model</span>
         <input name="mle_model" value="${escapeHtml(config.mle_model || "qwen3:8b")}" maxlength="200" />
       </label>
+      <div class="modelCatalog" data-model-catalog>${modelCatalogHtml}</div>
       ${renderModelLimitsFields(config)}
       ${renderThemeAdapterMapFields(config)}
       <div class="modelButtonRow">
@@ -15940,6 +15941,7 @@ async function openModelModal(options = {}) {
   }
   modelModalContent.innerHTML = renderModelForm();
   decorateFunctionHelp(modelModalContent);
+  refreshModelCatalog().catch(() => {});
   // Install checklist loads when Images section is shown (roots may be empty).
   refreshImageInstallablesPanel(modelModalContent).catch(() => {});
 }
@@ -23683,6 +23685,94 @@ function fmtBytes(n) {
   if (v >= 1 << 20) return `${Math.round(v / (1 << 20))} MB`;
   return `${Math.round(v / 1024)} KB`;
 }
+
+// One-click local models (app/model_catalog.py). The LLM form is re-rendered
+// from several places, so the panel's last HTML is kept and drawn with it.
+let modelCatalogHtml = "";
+let modelCatalogTimer = 0;
+
+function renderModelCatalog(data) {
+  const models = Array.isArray(data?.models) ? data.models : [];
+  if (!models.length) return "";
+  const rows = models.map((m) => {
+    const p = m.progress || {};
+    const busy = p.state === "downloading" || p.state === "checking";
+    let state = "";
+    if (m.in_use) state = "<span class='good'>in use</span>";
+    else if (m.installed) state = "<span class='good'>installed</span>";
+    else if (busy) state = `<span class='muted'>${p.state === "checking" ? "checking" : `${Math.round((100 * (p.bytes || 0)) / (p.total || m.size || 1))}%`}</span>`;
+    else if (p.state === "failed") state = `<span class='bad'>${escapeHtml(p.error || "failed")}</span>`;
+    else state = `<span class='muted'>${fmtBytes(m.size)}${m.partial ? `, ${fmtBytes(m.partial)} so far` : ""}</span>`;
+    let action = "";
+    if (m.installed) {
+      action = m.in_use ? "" : `<button type="button" class="secondaryButton" data-model-use="${escapeHtml(m.id)}">Use</button>`;
+      action += ` <button type="button" class="secondaryButton" data-model-remove="${escapeHtml(m.id)}">Remove</button>`;
+    } else if (!busy) {
+      action = `<button type="button" class="secondaryButton" data-model-install="${escapeHtml(m.id)}">${m.partial ? "Resume" : "Install"}</button>`;
+    }
+    const title = `${escapeHtml(m.title)}${m.recommended ? " <span class='good'>recommended</span>" : ""}`;
+    return `<tr><td><strong>${title}</strong><br><span class="muted">${escapeHtml(m.summary || "")}</span></td><td>${state}</td><td>${action}</td></tr>`;
+  });
+  return `
+    <p class="empty">Local models for MLE, downloaded into <code>${escapeHtml(data.folder || "data/mle-models")}</code> (${fmtBytes(data.free)} free). Use one and the engine switches to it.</p>
+    <table class="versionsTable">${rows.join("")}</table>
+    <p class="empty" data-model-catalog-log></p>`;
+}
+
+async function refreshModelCatalog() {
+  const res = await fetch("/api/models/catalog", { cache: "no-store" });
+  const data = await res.json();
+  modelCatalogHtml = renderModelCatalog(data);
+  document.querySelectorAll("[data-model-catalog]").forEach((box) => {
+    box.innerHTML = modelCatalogHtml;
+  });
+  clearTimeout(modelCatalogTimer);
+  const busy = (data.models || []).some((m) => ["downloading", "checking"].includes(m.progress?.state));
+  if (busy) modelCatalogTimer = setTimeout(() => refreshModelCatalog().catch(() => {}), 1500);
+  return data;
+}
+
+document.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest("[data-model-install], [data-model-use], [data-model-remove]") : null;
+  if (!button) return;
+  const [action, id] = button.dataset.modelInstall
+    ? ["install", button.dataset.modelInstall]
+    : button.dataset.modelUse
+      ? ["use", button.dataset.modelUse]
+      : ["remove", button.dataset.modelRemove];
+  // The panel is redrawn after each action, so the message goes to the live one.
+  const say = (html) => {
+    document.querySelectorAll("[data-model-catalog-log]").forEach((log) => {
+      log.innerHTML = html;
+    });
+  };
+  button.disabled = true;
+  fetch(`/api/models/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
+    .then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || res.statusText);
+      if (action === "use") {
+        // The engine and the MLE model changed: the Gatehouse and this form follow.
+        fetchLauncherPrefs().catch(() => {});
+        const field = button.closest("form")?.elements?.mle_model;
+        const provider = button.closest("form")?.elements?.provider;
+        await refreshModelCatalog();
+        const now = (await fetch("/api/model-config").then((r) => r.json()).catch(() => ({}))) || {};
+        if (field && now.mle_model) field.value = now.mle_model;
+        if (provider && now.provider) {
+          provider.value = now.provider;
+          provider.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      } else {
+        await refreshModelCatalog();
+      }
+      say(`<span class="good">${escapeHtml(data.note || (action === "install" ? "Downloading…" : "Done."))}</span>`);
+    })
+    .catch((error) => say(`<span class="bad">${escapeHtml(error.message || String(error))}</span>`))
+    .finally(() => {
+      button.disabled = false;
+    });
+});
 
 function renderVersionsList(v) {
   const rows = Array.isArray(v.releases) ? v.releases : [];
