@@ -1091,45 +1091,139 @@ def _beat_before_hook(text: str, beat: str) -> str:
     return _append_beat(body, beat)
 
 
-def show_unnamed_attacks(
-    text: str, turn_result: dict[str, Any] | None, match: Matcher, report: dict[str, Any]
-) -> str:
-    """The attack the dice decided, put in a scene that never names its target (#129, both ways).
+def attacked_row(
+    check: dict[str, Any], records: dict[str, Any] | None, match: Matcher
+) -> dict[str, Any] | None:
+    """The person a rolled attack was at: its "attack" record, else the one the player's line names now.
 
-    A rolled attack check carries the person it was aimed at (its "attack"
-    record, app/attack_intent.py). When the final prose names that person
-    nowhere, by code or by a name only they have (the Matcher), the prose
-    ignored the act (integ-r4 T3: 'i shoot Dr. Vasilis', a critical success,
-    became a shooting test with someone else). The engine adds the roll's own
-    outcome line ("Your shot hits Vasilis [[B]].") and keeps the prose. A
-    prose that names the target is left alone: whether it shows the right
-    outcome is not decided here.
+    A check with no target (merge1 T4, F186: 'i shoot the closest ghoul' rolled
+    before the ghouls were on the roster) is matched after the draft, from the
+    records only: a living person here the line names whole (one, or none), the
+    check's own opposition by name, else the numbered figure whose kind the
+    line names, the lowest number first ("the closest ghoul" is Ghoul 1).
+    """
+    from app.attack_intent import attack_target
+
+    code = attack_target(check)
+    if code:
+        attack = check.get("attack") if isinstance(check.get("attack"), dict) else {}
+        return next((r for r in match.people if str(r.get("code") or "").upper() == code), None) or {
+            "code": code, "name": clean_name(attack.get("name")),
+        }
+    skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+    if str(skill.get("code") or check.get("skill_code") or "") not in COMBAT_SKILLS:
+        return None
+    line = str((records or {}).get("player_line") or "")
+    if not line.strip():
+        return None
+    here = int((records or {}).get("here_id") or 0)
+    living = [
+        r for r in match.people
+        if str(r.get("code") or "").strip() and not is_dead(r)
+        and (not here or not int(r.get("location_id") or 0) or int(r.get("location_id") or 0) == here)
+    ]
+    whole = [r for r in living if line_names(line, r)]
+    # "Theo" inside "Dr. Theo" is the longer name's mention (as the Matcher reads names).
+    whole = [r for r in whole if not any(o is not r and _key(r) != _key(o) and _key(r) in _key(o) for o in whole)]
+    if len(whole) == 1:
+        return whole[0]
+    if len(whole) > 1:
+        return None
+    opposition = check.get("opposition") if isinstance(check.get("opposition"), dict) else {}
+    opposed = [r for r in living if _key(r) and _key(r) == _key({"name": clean_name(opposition.get("name"))})]
+    if len(opposed) == 1:
+        return opposed[0]
+    from app.unnamed import numbered_name
+
+    kinds = []
+    for row in living:
+        _name, kind = numbered_name(row)
+        if kind and re.search(rf"(?<![A-Za-z]){re.escape(kind.lower())}s?(?![A-Za-z])", line, re.I):
+            kinds.append(row)
+    kinds.sort(key=lambda r: int(r.get("kind_number") or 0))
+    return kinds[0] if kinds else None
+
+
+def attack_weapon(check: dict[str, Any], turn_result: dict[str, Any] | None) -> str:
+    """The weapon the attack was made with: the check's own, else the combat's player weapon ("" bare-handed)."""
+    named = str(check.get("weapon_or_tool") or "").strip()
+    if named:
+        return named
+    combat = (turn_result or {}).get("_deterministic_combat") if isinstance(turn_result, dict) else None
+    attack = combat.get("player_attack") if isinstance(combat, dict) and isinstance(combat.get("player_attack"), dict) else {}
+    weapon = str(attack.get("weapon") or "").strip()
+    return "" if weapon.lower() in {"", "unarmed"} else weapon
+
+
+def show_attacks(
+    text: str,
+    turn_result: dict[str, Any] | None,
+    match: Matcher,
+    report: dict[str, Any],
+    records: dict[str, Any] | None = None,
+) -> str:
+    """The engine's result line for every rolled attack, put in where the draft leaves it out or says otherwise.
+
+    CLAUDE.md, Design decisions (2026-10-24): the roll comes first and the
+    engine writes the attack's result line from the roll and the weapon
+    (app/attack_line.py). Read by the engine, no ask: a passage that names
+    the target and states the band's outcome is left alone; one that states
+    the opposite has its one opposite sentence replaced by the line (else
+    the line goes in after it); a scene that shows no attack gets the line
+    where the attack belongs. Each becomes an "attack_beats" entry, and the
+    summary carries it.
     """
     checks = (turn_result or {}).get("skill_checks") if isinstance(turn_result, dict) else None
     if not isinstance(checks, list):
         return text
-    from app.attack_intent import attack_target, outcome_line
+    from app import attack_line
 
     done: set[str] = set()
     for check in checks:
-        code = attack_target(check)
-        if not code or code in done:
+        if not isinstance(check, dict) or check.get("natural") is None:
+            continue
+        row = attacked_row(check, records, match)
+        code = str((row or {}).get("code") or "").strip().upper()
+        if not row or not code or code in done:
+            continue
+        landed = attack_line.lands_of(check)
+        if not landed:
             continue
         done.add(code)
-        attack = check.get("attack") if isinstance(check.get("attack"), dict) else {}
-        row = next((r for r in match.people if str(r.get("code") or "").upper() == code), None) or {
-            "code": code, "name": clean_name(attack.get("name")),
-        }
-        if match.names(text, row):
-            continue
         name = called(row, prose=True)
-        beat = outcome_line(check, f"{name} [[{code}]]" if name else f"[[{code}]]")
+        beat = attack_line.line_for(check, f"{name} [[{code}]]" if name else f"[[{code}]]", attack_weapon(check, turn_result))
         if not beat:
             continue
-        text = _beat_before_hook(text, beat)
-        report.setdefault("attack_beats", []).append({"code": code, "outcome": str(check.get("outcome") or ""), "beat": beat})
-        _note("attack_not_in_prose", code=code, outcome=str(check.get("outcome") or ""), beat=beat)
+        outcome = str(check.get("outcome") or "")
+        seen = attack_line.read(text, row, landed, match)
+        entry = {"code": code, "outcome": outcome, "beat": beat, "state": seen["state"],
+                 "aimed": bool(check.get("attack")), "action": seen.get("action") or "none"}
+        if seen["state"] == "shown":
+            entry["sentence"] = seen.get("sentence", "")
+            _note("attack_shown", code=code, outcome=outcome, sentence=str(seen.get("sentence") or "")[:300])
+        elif seen.get("action") == "replaced":
+            text = attack_line.replace_span(text, seen["start"], seen["end"], beat)
+            entry["dropped"] = seen.get("sentence", "")
+            _note("attack_contradiction_replaced", code=code, outcome=outcome, beat=beat,
+                  dropped=str(seen.get("sentence") or "")[:300])
+        elif seen.get("action") == "inserted":
+            text = attack_line.insert_after(text, seen["after"], beat)
+            entry["where"] = seen.get("where") or "attack"
+            if seen["state"] == "contradicted":
+                entry["kept"] = seen.get("sentences") or []
+            _note("attack_contradiction_line_added" if seen["state"] == "contradicted" else "attack_not_in_prose",
+                  code=code, outcome=outcome, beat=beat, where=entry.get("where", ""),
+                  kept=[str(s)[:200] for s in entry.get("kept") or []])
+        else:
+            text = _beat_before_hook(text, beat)
+            entry["where"] = "end"
+            _note("attack_not_in_prose", code=code, outcome=outcome, beat=beat, where="end")
+        report.setdefault("attack_beats", []).append(entry)
     return text
+
+
+# The name the first version had (#129: only a target the prose never names).
+show_unnamed_attacks = show_attacks
 
 
 def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1160,9 +1254,9 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
             text = reconcile_refused_death(
                 text, event, attack_rolls(event, turn_result, str(records.get("player_line") or "")), ask, report, match, records.get("player_quotes") or []
             )
-        # The other way round: an attack the prose never shows its target in
-        # gets the roll's outcome line (no ask: the records and the codes).
-        text = show_unnamed_attacks(text, turn_result, match, report)
+        # The other way round: every rolled attack has the engine's result line
+        # where the prose leaves it out or says otherwise (no ask: engine reads).
+        text = show_attacks(text, turn_result, match, report, records)
         # Where the body lies when the roster has the person elsewhere than the player.
         place_bodies(text, events, records, ask, report, match)
         text, returned = hold_the_dead(text, records, ask, report, match)
@@ -1243,16 +1337,25 @@ def prose_line(text: str, player_quotes: list[str] | None = None, limit: int = 4
     return " ".join(parts)[:limit]
 
 
-def summary(events: list[dict[str, Any]], text: str, limit: int = 700, player_quotes: list[str] | None = None) -> str:
-    """The turn's summary: its events first ("Beth [[B]] died."), then what happened, from the prose.
+def summary(
+    events: list[dict[str, Any]],
+    text: str,
+    limit: int = 700,
+    player_quotes: list[str] | None = None,
+    attack_beats: list[dict[str, Any]] | None = None,
+) -> str:
+    """The turn's summary: its events first ("Beth [[B]] died."), the attacks' result lines, then the prose.
 
     A model's own summary is not used: on the 8B it invented what the prose
     never said (T7 'You apologize and leave the clinic') and contradicted it
-    (T13 'You killed Dr. Beth' while she lives).
+    (T13 'You killed Dr. Beth' while she lives). The engine's attack line
+    (show_attacks: the roll's outcome) is the summary's too, shown or added.
     """
     lines = [event_line(e) for e in events if e.get("status") != "refused"]
     lines = [line for line in lines if line]
     tail = prose_line(text, player_quotes)
+    beats = [str(b.get("beat") or "") for b in attack_beats or [] if isinstance(b, dict)]
+    lines.extend(b for b in beats if b and b not in tail and b not in lines)
     return " ".join([*lines, tail]).strip()[:limit]
 
 

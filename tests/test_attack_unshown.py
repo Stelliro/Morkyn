@@ -123,27 +123,46 @@ class Biased:
         return self.reply
 
 
+def _line(check: dict, label: str = "Vasilis [[B]]") -> str:
+    """The engine's own result line for the check (app/attack_line.py: drawn from a pool, seeded by the roll)."""
+    from app import attack_line
+
+    return attack_line.line_for(check, label)
+
+
+T3_TRIGGER = "You aim at the distant target and pull the trigger."
+
+
 class TheProseIgnoredTheAttack(unittest.TestCase):
-    def test_integ_r4_t3_the_critical_hit_is_added_and_the_summary_follows(self):
-        out = I.run(T3, _records(), Biased("No"), {"skill_checks": [_check()]})
+    def test_integ_r4_t3_the_critical_hit_goes_in_after_the_shot_and_the_summary_follows(self):
+        check = _check()
+        beat = _line(check)
+        self.assertIn("Vasilis [[B]]", beat)
+        out = I.run(T3, _records(), Biased("No"), {"skill_checks": [check]})
         text = out["narration"]
-        self.assertTrue(text.startswith(T3))  # nothing cut
-        self.assertTrue(text.endswith("Your shot hits Vasilis [[B]]."), text[-200:])
+        # Nothing cut: the line goes in after the player's shot (the trigger pulled), not at the end.
+        self.assertEqual(text, T3.replace(T3_TRIGGER, f"{T3_TRIGGER} {beat}"))
         self.assertEqual(text.count("Vasilis"), 1)
-        self.assertEqual(out["report"]["attack_beats"][0]["code"], "B")
-        self.assertIn("Your shot hits Vasilis [[B]].", I.summary(out["events"], text))
+        entry = out["report"]["attack_beats"][0]
+        self.assertEqual((entry["code"], entry["state"], entry["action"]), ("B", "unshown", "inserted"))
+        self.assertIn(beat, I.summary(out["events"], text, attack_beats=out["report"]["attack_beats"]))
 
     def test_the_reverse_a_failed_roll_is_a_miss_on_him(self):
-        out = I.run(T3, _records(), Biased("No"), {"skill_checks": [_check("failure", natural=4)]})
-        self.assertTrue(out["narration"].endswith("Your shot misses Vasilis [[B]]."))
-        out = I.run(T3, _records(), Biased("No"), {"skill_checks": [_check("partial", skill="melee", natural=11)]})
-        self.assertTrue(out["narration"].endswith("Your blow only grazes Vasilis [[B]]."))
+        check = _check("failure", natural=4)
+        out = I.run(T3, _records(), Biased("No"), {"skill_checks": [check]})
+        self.assertIn(f"{T3_TRIGGER} {_line(check)}", out["narration"])
+        self.assertRegex(_line(check), r"miss|wide|short")
+        check = _check("partial", skill="melee", natural=11)
+        out = I.run(T3, _records(), Biased("No"), {"skill_checks": [check]})
+        self.assertRegex(_line(check), r"^Your (blow|fist|strike) (only grazes|glances off|just clips|nicks) Vasilis \[\[B\]\]\.$")
+        self.assertIn(_line(check), out["narration"])
 
-    def test_a_scene_that_names_the_target_is_left_alone(self):
+    def test_a_scene_that_names_the_target_but_shows_no_attack_gets_the_line_after_that_sentence(self):
         for text in (T2_NAMED, T2_NAMED.replace("Vasilis [[B]]", "Dr. Vasilis")):
             out = I.run(text, _records(), Biased("No"), {"skill_checks": [_check()]})
-            self.assertEqual(out["narration"], text)
-            self.assertNotIn("attack_beats", out["report"])
+            self.assertTrue(out["narration"].startswith(text), out["narration"])
+            self.assertTrue(out["narration"].endswith(_line(_check())))
+            self.assertEqual(out["report"]["attack_beats"][0]["where"], "target")
 
     def test_yes_and_no_biased_models_change_nothing_and_no_ask_is_made_for_it(self):
         for reply in ("Yes", "No.", "Yes, he is dead at the end"):
@@ -151,7 +170,7 @@ class TheProseIgnoredTheAttack(unittest.TestCase):
             out = I.run(T3, _records(), with_roll, {"skill_checks": [_check()]})
             I.run(T3, _records(), without, {"skill_checks": []})
             self.assertEqual(with_roll.calls, without.calls, reply)
-            self.assertEqual(out["narration"].count("Your shot hits Vasilis [[B]]."), 1, reply)
+            self.assertEqual(out["narration"].count(_line(_check())), 1, reply)
 
     def test_no_roll_no_attack_record_or_dice_off_adds_nothing(self):
         no_target = _check()
@@ -161,13 +180,13 @@ class TheProseIgnoredTheAttack(unittest.TestCase):
             self.assertEqual(out["narration"], T3)
         self.assertEqual(I.run(T3, _records(), Biased("No"), None)["narration"], T3)
 
-    def test_the_line_goes_before_a_closing_question(self):
-        text = T3 + "\n\nWhat do you do?"
-        out = I.run(text, _records(), Biased("No"), {"skill_checks": [_check()]})
-        self.assertTrue(out["narration"].endswith("next mission. Your shot hits Vasilis [[B]].\n\nWhat do you do?"))
-        same_paragraph = T3 + " What do you do?"
-        out = I.run(same_paragraph, _records(), Biased("No"), {"skill_checks": [_check()]})
-        self.assertTrue(out["narration"].endswith("next mission. Your shot hits Vasilis [[B]]. What do you do?"))
+    def test_with_no_act_to_follow_the_line_goes_before_a_closing_question(self):
+        quiet = "The wind moves through the empty yard.\n\nA dog barks somewhere far off."
+        beat = _line(_check())
+        out = I.run(quiet + "\n\nWhat do you do?", _records(), Biased("No"), {"skill_checks": [_check()]})
+        self.assertEqual(out["narration"], f"{quiet} {beat}\n\nWhat do you do?")
+        out = I.run(quiet + " What do you do?", _records(), Biased("No"), {"skill_checks": [_check()]})
+        self.assertEqual(out["narration"], f"{quiet} {beat} What do you do?")
 
 
 class OneRollDecidesTheAttack(unittest.TestCase):
@@ -287,8 +306,9 @@ class TheWholeTurn(unittest.TestCase):
         self.assertTrue([c for c in checks if (c.get("attack") or {}).get("code") == self.b], checks)
         self.assertEqual([c.get("for") for c in checks], ["i shoot Dr. Vasilis"])
         narration = trace["final_turn"]["narration"]
-        self.assertTrue(narration.endswith(f"Your shot hits Vasilis [[{self.b}]]."), narration[-160:])
-        self.assertIn(f"Your shot hits Vasilis [[{self.b}]].", trace["final_turn"]["turn_summary"])
+        beat = _line(checks[0], f"Vasilis [[{self.b}]]")
+        self.assertIn(f"{T3_TRIGGER} {beat}", narration)
+        self.assertIn(beat, trace["final_turn"]["turn_summary"])
         combat = trace["final_turn"]["_deterministic_combat"]
         self.assertEqual(combat["resolution"]["outcome"], "hit")
         self.assertEqual(trace["prompt_context"]["mechanics_context"]["combat"]["resolution"]["outcome"], "hit")
@@ -299,7 +319,8 @@ class TheWholeTurn(unittest.TestCase):
 
     def test_the_reverse_a_failed_roll_says_miss(self):
         trace = _play(self.prose, T3_LINE, "failure")
-        self.assertTrue(trace["final_turn"]["narration"].endswith(f"Your shot misses Vasilis [[{self.b}]]."))
+        check = trace["final_turn"]["skill_checks"][0]
+        self.assertIn(f"{T3_TRIGGER} {_line(check, f'Vasilis [[{self.b}]]')}", trace["final_turn"]["narration"])
         self.assertEqual(trace["final_turn"]["_deterministic_combat"]["resolution"]["damage"], 0)
 
     def test_real_travel_still_follows_the_prose(self):

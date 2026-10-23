@@ -17960,7 +17960,7 @@ def _run_interpreter(
     # contradicted the prose on the 8B, #157 a).
     try:
         record["model_summary"] = str(turn.get("turn_summary") or "")[:700]
-        built = interpreter.summary(events, narration, player_quotes=quotes)
+        built = interpreter.summary(events, narration, player_quotes=quotes, attack_beats=record.get("attack_beats"))
         if built:
             turn["turn_summary"] = built
             record["summary"] = built
