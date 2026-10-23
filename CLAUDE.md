@@ -195,6 +195,16 @@ belong to, with the date).
   account for many, and we should roll a dice on it and stick to it ie. "Gouls lunge at you" dice
   roll = 4 = "4 ghouls lunge at you"". The engine rolls the count, files that many rows, writes
   the number into the prose where the plural first appears, and keeps to it after.
+- **Combat gets its own tab in place of the map** (2026-10-24): "the combat scene appears and is
+  closed, for combat, i want to replace the map with a new tab labeled "combat" this way the
+  player can actually view who they are in combat with, how much health they have and view more
+  in depth infomation about them as well as selecting a target". While a fight is on, the map's
+  place in the play panel is a **Combat** tab: who the player is fighting (the engine's rows,
+  numbered unnamed ones too: Ghoul 1, Ghoul 2), each one's health, more detail on each, and a
+  target the player selects (it reaches the turn as that person's code, like `@A`). It follows
+  the engine's encounter state, never the prose. Not a future addition: it is the next job
+  after the work in hand (the attack line, then the transaction parser and ask-to-move) is
+  fixed; the theft and locked-places items in docs/TODO_NEXT.md come after it.
 - **The Settlement map view is for the settlement you are in** (2026-10-23): "when the player is
   not in a town or settlemnet the player can still view the settlement tab". It was built for
   #19 as "the settlement you are in, or one you know"; outside a settlement it is not offered.

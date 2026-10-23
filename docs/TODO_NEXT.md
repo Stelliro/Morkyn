@@ -272,6 +272,14 @@ One id per send keeps diffs reviewable.
 | Text to speech | `app/tts.py`, `/api/tts-config`, `/api/tts-catalog`, `/api/tts-status`, `/api/tts/speak`, `/api/tts/install`; `window.morkynSpeech`, `renderTtsPlayBar`, `renderTtsSettings` in `static/app.js`; `speechItems` in `static/ui/interact.js`; `docs/TextToSpeech.md` |
 | Built, not wired | `app/currency.py` (n17), `app/economy.py` (n1), `app/trade.py` (n15), `app/agreements.py` (n18), `app/needs.py` (n16), `app/body_health.py` (n23), `app/restraint.py` (n13), `app/scene_cast.py` (n14), `app/settlement_visits.py` (g8), `app/wild_places.py` (n22), `app/realtime_clock.py` (n2), `static/ui/scene_sequence.js` (g17), `static/ui/destination_marker.js` (n22); tests `tests/test_<module>.py`, `tools/test_scene_sequence.js`, `tools/test_destination_marker.js`; nothing in the live game calls them; `docs/BuiltNotWired.md` |
 
+## Next after the work in hand (Stell, 2026-10-24)
+
+"for combat, i want to replace the map with a new tab labeled "combat" ... this isnt a "future addition" this is something we need to work on after we have worked out and fixed what we are working on now."
+
+| Id | Item | Notes |
+|----|------|--------|
+| c1 | Combat tab in place of the map | While a fight is on, the map's slot in the play panel becomes a "Combat" tab, instead of the combat scene that appears and closes. Shows who the player is fighting (named and numbered unnamed rows: Ghoul 1, Ghoul 2), each one's health, more detail on each, and a target the player selects (sent with the turn as that person's code, like @A). Reads the engine's encounter and npc rows, not the prose. Follows docs/UI_RULEBOOK.md. |
+
 ## Planned (Stell, 2026-10-24, future change)
 
 "for a future change, i want to add the unaccessable locations to the areas the pleyer can go and add more in depth theft"
