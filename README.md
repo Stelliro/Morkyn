@@ -4,7 +4,7 @@
   <img src="Media/morkyn-cover.png" alt="Mørkyn: the model narrates, the game decides what is true" width="72%" />
 </p>
 
-**Version `0.10.0-dev.15`** · pre-release builds on the way to `0.10.0`, not stable (see [CHANGELOG](CHANGELOG.md) for each `dev.N`). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.11.0`** · the batch after the `0.10.0-dev` pre-releases; each push after it is the next patch, `0.11.1`, `0.11.2` (see [CHANGELOG](CHANGELOG.md)). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
 ## This is not the usual AI RPG
 
@@ -372,6 +372,7 @@ Further reading: [docs/NarrationPipeline.md](docs/NarrationPipeline.md) · [docs
 
 ### Latest
 
+- **0.11.0:** the save keeps the people, places and jobs the story makes without fixing them in place too soon (people are pencilled in until a later turn brings them back, places have insides, jobs are filed as said with an engine pay ledger), acts are read from grammar, API keys and settings save per user (encrypted on Windows), and Linux gets .deb, .rpm, AppImage and AUR packages and the game's own window. Notes: [changelogs/0.11.md](changelogs/0.11.md).
 - **0.10.0-dev.15:** the first packaged build (Windows exe, Linux and macOS folders) with llama-cpp-python split into runtime packs per accelerator and a version picker that installs any release; persuasion difficulty follows what is asked, so a plain question is trivial.
 - **0.10.0-dev.14:** ten more Qwen3 8B runs (142-151) and 163 fixes by class; jobs bind by reference (`@Q1`) rather than by title, the engine's own prose slips are mended (no scene shrunk to a fragment, no orphaned quotes, routine talk never a brutal miss), and the connection leak that starved a live run is closed.
 - **0.10.0-dev.13:** 184 test runs with a local model as the narrator (43 on Qwen2.5 7B, 141 on Qwen3 8B) and 377 fixes, so the save follows the story: places, people, jobs, gold and items change only when the scene shows it, and lines written for you are removed.

@@ -8,7 +8,8 @@ Short notes on what each version brought:
 
 | Version | Status | Notes |
 | --- | --- | --- |
-| `0.10.0-dev.N` | Pre-release (current) | [changelogs/0.10.0-dev.md](changelogs/0.10.0-dev.md) |
+| `0.11.N` | Current | [changelogs/0.11.md](changelogs/0.11.md) |
+| `0.10.0-dev.N` | Pre-release | [changelogs/0.10.0-dev.md](changelogs/0.10.0-dev.md) |
 | `0.9.12` | Last stable | [changelogs/0.9.12.md](changelogs/0.9.12.md) |
 | `0.9.1-wip` | Work in progress | [changelogs/0.9.1-wip.md](changelogs/0.9.1-wip.md) |
 | `0.9.0` | Stable | [changelogs/0.9.0.md](changelogs/0.9.0.md) |
@@ -26,7 +27,7 @@ The longer write-ups, newest first:
 
 ## Full change log
 
-[CHANGELOG.md](CHANGELOG.md) is the line-by-line record. It has every fix and addition with the files it touched, an `[Unreleased]` section for work not yet in a dev build, and one section per tagged `dev.N`. It stays in one file because the tags, the release pages and the contributor instructions link to it.
+[CHANGELOG.md](CHANGELOG.md) is the line-by-line record. It has every fix and addition with the files it touched, an `[Unreleased]` section for work not yet in a build, and one section per tagged version (`0.11.N`, and `dev.N` before it). It stays in one file because the tags, the release pages and the contributor instructions link to it.
 
 ## Issue log
 

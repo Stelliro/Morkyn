@@ -21,7 +21,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
-> New entries go here. This batch is `0.11.0` (Stell, 2026-10-22: "we should be working on the newer build 0.11.0 and later changelogs would be 0.11.1^"); when it is pushed this section becomes `[0.11.0]`, and the batches after it `0.11.1`, `0.11.2` and on.
+> New entries go here. The next push is `0.11.1` (Stell, 2026-10-22: "later changelogs would be 0.11.1^"), then `0.11.2` and on.
+
+## [0.11.0] - 2026-10-23
+
+> The batch after the `0.10.0-dev` builds. The five mechanisms for the Qwen3 8B fault families (people pencilled in, places with insides, jobs filed as said with an engine pay ledger, pronoun pins that repair less, acts read from grammar) and the energy replay; API keys and settings saved per user (encrypted on Windows); Linux packages (.deb, .rpm, AppImage, AUR, a user install in the tarball) and the game's own window on Linux; settings that do nothing under another are greyed; the Gatehouse follows LLM details.
 
 ### Added
 - [CLAUDE] Linux gets the game's own window (Stell, 2026-10-23, Pop!_OS: "it doesnt have a standalone application on linux"). It is the `qt-window` add-on pack, pywebview on Qt WebEngine (all pip wheels, nothing from the distribution; 203 MB zipped), so the build stays small: a packaged Linux start that wants the window and cannot open one fetches the pack and opens the browser that once, and from the next start the game has its window. Settings -> Updates lists it as "Mørkyn window". pywebview goes straight to Qt when there are no GTK bindings, instead of logging a GTK traceback. The CI packs job builds it on ubuntu-22.04. Checked on Pop!_OS 24.04 (COSMIC, Wayland) with the AppImage: the window opens maximised on the main menu and stays. The pack is not on the runtime-packs release until the packs job runs. - `app/runtime_packs.py`, `morkyn_app.py`, `packaging/build_packs.py`, `.github/workflows/package.yml`, `docs/Packaging.md`, `packaging/README-package.md`
