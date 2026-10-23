@@ -2010,7 +2010,9 @@ def settlement_view(
     The world map's rules decide what is known: a settlement is listed once a
     tile of it was seen or someone told you of it. Inside it, a world cell shows
     its wards and streets only when that cell was seen; the rest is outline.
-    Without ``city_id`` the settlement you stand in is chosen, else none.
+    Only the settlement the player stands in is drawn (playtest #161, Stell
+    2026-10-23: outside a settlement there is no Settlement view). ``city_id``
+    is kept for old callers and never selects another settlement.
     """
     if str(map_data.get("scale") or "") != "world" or not map_data.get("cities"):
         return {"available": False, "reason": "This map has no settlement grids.", "settlements": []}
@@ -2043,20 +2045,18 @@ def settlement_view(
         city = cities[here_id]
         known.insert(0, {"id": here_id, "name": str(city.get("name") or "Settlement"),
                          "band": str(city.get("band") or ""), "known_how": "visited", "here": True})
-    known_ids = {k["id"] for k in known}
-    wanted = str(city_id or "").strip()
-    if wanted and wanted not in known_ids:
-        wanted = ""
-    selected = wanted or here_id
+    # Known settlements elsewhere stay on the world view; this view is the one you are in.
+    known = [k for k in known if k["here"]]
+    selected = here_id
     out: dict[str, Any] = {
-        "available": True,
+        "available": bool(selected),
         "settlements": known,
         "selected": selected,
         "here": here_id,
         "settlement": None,
     }
     if not selected:
-        out["reason"] = "You are not in a settlement you know." if known else "You know of no settlement yet."
+        out["reason"] = "You are not in a settlement."
         return out
     city = cities[selected]
     cells = [c for c in city.get("cells") or [] if isinstance(c, dict)]
@@ -2922,21 +2922,44 @@ def _place_hidden_bases(
     return bases
 
 
+def _grid_and_bounds(
+    map_data: dict[str, Any],
+) -> tuple[list[list[dict[str, Any]]] | None, int, int]:
+    """The stored grid (None on a world-scale map) and the map's width and height.
+
+    A world-scale map stores no grid: its cells are generated from the seed
+    (``_cell_at`` -> ``world_scale.world_cell``), so its bounds are the map's
+    own width and height. Reading them from ``_rebuild_grid`` gave 0 x 0 and
+    every move was "Destination out of bounds" (playtest #160). The same
+    reading walk_steps, walk_toward and local_map_view already use.
+    """
+    if str(map_data.get("scale") or "") == "world":
+        return None, int(map_data.get("width") or 0), int(map_data.get("height") or 0)
+    grid = _rebuild_grid(map_data)
+    height = len(grid)
+    width = len(grid[0]) if height else 0
+    return grid, width, height
+
+
+def _store_grid(map_data: dict[str, Any], grid: list[list[dict[str, Any]]] | None) -> None:
+    """Put a stored grid back on the payload; a world-scale map keeps no tiles."""
+    if grid is None:
+        return
+    map_data["tiles"] = [c for row in grid for c in row]
+    map_data["grid"] = grid
+
+
 def restore_player_position(map_id: str | None, x: int, y: int) -> dict[str, Any]:
     """Move player marker without travel costs (used to undo blocked walks)."""
     data = get_map(map_id)
     if not data:
         raise ValueError("No active map.")
-    grid = _rebuild_grid(data)
-    width = len(grid[0]) if grid else 0
-    height = len(grid)
+    grid, width, height = _grid_and_bounds(data)
     x, y = int(x), int(y)
     if not (0 <= x < width and 0 <= y < height):
         raise ValueError("Destination out of bounds.")
     data["player"] = {"x": x, "y": y}
-    flat = [c for row in grid for c in row]
-    data["tiles"] = flat
-    data["grid"] = grid
+    _store_grid(data, grid)
     _save_map_payload(data)
     return full_map_view(data)
 
@@ -2972,13 +2995,13 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
     data["visited"] = meta_visited
     _ensure_knowledge(data)
 
-    grid = _rebuild_grid(data)
-    width = len(grid[0]) if grid else 0
-    height = len(grid)
+    grid, width, height = _grid_and_bounds(data)
     x, y = int(x), int(y)
     if not (0 <= x < width and 0 <= y < height):
         raise ValueError("Destination out of bounds.")
-    cell = grid[y][x]
+    cell = _cell_at(data, x, y, grid)
+    if cell is None:
+        raise ValueError("Destination out of bounds.")
     if not bool(cell.get("walkable", True)) or str(cell.get("state") or "") in {"void", "water", "lava", "cliff"}:
         raise ValueError("That tile is not walkable.")
     px = int((data.get("player") or {}).get("x") or 0)
@@ -2992,7 +3015,7 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
         view["travel"] = {"minutes": 0, "steps": 0, "encounter": {"happened": False}}
         return view
 
-    from_cell = grid[py][px] if 0 <= py < height and 0 <= px < width else {}
+    from_cell = (_cell_at(data, px, py, grid) or {}) if 0 <= py < height and 0 <= px < width else {}
     # Multi-step jumps: charge minutes per Chebyshev step at destination terrain
     steps = max(1, cheb)
     per = walk_minutes_for_step(from_cell, cell, chebyshev_steps=1)
@@ -3057,10 +3080,9 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
         if bid:
             mark_hidden_base_discovered(data, str(bid))
             # reload grid after mark
-            grid = _rebuild_grid(data)
-    flat = [c for row in grid for c in row]
-    data["tiles"] = flat
-    data["grid"] = grid
+            if grid is not None:
+                grid = _rebuild_grid(data)
+    _store_grid(data, grid)
     _save_map_payload(data)
     view = full_map_view(data)
     view["travel"] = {

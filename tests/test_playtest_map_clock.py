@@ -149,12 +149,32 @@ class SettlementViewTests(unittest.TestCase):
         out = settlement_view(chart, city_id=other["id"])
         self.assertNotIn(other["id"], [s["id"] for s in out["settlements"]])
         self.assertEqual(out["selected"], here["id"])
-        # Told of it, it can be drawn: listed, but every tile is outline.
+        # Playtest #161 (Stell, 2026-10-23): the view is only the settlement you
+        # are in, so one you were told of is not drawn here either.
         chart["knowledge"]["settlements"] = [other["id"]]
         told = settlement_view(chart, city_id=other["id"])
-        self.assertEqual(told["selected"], other["id"])
-        self.assertIsNone(told["settlement"]["player"])
-        self.assertTrue(all(not c["known"] for c in told["settlement"]["cells"]))
+        self.assertEqual(told["selected"], here["id"])
+        self.assertEqual([s["id"] for s in told["settlements"]], [here["id"]])
+
+    def test_outside_every_settlement_there_is_no_settlement_view(self):
+        # Playtest #161: "when the player is not in a town or settlemnet the
+        # player can still view the settlement tab". Even a settlement the
+        # player has seen is not drawn from outside it.
+        chart = self._chart()
+        here = self._here_city(chart)
+        city_cells = {(int(c["x"]), int(c["y"])) for city in chart["cities"] for c in city["cells"]}
+        px, py = int(chart["player"]["x"]), int(chart["player"]["y"])
+        outside = next(
+            (px + d, py) for d in range(1, 200) if (px + d, py) not in city_cells
+        )
+        chart["player"] = {"x": outside[0], "y": outside[1]}
+        chart["visited"] = sorted(set(chart.get("visited") or []) | {f"{px},{py}"})
+        out = settlement_view(chart, city_id=here["id"])
+        self.assertFalse(out["available"])
+        self.assertEqual(out["here"], "")
+        self.assertEqual(out["selected"], "")
+        self.assertEqual(out["settlements"], [])
+        self.assertIsNone(out["settlement"])
 
     def test_known_places_and_venues_sit_on_their_tile(self):
         chart = self._chart()
@@ -192,6 +212,25 @@ class SettlementViewUiTests(unittest.TestCase):
         self.assertIn('id="settlementCanvas"', html)
         js = (STATIC / "app.js").read_text(encoding="utf-8")
         self.assertIn("/api/tiles/map/settlement", js)
+
+    def test_settlement_button_only_inside_a_settlement(self):
+        # Playtest #161: the button starts hidden and follows town_position.
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        button = html.split('data-map-view="settlement"', 1)[1].split(">", 1)[0]
+        self.assertIn("hidden", button)
+        self.assertIn("disabled", button)
+        js = (STATIC / "app.js").read_text(encoding="utf-8")
+        inside = js.split("function playerInSettlement(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("townPositionFromState()", inside)
+        sync = js.split("function syncSettlementViewButton(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("btn.hidden = !inside", sync)
+        self.assertIn('setMapViewMode("world")', sync)
+        mode = js.split("function setMapViewMode(", 1)[1].split("\n}", 1)[0]
+        self.assertIn('mode === "settlement" && playerInSettlement()', mode)
+        local = js.split("async function refreshLocalMap(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("syncSettlementViewButton()", local)
+        refresh = js.split("async function refreshSettlementView(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("!data.here", refresh)
 
 
 if __name__ == "__main__":

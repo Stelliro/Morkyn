@@ -2187,7 +2187,7 @@ def api_image_portrait(request: PortraitRequest):
         try:
             from app.db import connect as _connect
 
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO settings (key, value) VALUES ('player_portrait', ?)",
                     (
@@ -2363,7 +2363,7 @@ def _location_special_runtime() -> dict[str, Any]:
     movement_locked = False
     map_blank = False
     try:
-        with _connect() as conn:
+        with _connect().closing() as conn:
             rows = {
                 str(r["key"]): r["value"]
                 for r in conn.execute(
@@ -2506,11 +2506,11 @@ def api_tile_map(map_id: str = "", legacy: bool = False):
 def _map_avatar_payload() -> dict[str, Any]:
     from app.db import connect as _connect
 
-    with _connect() as conn:
+    with _connect().closing() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = 'map_avatar'").fetchone()
     if not row:
         # Fall back to player portrait if present
-        with _connect() as conn:
+        with _connect().closing() as conn:
             prow = conn.execute("SELECT value FROM settings WHERE key = 'player_portrait'").fetchone()
         if prow:
             try:
@@ -2686,14 +2686,14 @@ def api_map_avatar_set(request: MapAvatarRequest):
     from app.db import connect as _connect
 
     if request.clear:
-        with _connect() as conn:
+        with _connect().closing() as conn:
             conn.execute("DELETE FROM settings WHERE key = 'map_avatar'")
         return {"ok": True, "cleared": True, **_map_avatar_payload()}
 
     data_url = (request.data_url or "").strip()
     source = "upload"
     if request.from_portrait and not data_url:
-        with _connect() as conn:
+        with _connect().closing() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'player_portrait'").fetchone()
         if not row:
             raise HTTPException(status_code=400, detail="No player portrait yet. Generate one on the Player tab first.")
@@ -2718,7 +2718,7 @@ def api_map_avatar_set(request: MapAvatarRequest):
         "tile_px": tile_px,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    with _connect() as conn:
+    with _connect().closing() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('map_avatar', ?)",
             (json.dumps(payload, ensure_ascii=True),),
@@ -2770,7 +2770,7 @@ def api_tile_map_move(request: MapMoveRequest):
             raise HTTPException(status_code=400, detail="Provide x,y or dx,dy.")
         tx, ty = px + dx, py + dy
     def _travel_ready() -> bool:
-        with _connect() as conn:
+        with _connect().closing() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'travel_ready'").fetchone()
         ready = True
         if row:
@@ -2793,7 +2793,7 @@ def api_tile_map_move(request: MapMoveRequest):
     try:
         from app.town_moves import get_position as _town_position
 
-        with _connect() as conn:
+        with _connect().closing() as conn:
             in_town = _town_position(conn)
     except Exception:
         in_town = None
@@ -2805,7 +2805,7 @@ def api_tile_map_move(request: MapMoveRequest):
         target_city = _town_locate(data, tx, ty)
         try:
             if target_city and str(target_city[0].get("id") or "") == str(in_town.get("city_id") or ""):
-                with _connect() as conn:
+                with _connect().closing() as conn:
                     walked = walk_to_cell(conn, tx, ty, context=town_context)
                 try:
                     autosave_campaign()
@@ -2822,7 +2822,7 @@ def api_tile_map_move(request: MapMoveRequest):
                     "travel": {},
                     "travel_result": {},
                 }
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 exit_plan = plan_exit(conn, (tx, ty), context=town_context)
             out_x, out_y = (int(v) for v in (exit_plan.get("exit") or {}).get("out") or (px, py))
             rest_free = max(abs(tx - out_x), abs(ty - out_y)) <= 1
@@ -2841,7 +2841,7 @@ def api_tile_map_move(request: MapMoveRequest):
                     raise ValueError("That tile is not walkable.")
                 if not rest_free and abs(tx - out_x) + abs(ty - out_y) > 8:
                     raise ValueError("Too far for a single walk — step with arrows or pick a closer tile.")
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 town_exit = walk_out(conn, (tx, ty), context=town_context, plan=exit_plan)
         except PermissionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2908,7 +2908,7 @@ def api_tile_map_move(request: MapMoveRequest):
     # Adjacent free steps keep travel open so the player can keep walking.
     # Scene/settlement jumps still close travel for a beat.
     next_ready = True if free_step else False
-    with _connect() as conn:
+    with _connect().closing() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)",
             (json.dumps(next_ready),),
@@ -2952,7 +2952,7 @@ def api_tile_map_move(request: MapMoveRequest):
     try:
         from app.town_moves import sync_after_world_move
 
-        with _connect() as conn:
+        with _connect().closing() as conn:
             travel_result["town"] = sync_after_world_move(conn, get_map(None, conn=conn), (px, py))
     except Exception as exc:
         travel_result["town"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200]}
@@ -2961,7 +2961,7 @@ def api_tile_map_move(request: MapMoveRequest):
         try:
             # Lock long travel during the beat; free steps stay allowed via free_step logic later
             next_ready = False
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)",
                     (json.dumps(False),),
@@ -3087,7 +3087,7 @@ def api_town_walk(request: TownWalkRequest):
     context = get_state(include_hidden=False)
     ready = True
     try:
-        with _connect() as conn:
+        with _connect().closing() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'travel_ready'").fetchone()
         if row:
             try:
@@ -3097,7 +3097,7 @@ def api_town_walk(request: TownWalkRequest):
     except Exception:
         ready = True
     try:
-        with _connect() as conn:
+        with _connect().closing() as conn:
             walked = click_walk(
                 conn,
                 plot_ref=str(request.plot_id or "").strip(),
@@ -3158,7 +3158,7 @@ def api_town_leave(request: TownLeaveRequest):
         raise HTTPException(status_code=400, detail="edge must be N, E, S or W.")
     context = get_state(include_hidden=False)
     try:
-        with _connect() as conn:
+        with _connect().closing() as conn:
             left = walk_out(conn, None, edge=edge, context=context)
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -3252,7 +3252,7 @@ def _travel_press(dest: dict[str, Any]) -> dict[str, Any]:
 
     for _leg in range(3):
         context = get_state(include_hidden=False)
-        with _connect() as conn:
+        with _connect().closing() as conn:
             chart = get_map(None, conn=conn)
             pos = _town_position(conn)
             city = target_city(chart)
@@ -3305,7 +3305,7 @@ def _travel_press(dest: dict[str, Any]) -> dict[str, Any]:
         # World-map steps, each one a map click's step (minutes, energy, encounters).
         steps = 0
         while steps < STEP_BUDGET and not out["stopped"]:
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 chart = get_map(None, conn=conn)
             if not chart:
                 out.update(stopped="no_map", why="No map.")
@@ -3325,7 +3325,7 @@ def _travel_press(dest: dict[str, Any]) -> dict[str, Any]:
             steps += 1
             out["minutes"] += int(((step.get("step") or {}).get("minutes")) or 0)
             out["legs"].append({"kind": "world", "to": list(nxt)})
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 TP.bring_along(conn, with_codes)
             if step.get("scene_turn"):
                 scene_turn = step
@@ -3334,14 +3334,14 @@ def _travel_press(dest: dict[str, Any]) -> dict[str, Any]:
             if step.get("halted"):
                 out.update(stopped="gate", why=str((step.get("halted") or {}).get("why") or "You stop at the gate."))
                 break
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 pos = _town_position(conn)
                 chart = get_map(None, conn=conn)
             if pos and target_city(chart) and str(pos.get("city_id") or "") == target_city(chart):
                 break  # into the place's own town: its streets are the next leg
         if out["stopped"]:
             break
-        with _connect() as conn:
+        with _connect().closing() as conn:
             chart = get_map(None, conn=conn)
             pos = _town_position(conn)
         city = target_city(chart)
@@ -3355,7 +3355,7 @@ def _travel_press(dest: dict[str, Any]) -> dict[str, Any]:
         break
     else:
         out.update(stopped="budget", why="You stop for now. Press Travel to go on.")
-    with _connect() as conn:
+    with _connect().closing() as conn:
         turn = _pacing_turn(conn)
         if out["arrived"]:
             TP.set_destination(conn, None)
@@ -3382,7 +3382,7 @@ def api_answer_prompt(prompt_id: str, request: PromptAnswerRequest):
     from app.world import get_state
 
     choice = str(request.choice or "").strip().lower()
-    with _connect() as conn:
+    with _connect().closing() as conn:
         item = TP.find(conn, prompt_id)
         turn = _pacing_turn(conn)
     if item is None:
@@ -3395,7 +3395,7 @@ def api_answer_prompt(prompt_id: str, request: PromptAnswerRequest):
         person = {"code": str(item.get("npc_code") or ""), "name": str(item.get("npc_name") or "")}
         target = item.get("to") if isinstance(item.get("to"), dict) else None
         if choice == "stay":
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 TP.remove(conn, prompt_id, stayed={"npc_code": person["code"], "npc_name": person["name"],
                                                    "to_label": str(item.get("to_label") or ""), "turn": turn})
                 conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
@@ -3405,7 +3405,7 @@ def api_answer_prompt(prompt_id: str, request: PromptAnswerRequest):
             _refuse_if_confined()
             context = get_state(include_hidden=False)
             label = str(item.get("to_label") or "")
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 from app.town_moves import get_position as _town_position
 
                 pos = _town_position(conn)
@@ -3442,7 +3442,7 @@ def api_answer_prompt(prompt_id: str, request: PromptAnswerRequest):
                                  (turn, "system", f"Going along with {person['name']}."[:900]))
                     note = f"{person['name']} goes with you."
             if target and not in_town:
-                with _connect() as conn:
+                with _connect().closing() as conn:
                     dest = TP.destination(conn)
                 pressed = _travel_press(dest or {"target": target, "label": label, "with": [person["code"]]})
                 travel = pressed["travel"]
@@ -3453,12 +3453,12 @@ def api_answer_prompt(prompt_id: str, request: PromptAnswerRequest):
         target = item.get("target") if isinstance(item.get("target"), dict) else {}
         label = str(item.get("label") or "there")
         if choice == "dismiss":
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 TP.remove(conn, prompt_id)
         elif choice in {"go", "set"}:
             dest = {"target": target, "label": label, "enter": bool(target.get("plot")), "with": [],
                     "set_turn": turn, "source": item.get("source") or {}}
-            with _connect() as conn:
+            with _connect().closing() as conn:
                 TP.set_destination(conn, dest)
                 TP.remove(conn, prompt_id)
             note = f"Destination: {label}."
@@ -3487,7 +3487,7 @@ def api_travel(request: TravelRequest):
     from app.world import get_state
 
     action = str(request.action or "go").strip().lower()
-    with _connect() as conn:
+    with _connect().closing() as conn:
         dest = TP.destination(conn)
         if action == "clear":
             TP.set_destination(conn, None)
@@ -3524,7 +3524,7 @@ def api_travel_status():
     from app.db import connect as _connect
 
     runtime = _location_special_runtime()
-    with _connect() as conn:
+    with _connect().closing() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = 'travel_ready'").fetchone()
     ready = True
     if row:
@@ -4904,7 +4904,7 @@ def api_social_resolve(request: SocialActionRequest):
     from app.db import connect as _connect
 
     action = str(request.action or "walk_away").strip().lower()
-    with _connect() as conn:
+    with _connect().closing() as conn:
         settings = {}
         try:
             from app.world import _settings as _ws
@@ -5054,7 +5054,7 @@ def api_conversation_target(request: ConversationTargetRequest):
 
     state = get_state()
     try:
-        with _connect() as conn:
+        with _connect().closing() as conn:
             choose(conn, state, request.codes, group=request.group)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

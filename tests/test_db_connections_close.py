@@ -34,6 +34,52 @@ def tearDownModule():
             os.environ[key] = value
 
 
+def _bare_connect_blocks(source: str, label: str) -> list[str]:
+    """`with X() as` blocks whose X is app.db.connect under any name, or sqlite3.connect.
+
+    The names come from the file's own imports (``from app.db import connect as
+    _connect``, ``from app import db as _db``), so a new alias is caught without
+    a new pattern. ``X().closing()`` is the closing form and is not listed.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    funcs = {"connect", "_db_connect"}  # bare names bound to app.db.connect
+    modules = {"db", "sqlite3"}  # module names whose .connect() opens a connection
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in {"app.db", "db"}:
+            for alias in node.names:
+                if alias.name == "connect":
+                    funcs.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "app":
+            for alias in node.names:
+                if alias.name == "db":
+                    modules.add(alias.asname or "db")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in {"app.db", "sqlite3"} and alias.asname:
+                    modules.add(alias.asname)
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.With, ast.AsyncWith)):
+            continue
+        for item in node.items:
+            call = item.context_expr
+            if not isinstance(call, ast.Call):
+                continue
+            target = call.func
+            if isinstance(target, ast.Name) and target.id in funcs:
+                found.append(f"{label}:{node.lineno}")
+            elif (
+                isinstance(target, ast.Attribute)
+                and target.attr == "connect"
+                and isinstance(target.value, ast.Name)
+                and target.value.id in modules
+            ):
+                found.append(f"{label}:{node.lineno}")
+    return found
+
+
 class TheBlockClosesItsConnection(unittest.TestCase):
     def test_closed_after_the_block(self):
         from app.db import connect, init_db
@@ -60,14 +106,35 @@ class TheBlockClosesItsConnection(unittest.TestCase):
             held.close()
 
     def test_the_engine_uses_closing_blocks(self):
-        import re
-
         bare = []
-        for path in (ROOT / "app").glob("*.py"):
-            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if re.search(r"\bwith (?:connect|_db_connect)\(\) as ", line):
-                    bare.append(f"{path.name}:{n}")
+        for path in sorted((ROOT / "app").rglob("*.py")):
+            bare.extend(_bare_connect_blocks(path.read_text(encoding="utf-8"), path.name))
         self.assertEqual(bare, [], "with connect() as ... never closes; use connect().closing()")
+
+    def test_the_scan_catches_every_alias(self):
+        # Playtest #162: main.py's `from app.db import connect as _connect` then
+        # `with _connect() as conn:` passed the old pattern, which knew only
+        # connect() and _db_connect().
+        source = (
+            "from app.db import connect as _connect\n"
+            "from app import db as _db\n"
+            "import sqlite3\n"
+            "def f():\n"
+            "    from app.db import connect as _c\n"
+            "    with _connect() as conn:\n"
+            "        pass\n"
+            "    with _c() as c2:\n"
+            "        pass\n"
+            "    with _db.connect() as c3:\n"
+            "        pass\n"
+            "    with sqlite3.connect('x.db') as c4:\n"
+            "        pass\n"
+            "    with _connect().closing() as ok:\n"
+            "        pass\n"
+            "    with open('x') as fine:\n"
+            "        pass\n"
+        )
+        self.assertEqual(_bare_connect_blocks(source, "probe.py"), ["probe.py:6", "probe.py:8", "probe.py:10", "probe.py:12"])
 
     def test_init_db_runs_twice(self):
         from app.db import init_db
