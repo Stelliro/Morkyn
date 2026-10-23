@@ -46,6 +46,23 @@ class ChildrenOutliveTheirThread(unittest.TestCase):
             proc.kill()
             proc.wait(timeout=10)
 
+    def test_the_child_loads_no_library_between_fork_and_exec(self):
+        # With the Qt window's threads running, a load in the child hit ld.so's
+        # "r_state == RT_CONSISTENT" assertion and the server exited 127.
+        calls: list[tuple[int, int]] = []
+        preexec = launcher._die_with_parent(lambda *args: calls.append(args))
+        saved = sys.modules.get("ctypes")
+        sys.modules["ctypes"] = None  # any `import ctypes` now raises
+        try:
+            preexec()
+        finally:
+            sys.modules["ctypes"] = saved
+        self.assertEqual(calls, [(1, 15)])
+
+    def test_the_parent_resolves_prctl_before_the_fork(self):
+        self.assertTrue(callable(launcher._child_options()["preexec_fn"]))
+        self.assertIsNotNone(launcher._PRCTL)
+
     def test_both_children_go_through_the_spawner(self):
         source = (ROOT / "app" / "launcher.py").read_text(encoding="utf-8")
         body = source[source.index("class Supervisor") :]

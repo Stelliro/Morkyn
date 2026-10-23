@@ -288,21 +288,42 @@ def _no_window_flags() -> int:
     return 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
 
 
-def _die_with_parent() -> None:
-    """Linux's version of the job object: the child gets SIGTERM when the launcher dies."""
-    try:
-        import ctypes
-        import signal
+# Resolved in the parent, before any fork: the child runs between fork and exec
+# with only the forking thread, and a library load there (an import of _ctypes,
+# CDLL) can find the loader mid-update by another thread. With the Qt window's
+# threads running, the server died at start with exit 127, "Inconsistency
+# detected by ld.so: dl-open.c ... r_state == RT_CONSISTENT" (2026-10-23).
+_PRCTL: Any = None
 
-        ctypes.CDLL(None).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
-    except Exception:
-        pass
+
+def _prctl() -> Any:
+    global _PRCTL
+    if _PRCTL is None:
+        import ctypes
+
+        _PRCTL = ctypes.CDLL(None).prctl
+    return _PRCTL
+
+
+def _die_with_parent(prctl: Any) -> Callable[[], None]:
+    """Linux's version of the job object: the child gets SIGTERM when the launcher dies."""
+
+    def preexec() -> None:
+        try:
+            prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
+        except Exception:
+            pass
+
+    return preexec
 
 
 def _child_options() -> dict[str, Any]:
     opts: dict[str, Any] = {"creationflags": _no_window_flags()}
     if sys.platform.startswith("linux"):
-        opts["preexec_fn"] = _die_with_parent
+        try:
+            opts["preexec_fn"] = _die_with_parent(_prctl())
+        except Exception:
+            pass
     return opts
 
 
