@@ -86,10 +86,10 @@ player's own line names the dead person and the body is here or carried. Each
 is one plain question and a differently worded check, as for a death:
 
     here     "Is Beth's body with the player at the end of it?"        yes, then
-             "Has the player left Beth's body behind at the end of it?"  must be no
-    buried   "Is Beth's body buried at the end of it?"        yes, then
+             "Has the player walked away from Beth's body at the end of it?"  must be no
+    buried   "Is Beth's body in a grave at the end of it?"        yes, then
              "Can Beth's body be seen at the end of it?"      must be no
-    carried  "Is the player carrying Beth's body at the end of it?"  yes, then
+    carried  "Is Beth's body in the player's arms or over the player's shoulder at the end of it?"  yes, then
              "Is Beth's body lying on the ground at the end of it?"  must be no
 
 A carried body goes where the player goes (carry_bodies, every turn) until a
@@ -455,11 +455,14 @@ def ask_body_here(name: str, passage: str) -> str:
 
 
 def ask_body_here_check(name: str, passage: str) -> str:
-    return f"Read this.\n\n{passage}\n\nHas the player left {name}'s body behind at the end of it? Answer yes or no."
+    # Measured live on Hermes 3 8B (live-eval-4): "left ... behind" read as "left lying there" and said
+    # yes with the player standing over the body (14/27 right on death turns); "walked away from": 27/27.
+    return f"Read this.\n\n{passage}\n\nHas the player walked away from {name}'s body at the end of it? Answer yes or no."
 
 
 def ask_body_buried(name: str, passage: str) -> str:
-    return f"Read this.\n\n{passage}\n\nIs {name}'s body buried at the end of it? Answer yes or no."
+    # Measured (live-eval-4): "buried" took Beth's flesh dissolved in an acid pit for a burial; "in a grave": 97%.
+    return f"Read this.\n\n{passage}\n\nIs {name}'s body in a grave at the end of it? Answer yes or no."
 
 
 def ask_body_buried_check(name: str, passage: str) -> str:
@@ -467,7 +470,9 @@ def ask_body_buried_check(name: str, passage: str) -> str:
 
 
 def ask_body_carried(name: str, passage: str) -> str:
-    return f"Read this.\n\n{passage}\n\nIs the player carrying {name}'s body at the end of it? Answer yes or no."
+    # Measured (live-eval-4): "carrying" said yes to almost any handling (a search, a burn, a sheet over
+    # it; 36/90 false yes); "in the player's arms or over the player's shoulder": 96%.
+    return f"Read this.\n\n{passage}\n\nIs {name}'s body in the player's arms or over the player's shoulder at the end of it? Answer yes or no."
 
 
 def ask_body_carried_check(name: str, passage: str) -> str:

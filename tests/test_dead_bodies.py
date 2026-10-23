@@ -141,10 +141,10 @@ def _sentence_of(prompt: str) -> str:
 # "Is Beth's body buried at the end of it?" must not read as a death ask.
 _MARKERS = (
     ("'s body with the player", I.PHASE_BODY_HERE),
-    ("'s body behind", I.PHASE_BODY_HERE_CHECK),
-    ("'s body buried", I.PHASE_BODY_BURIED),
+    ("walked away from", I.PHASE_BODY_HERE_CHECK),
+    ("'s body in a grave", I.PHASE_BODY_BURIED),
     ("'s body be seen", I.PHASE_BODY_BURIED_CHECK),
-    ("player carrying", I.PHASE_BODY_CARRIED),
+    ("in the player's arms", I.PHASE_BODY_CARRIED),
     ("'s body lying on the ground", I.PHASE_BODY_CARRIED_CHECK),
     ("still dead at the end", I.PHASE_RETURNED_CHECK),
     ("dead at the end", I.PHASE_DIED),
