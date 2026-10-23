@@ -176,6 +176,18 @@ belong to, with the date).
   first, the engine writes the attack's result line itself from the roll and the weapon, the
   narrator writes the scene around it, and when the draft leaves the line out or contradicts it
   the engine puts its own line in; no model rewrite, no extra model call).
+- **Money is copper, silver and gold, held as one number** (2026-10-24): "i want to add copper,
+  silver and gold as the currency, that way we can translate the currency into 1 form ... we can
+  use the $ symbol as a command for the llm, so $69420 will be translated as 6 gold 94 silver and
+  20 copper, we should never rely on the llm to work out the item cost by coin, just a single
+  value". One unit is a copper: 1 silver = 100, 1 gold = 10,000 (Stell's own figures: 2 copper =
+  2, 3 silver = 300, 40 gold = 400,000). Purses, prices, rewards and payments are that single
+  value, and the engine owns the math. The model writes an amount only as `$<number>` (a
+  command, like the codes); the engine turns it into coins for the player ("$69420" -> "6 gold,
+  94 silver and 20 copper") and reads coins in prose back into the one value. The model never
+  splits a cost into coins. This is why the "silver" fault (F156: a pouch of "silver, copper"
+  paid nothing) was held: it is fixed by this, built with the transaction parser. Open when
+  building: what an old save's gold number becomes.
 - **#157's cross-reference is a system, not a fix** (2026-10-24): "this will be a big undertaking,
   as to do this we will need to ensure we build a cross referencing system between npc's and the
   llm, as well as what the player says and what the llm what the llm wants to say". Design it as
