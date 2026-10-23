@@ -1189,7 +1189,12 @@ def context_from_conn(conn) -> dict[str, Any]:
     ).fetchone()
     current = {"id": row[0], "code": row[1], "name": row[2]} if row and row[0] is not None else {}
     by_location: dict[Any, dict[str, Any]] = {}
-    for npc in conn.execute("SELECT id, code, name, location_id FROM npcs ORDER BY id").fetchall():
+    # The dead are not on the roster a talk can turn to (app/interpreter.py, #154).
+    try:
+        rows = conn.execute("SELECT id, code, name, location_id FROM npcs WHERE died_turn = 0 ORDER BY id").fetchall()
+    except Exception:  # a save without the column
+        rows = conn.execute("SELECT id, code, name, location_id FROM npcs ORDER BY id").fetchall()
+    for npc in rows:
         loc = by_location.setdefault(npc[3], {"id": npc[3], "npcs": []})
         loc["npcs"].append({"id": npc[0], "code": npc[1], "name": npc[2]})
     if current and current["id"] in by_location:

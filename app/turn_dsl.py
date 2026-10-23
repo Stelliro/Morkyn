@@ -1567,7 +1567,7 @@ def narration_length_target(player_input: str) -> str:
 
 
 def facts_to_keep(context: Any, limit: int = 6) -> list[str]:
-    """The hour and which nearby places are open, as sentences the prose must keep (playtest #59)."""
+    """The hour, who is dead (#154) and which nearby places are open, as sentences the prose must keep (playtest #59)."""
     if not isinstance(context, dict):
         return []
     facts: list[str] = []
@@ -1585,6 +1585,16 @@ def facts_to_keep(context: Any, limit: int = 6) -> list[str]:
 
                 part = part_of_day(hour)
             facts.append(f"It is {part}, {hour:02d}:{minute:02d}.")
+    # Who the interpreter recorded dead and what destroyed (#154): facts like
+    # the hour, so the scene is held to them; they do not crowd out the hours.
+    try:
+        from app.interpreter import facts as recorded_facts
+
+        held = recorded_facts(context)
+    except Exception:
+        held = []
+    facts.extend(held)
+    limit += len(held)
     contract = context.get("movement_contract")
     town = contract.get("town") if isinstance(contract, dict) else None
     places = town.get("places_here") if isinstance(town, dict) else None

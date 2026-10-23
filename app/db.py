@@ -762,6 +762,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         # settlement row stands for (docs/TownGrid.md 3.5, 4.4).
         ("plot_id", "TEXT NOT NULL DEFAULT ''"),
         ("city_id", "TEXT NOT NULL DEFAULT ''"),
+        # The turn the interpreter recorded this place destroyed (app/interpreter.py, #154); 0 = standing.
+        ("destroyed_turn", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in location_columns:
             conn.execute(f"ALTER TABLE locations ADD COLUMN {column} {definition}")
@@ -823,6 +825,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         # People pencilled in (app/sketches.py): the turn a person was made on,
         # until a later turn brings them back; 0 = a known person.
         ("sketch_turn", "INTEGER NOT NULL DEFAULT 0"),
+        # The turn the interpreter recorded this person dead (app/interpreter.py, #154);
+        # 0 = alive. A later "returned" event sets it back to 0.
+        ("died_turn", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
