@@ -148,6 +148,16 @@ belong to, with the date).
   is not relied on). Cleaner
   closing comes later.
 
+- **The dead leave a body** (2026-10-24): "we shouldnt just remove dead npcs, as they should not
+  just vanish, they should have a dead body". A dead person stays where they died as a body: in
+  the place's records and the narrator's context as dead and present, never as someone who
+  talks or acts; the body can be searched, moved or buried.
+- **Unnamed NPCs are stored and numbered per kind** (2026-10-24): "hostile monster npc's should
+  also be stored in the database, they should be provided an increasing id intiger per appearing
+  non named npc". Every unnamed NPC that appears (monster, raider, guard) gets a row named by its
+  kind and the next number for that kind (Ghoul 1, Ghoul 2, Raider 1; Stell chose per kind and
+  every unnamed one); the code stays the engine's own (A, B, ...). A creature is a person row,
+  not filtered out as a place.
 - **The Settlement map view is for the settlement you are in** (2026-10-23): "when the player is
   not in a town or settlemnet the player can still view the settlement tab". It was built for
   #19 as "the settlement you are in, or one you know"; outside a settlement it is not offered.
