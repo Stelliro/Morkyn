@@ -128,7 +128,11 @@ class TheSpeechAddOn(unittest.TestCase):
     def test_the_exe_installs_the_speech_pack_not_pip(self):
         from app import tts
 
+        from app import runtime_packs
+
+        offered = {runtime_packs.asset_name("piper-speech"): {"url": "x", "size": 1}}
         with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch("app.runtime_packs.available_assets", return_value=offered), \
                 mock.patch("app.runtime_packs.install", return_value={"ok": True}) as install, \
                 mock.patch.object(tts, "piper_installed", return_value=(True, "1.8.0")), \
                 mock.patch("subprocess.run") as run:

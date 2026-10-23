@@ -851,6 +851,17 @@ a.mainMenuGhost:hover {
   color: var(--thread);
 }
 
+/* The phone address as a QR code. Pale under dark modules is a fill, against
+   the rule, but phone cameras read the inverse badly; the thread frames it. */
+.addressQr {
+  display: block;
+  width: 132px;
+  height: 132px;
+  margin-top: 8px;
+  border: 1px solid var(--thread-dim);
+  image-rendering: pixelated;
+}
+
 
 /* ==========================================================================
    07 Setup

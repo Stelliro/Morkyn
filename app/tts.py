@@ -68,6 +68,10 @@ MSG_BUSY = (
 )
 MSG_SELF_BUSY = "The local speech engine is still busy with the previous paragraph. Press Play again."
 MSG_INSTALL_BUSY = "An install is already running. Wait for it to finish."
+MSG_NO_LOCAL_PACK = (
+    "The local speech engine is not offered as a download in this version. "
+    'Set Provider to "OpenAI-compatible API" or "ElevenLabs" in Speech settings to use an online voice.'
+)
 MSG_INSTALL_STEP = 'Install step must be "all", "engine" or "voice".'
 MSG_INSTALL_PROVIDER = 'Install applies to the local engine. Set Provider to "Local (Piper)" and save first.'
 
@@ -1212,6 +1216,10 @@ def pip_install_piper(*, timeout: float = 900.0) -> dict[str, Any]:
     if getattr(sys, "frozen", False):
         from app import runtime_packs
 
+        assets = runtime_packs.available_assets(force=True)
+        if assets and runtime_packs.asset_name("piper-speech") not in assets:
+            # Not published: Piper and its espeak-ng are GPL-3.0 (Stell, 2026-10-23, #146).
+            return {"ok": False, "error": MSG_NO_LOCAL_PACK}
         done = runtime_packs.install("piper-speech", wait=True)
         if not done.get("ok"):
             return {"ok": False, "error": str(done.get("error") or "the speech pack did not install")[:600]}

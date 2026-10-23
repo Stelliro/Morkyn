@@ -3744,6 +3744,12 @@ def api_agent_opening(token: str = ""):
 # flags only change when the launcher starts the server again, so Settings
 # compare against this snapshot to say what is still waiting for a restart.
 _BOOT_LAUNCHER_PREFS = load_prefs()
+try:
+    from app.runtime_packs import boot_identity as _boot_identity
+
+    _BOOT_IDENTITY: dict[str, Any] = _boot_identity()
+except Exception:
+    _BOOT_IDENTITY = {}
 
 
 def _launcher_status() -> dict[str, Any]:
@@ -3756,12 +3762,32 @@ def _launcher_status() -> dict[str, Any]:
         "supervised": supervised,
         "plan": plan if isinstance(plan, dict) else {},
         "restart_pending": restart_keys_changed(_BOOT_LAUNCHER_PREFS, load_prefs()),
+        # For a launcher that finds this server already running (app/launcher.py).
+        "identity": _BOOT_IDENTITY,
+        "pid": os.getpid(),
+        "launcher_pid": os.getppid() if supervised else None,
     }
 
 
 @app.get("/api/launcher/status")
 def api_launcher_status():
     return _launcher_status()
+
+
+@app.get("/api/address-qr.svg")
+def api_address_qr():
+    """A QR code of the phone or VPN address this server was started with, so nothing has to be typed.
+
+    "http" read as "https" sent a phone to "This site can't provide a secure
+    connection" (Stell, 2026-10-23, #149). Only the server's own address is
+    drawn, never text from the request.
+    """
+    from app.launcher import address_qr_svg
+
+    svg = address_qr_svg(_launcher_status()["plan"])
+    if svg is None:
+        raise HTTPException(status_code=404, detail="This server is not reachable from other devices.")
+    return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/launcher/restart")
