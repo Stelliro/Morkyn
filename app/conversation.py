@@ -176,7 +176,8 @@ def roster(context: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         here = (cid is not None and location.get("id") == cid) or (ccode and str(location.get("code") or "") == ccode)
         for npc in location.get("npcs") or []:
-            if not isinstance(npc, dict):
+            # The dead are nobody a line can be said to (app/interpreter.py, #154).
+            if not isinstance(npc, dict) or int(npc.get("died_turn") or 0) > 0:
                 continue
             code = str(npc.get("code") or "").strip().upper()
             name = str(npc.get("name") or "").strip()
@@ -210,7 +211,8 @@ def known_elsewhere(context: dict[str, Any], here: set[str]) -> list[dict[str, A
         if not isinstance(location, dict):
             continue
         for npc in location.get("npcs") or []:
-            if not isinstance(npc, dict):
+            # The dead are not called over either (#154).
+            if not isinstance(npc, dict) or int(npc.get("died_turn") or 0) > 0:
                 continue
             code = str(npc.get("code") or "").strip().upper()
             name = str(npc.get("name") or "").strip()
@@ -1189,7 +1191,12 @@ def context_from_conn(conn) -> dict[str, Any]:
     ).fetchone()
     current = {"id": row[0], "code": row[1], "name": row[2]} if row and row[0] is not None else {}
     by_location: dict[Any, dict[str, Any]] = {}
-    for npc in conn.execute("SELECT id, code, name, location_id FROM npcs ORDER BY id").fetchall():
+    # The dead are not on the roster a talk can turn to (app/interpreter.py, #154).
+    try:
+        rows = conn.execute("SELECT id, code, name, location_id FROM npcs WHERE died_turn = 0 ORDER BY id").fetchall()
+    except Exception:  # a save without the column
+        rows = conn.execute("SELECT id, code, name, location_id FROM npcs ORDER BY id").fetchall()
+    for npc in rows:
         loc = by_location.setdefault(npc[3], {"id": npc[3], "npcs": []})
         loc["npcs"].append({"id": npc[0], "code": npc[1], "name": npc[2]})
     if current and current["id"] in by_location:
