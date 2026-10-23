@@ -9,34 +9,55 @@ applies or refuses it. This is its first part, for two kinds of fact:
     destroyed  a place is destroyed at the end of the scene
     returned   a person recorded dead comes back (a ghoul rising, a revival)
 
+It runs inside world.apply_turn, after the engine's own edits to the prose and
+after the turn's new people are on the roster, so it reads the scene the player
+reads and can record the death of someone met and killed in the same turn.
+
 Candidates come from the engine's records, never from words: every person and
-place the final prose names by its code ([[B]], [[L3]]) or by its roster name.
-For each one the engine asks the model ONE plain question about only the
-paragraphs that name it ("Is Beth dead at the end of it? Answer yes or no.").
-One ask per candidate, not one ask over a list of people: a yes/no about one
-named person is the simplest task the 8B can be given, it needs no code to be
-copied back, and a wrong answer touches one person, not the whole cast.
+place the prose names by its code ([[B]], [[L3]]) or by its full roster name,
+when no other row has that name and the name is not only part of a longer
+roster name ("Radiation Fenced Sanctuary" inside "Radiation Fenced Sanctuary
+Clinic" names the clinic, not the town). A name two rows share, living or
+dead, names neither of them; a living row that shares a dead person's name is
+never asked about (the "NAME: Beth" duplicate row, live run).
 
-Later turns are held to the record (the hold): for each dead person the prose
-names, one question ("Beth died in turn 10. In this text, does Beth speak, move
-or act as a living person?"). On yes, one more asks whether the text shows her
-coming back from death (then that is a "returned" event, so a death is never a
-dead end); otherwise the sentences that show her alive are found with one ask
-over numbered sentences and each is rewritten with one small ask (remembered,
-or the body described). A rewrite that still shows her alive is cut; cutting is
-last.
+Each fact is one plain question about only the paragraphs that name the
+candidate, and a second, differently worded question checks it before the
+engine acts (CLAUDE.md 2026-10-18):
 
-The event shape is the one the later kinds (gold, items, moves) will use:
+    died       "Is Beth dead at the end of it?"        yes, then
+               "Is Beth alive at the end of it?"       must be no
+    destroyed  "Is X destroyed at the end of it?"      yes, then
+               "Is any of X still standing at the end of it?"  must be no
+    returned   "Does this text show Beth come back from death?"  yes, then
+               "Is Beth still dead at the end of it?"  must be no
+
+Later turns are held to the record (the hold), for each dead person the prose
+names: "Does Beth say or do anything in it?" (measured on Hermes 3 8B: no
+false no). On yes, and no return, each sentence of the paragraphs that name
+her is asked about on its own, with its paragraph ("In the sentence "...",
+does Beth say or do something?", no false picks measured), and the sentences
+picked are cut. Nothing is rewritten: the rewrite ask produced unusable
+sentences two times in three. Never cut: a sentence the player is the subject
+of ("You pat Beth down ...", "You remember Beth's laugh ..."), and a sentence
+holding the player's own quoted words. Never cut below the floor: when the
+cuts would leave too little of the scene, the prose is shipped as written and
+the record (facts_to_keep next turn) carries the death.
+
+The event shape is the one later kinds (gold, items, moves) will use:
     {"kind": str, "subject": {"type": "npc"|"place", "code": str, "name": str},
      "evidence": str, "status": "proposed"|"applied"|"refused", "reason": str}
-A gold event would add "amount" and an "object" of the same shape.
+A gold event would add "amount" and an "object" of the same shape;
+allow_event is the seat where the dice round refuses what a roll did not allow.
 
 Every ask goes through the model call path the caller gives (app/llm.py passes
 _chat_text with the turn's usage and trace, so each prompt, raw reply and its
-seconds are in the turn trace and model_usage). Nothing here may break a turn.
+seconds are in the turn trace and model_usage). A turn asks at most MAX_ASKS
+questions. Nothing here may break a turn.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import Any, Callable
@@ -47,22 +68,29 @@ Ask = Callable[[str, str, int], str]
 SYSTEM_PROMPT = "Answer the question about the text."
 
 PHASE_DIED = "interpreter_died"
+PHASE_DIED_CHECK = "interpreter_died_check"
 PHASE_DESTROYED = "interpreter_destroyed"
+PHASE_DESTROYED_CHECK = "interpreter_destroyed_check"
 PHASE_HOLD = "interpreter_hold"
 PHASE_RETURNED = "interpreter_returned"
+PHASE_RETURNED_CHECK = "interpreter_returned_check"
 PHASE_WHICH = "interpreter_hold_which"
-PHASE_REWRITE = "interpreter_hold_rewrite"
 
 KIND_DIED = "died"
 KIND_DESTROYED = "destroyed"
 KIND_RETURNED = "returned"
 
-# How many candidates one turn may ask about (each is one small ask).
+# How many candidates one turn may ask about, and how many asks in all.
 MAX_PEOPLE = 4
 MAX_PLACES = 3
-MAX_HELD = 3
-PASSAGE_CHARS = 2000
+MAX_HELD = 2
 MAX_UNITS = 16
+MAX_ASKS = 40
+PASSAGE_CHARS = 2000
+# The hold never leaves less than this of the scene (characters, and share of
+# the scene as written); below it the prose ships as written.
+FLOOR_CHARS = 120
+FLOOR_SHARE = 0.4
 
 _CODE_RE = re.compile(r"\[\[([A-Z]{1,3}|L\d+|I\d+|E\d+)\]\]")
 _LABEL_RE = re.compile(r"^[A-Z][A-Z_ ]{1,15}:\s*")
@@ -102,6 +130,15 @@ def clean_name(value: Any) -> str:
     return _LABEL_RE.sub("", str(value or "").strip()).strip()
 
 
+def is_dead(row: Any) -> bool:
+    """A person row (dict or sqlite row) the interpreter recorded dead."""
+    try:
+        value = row.get("died_turn") if isinstance(row, dict) else row["died_turn"]
+        return int(value or 0) > 0
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Structure: who the prose names, and where
 # ---------------------------------------------------------------------------
@@ -114,46 +151,79 @@ def _name_re(name: str) -> re.Pattern[str] | None:
     return re.compile(r"(?<![A-Za-z])" + re.escape(words) + r"(?![A-Za-z])", re.I)
 
 
-def named(text: str, rows: list[dict[str, Any]], skip_names: list[str] | None = None) -> list[dict[str, Any]]:
-    """The rows the text names by [[CODE]] or by a roster name that only one row has, in order of first mention."""
-    body = str(text or "")
-    skip = {str(n).strip().lower() for n in skip_names or [] if str(n).strip()}
-    codes = set(_CODE_RE.findall(body))
-    counts: dict[str, int] = {}
-    for row in rows:
-        key = str(row.get("name") or "").lower()
-        if key:
-            counts[key] = counts.get(key, 0) + 1
-    found: list[tuple[int, dict[str, Any]]] = []
-    for row in rows:
+def _key(row: dict[str, Any]) -> str:
+    return " ".join(str(row.get("name") or "").lower().split())
+
+
+class Matcher:
+    """Where the prose names a row: its exact code, or its full name when that name is the row's alone.
+
+    ``people`` and ``places`` are the whole roster (living and dead, standing
+    and destroyed): a name two rows of one kind share names neither, and a name
+    that is only part of a longer roster name (of either kind) is that longer
+    name's mention, not its own.
+    """
+
+    def __init__(self, people: list[dict[str, Any]] | None = None, places: list[dict[str, Any]] | None = None):
+        self.people = [row for row in people or [] if isinstance(row, dict)]
+        self.places = [row for row in places or [] if isinstance(row, dict)]
+        self._shared: set[int] = set()
+        for rows in (self.people, self.places):
+            counts: dict[str, int] = {}
+            for row in rows:
+                if _key(row):
+                    counts[_key(row)] = counts.get(_key(row), 0) + 1
+            self._shared |= {id(row) for row in rows if counts.get(_key(row), 0) > 1}
+        self._all = [row for row in [*self.people, *self.places] if _key(row)]
+
+    def shared(self, row: dict[str, Any]) -> bool:
+        return id(row) in self._shared
+
+    def spans(self, text: str, row: dict[str, Any]) -> list[tuple[int, int]]:
+        body = str(text or "")
         code = str(row.get("code") or "")
-        name = str(row.get("name") or "")
-        if name.lower() in skip:
-            continue
-        at = -1
-        if code and code in codes:
-            at = body.find(f"[[{code}]]")
-        elif name and counts.get(name.lower()) == 1:
-            pattern = _name_re(name)
-            match = pattern.search(body) if pattern else None
-            if match:
-                at = match.start()
-        if at >= 0:
-            found.append((at, row))
-    found.sort(key=lambda item: item[0])
-    return [row for _at, row in found]
+        out = [(m.start(), m.end()) for m in re.finditer(re.escape(f"[[{code}]]"), body)] if code else []
+        pattern = _name_re(str(row.get("name") or ""))
+        if pattern and not self.shared(row):
+            key = _key(row)
+            longer = [
+                other for other in self._all
+                if other is not row and len(_key(other)) > len(key) and pattern.search(str(other.get("name") or ""))
+            ]
+            covers = [
+                (m.start(), m.end())
+                for other in longer
+                for m in (_name_re(str(other.get("name") or "")) or re.compile(r"(?!)")).finditer(body)
+            ]
+            for m in pattern.finditer(body):
+                if not any(a <= m.start() and m.end() <= b for a, b in covers):
+                    out.append((m.start(), m.end()))
+        return sorted(out)
+
+    def names(self, text: str, row: dict[str, Any]) -> bool:
+        return bool(self.spans(text, row))
+
+    def named(self, text: str, rows: list[dict[str, Any]], skip_names: list[str] | None = None) -> list[dict[str, Any]]:
+        """The rows of ``rows`` the text names, in order of first mention."""
+        skip = {" ".join(str(n).lower().split()) for n in skip_names or [] if str(n).strip()}
+        found: list[tuple[int, dict[str, Any]]] = []
+        for row in rows:
+            if _key(row) in skip:
+                continue
+            spans = self.spans(text, row)
+            if spans:
+                found.append((spans[0][0], row))
+        found.sort(key=lambda item: item[0])
+        return [row for _at, row in found]
+
+
+def named(text: str, rows: list[dict[str, Any]], skip_names: list[str] | None = None) -> list[dict[str, Any]]:
+    """The rows the text names by [[CODE]] or by a full name only one of ``rows`` has."""
+    return Matcher(rows).named(text, rows, skip_names)
 
 
 def _paragraphs(text: str) -> list[str]:
     return [p.strip() for p in re.split(r"\n\s*\n", str(text or "")) if p.strip()]
-
-
-def _names_row(paragraph: str, row: dict[str, Any]) -> bool:
-    code = str(row.get("code") or "")
-    if code and f"[[{code}]]" in paragraph:
-        return True
-    pattern = _name_re(str(row.get("name") or ""))
-    return bool(pattern and pattern.search(paragraph))
 
 
 def plain(text: str) -> str:
@@ -162,9 +232,10 @@ def plain(text: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", value).strip()
 
 
-def passage_for(text: str, row: dict[str, Any], limit: int = PASSAGE_CHARS) -> str:
+def passage_for(text: str, row: dict[str, Any], limit: int = PASSAGE_CHARS, matcher: Matcher | None = None) -> str:
     """The paragraphs that name this row, codes removed; the last ones when too long (the end decides)."""
-    picked = [p for p in _paragraphs(text) if _names_row(p, row)]
+    match = matcher or Matcher([row])
+    picked = [p for p in _paragraphs(text) if match.names(p, row)]
     out: list[str] = []
     size = 0
     for para in reversed(picked):
@@ -209,6 +280,27 @@ def _quotes_balanced(text: str) -> bool:
     return straight and curly
 
 
+_PLAYER_SUBJECT = {"you", "your", "you're", "you've", "you'd", "you'll", "you’re", "you’ve", "you’d", "you’ll"}
+
+
+def players_own(sentence: str, player_quotes: list[str] | None = None) -> bool:
+    """The player's own sentence: the player is its subject ("You ..."), or it holds the player's quoted words.
+
+    Grammar, not meaning: the scene is written to the player as "you", so a
+    sentence that opens on "you" is the player's act or thought ("You pat Beth
+    down", "You remember Beth's laugh"). Those are never cut.
+    """
+    text = plain(sentence)
+    if any(q and q.lower() in text.lower() for q in player_quotes or []):
+        return True
+    first = re.match(r"\s*([A-Za-z’']+)", text)
+    return bool(first and first.group(1).lower() in _PLAYER_SUBJECT)
+
+
+def _has_quote(sentence: str) -> bool:
+    return any(mark in sentence for mark in ('"', "“", "”"))
+
+
 # ---------------------------------------------------------------------------
 # Reading the replies
 # ---------------------------------------------------------------------------
@@ -235,35 +327,6 @@ def yes_no(raw: Any) -> bool | None:
     return None
 
 
-def numbers(raw: Any, count: int) -> list[int] | None:
-    """The 1-based sentence numbers in a reply, inside 1..count; [] for none; None when unreadable."""
-    text = _reply_text(raw)
-    found = [int(n) for n in re.findall(r"\d+", text)]
-    if not found:
-        return [] if re.search(r"\bnone\b|\bno\b", text.lower()) else None
-    picked: list[int] = []
-    for n in found:
-        if 1 <= n <= count and n not in picked:
-            picked.append(n)
-    return picked or None
-
-
-def rewritten(raw: Any, original: str) -> str:
-    """The rewritten sentence, or "" when the reply is not one usable sentence for it."""
-    text = _reply_text(raw).strip()
-    if not text or "\n\n" in text:
-        return ""
-    text = " ".join(text.split())
-    if text[0] in "\"'“" and original.strip()[:1] not in "\"'“" and text[-1] in "\"'”":
-        text = text[1:-1].strip()
-    if not text or len(text) > len(original) * 3 + 120:
-        return ""
-    # A rewrite may not bring in a code the sentence did not have.
-    if set(_CODE_RE.findall(text)) - set(_CODE_RE.findall(original)):
-        return ""
-    return text
-
-
 # ---------------------------------------------------------------------------
 # The asks (one question each, fewest plain words)
 # ---------------------------------------------------------------------------
@@ -273,15 +336,20 @@ def ask_died(name: str, passage: str) -> str:
     return f"Read this.\n\n{passage}\n\nIs {name} dead at the end of it? Answer yes or no."
 
 
+def ask_died_check(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nIs {name} alive at the end of it? Answer yes or no."
+
+
 def ask_destroyed(name: str, passage: str) -> str:
     return f"Read this.\n\n{passage}\n\nIs {name} destroyed at the end of it? Answer yes or no."
 
 
-def ask_hold(name: str, turn: int, passage: str) -> str:
-    return (
-        f"{name} died in turn {turn}. Read this.\n\n{passage}\n\n"
-        f"In this text, does {name} speak, move or act as a living person? Answer yes or no."
-    )
+def ask_destroyed_check(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nIs any of {name} still standing at the end of it? Answer yes or no."
+
+
+def ask_hold(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nDoes {name} say or do anything in it? Answer yes or no."
 
 
 def ask_returned(name: str, turn: int, passage: str) -> str:
@@ -291,18 +359,14 @@ def ask_returned(name: str, turn: int, passage: str) -> str:
     )
 
 
-def ask_which(name: str, turn: int, numbered: list[str]) -> str:
-    lines = "\n".join(f"{i}. {s}" for i, s in enumerate(numbered, 1))
-    return (
-        f"{name} died in turn {turn}. Read these sentences.\n\n{lines}\n\n"
-        f"Which sentences have {name} speak, move or act as a living person? Answer with the numbers."
-    )
+def ask_returned_check(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nIs {name} still dead at the end of it? Answer yes or no."
 
 
-def ask_rewrite(name: str, sentence: str) -> str:
+def ask_which(name: str, paragraph: str, sentence: str) -> str:
     return (
-        f"{name} is dead. Rewrite this sentence so {name} does not speak, move or act. "
-        f"{name} can be remembered, or the body described. Keep the rest. Return only the sentence.\n\n{sentence}"
+        f"Read this.\n\n{paragraph}\n\n"
+        f"In the sentence \"{sentence}\", does {name} say or do something? Answer yes or no."
     )
 
 
@@ -321,7 +385,10 @@ def _event(kind: str, kind_of: str, row: dict[str, Any], evidence: str) -> dict[
     }
 
 
-def _ask(ask: Ask, report: dict[str, Any], phase: str, prompt: str, max_tokens: int) -> Any:
+def _ask(ask: Ask, report: dict[str, Any], phase: str, prompt: str, max_tokens: int = 8) -> Any:
+    if len(report["asks"]) >= MAX_ASKS:
+        report["capped"] = int(report.get("capped") or 0) + 1
+        return None
     started = time.time()
     entry: dict[str, Any] = {"phase": phase}
     try:
@@ -335,59 +402,103 @@ def _ask(ask: Ask, report: dict[str, Any], phase: str, prompt: str, max_tokens: 
     return reply
 
 
-def hold_the_dead(text: str, records: dict[str, Any], ask: Ask, report: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    """The prose with each dead person it shows alive repaired, and any "returned" events."""
+def _confirmed(ask: Ask, report: dict[str, Any], phase: str, prompt: str, row: dict[str, Any], kind: str) -> bool:
+    """The second, differently worded ask: it must answer "no" for the fact to stand."""
+    answer = yes_no(_ask(ask, report, phase, prompt))
+    if answer is False:
+        return True
+    report["unconfirmed"].append({"kind": kind, "code": str(row.get("code") or ""), "check": answer})
+    return False
+
+
+def interpret(text: str, records: dict[str, Any], ask: Ask, report: dict[str, Any], matcher: Matcher | None = None) -> list[dict[str, Any]]:
+    """The deaths and destructions the prose shows: one ask per named candidate, a second to confirm."""
+    match = matcher or Matcher(records.get("people"), records.get("places"))
     events: list[dict[str, Any]] = []
-    dead = [row for row in records.get("people") or [] if int(row.get("died_turn") or 0) > 0]
-    for row in named(text, dead, records.get("player_names"))[:MAX_HELD]:
+    dead_names = {_key(row) for row in match.people if is_dead(row)}
+    living = [row for row in match.people if not is_dead(row) and _key(row) not in dead_names]
+    for row in match.named(text, living, records.get("player_names"))[:MAX_PEOPLE]:
+        name = str(row.get("name") or "").strip()
+        passage = passage_for(text, row, matcher=match)
+        if not name or not passage:
+            continue
+        if yes_no(_ask(ask, report, PHASE_DIED, ask_died(name, passage))) is True and _confirmed(
+            ask, report, PHASE_DIED_CHECK, ask_died_check(name, passage), row, KIND_DIED
+        ):
+            events.append(_event(KIND_DIED, "npc", row, passage))
+    standing = [row for row in match.places if int(row.get("destroyed_turn") or 0) == 0]
+    for row in match.named(text, standing)[:MAX_PLACES]:
+        name = str(row.get("name") or "").strip()
+        passage = passage_for(text, row, matcher=match)
+        if not name or not passage:
+            continue
+        if yes_no(_ask(ask, report, PHASE_DESTROYED, ask_destroyed(name, passage))) is True and _confirmed(
+            ask, report, PHASE_DESTROYED_CHECK, ask_destroyed_check(name, passage), row, KIND_DESTROYED
+        ):
+            events.append(_event(KIND_DESTROYED, "place", row, passage))
+    return events
+
+
+def hold_the_dead(text: str, records: dict[str, Any], ask: Ask, report: dict[str, Any], matcher: Matcher | None = None) -> tuple[str, list[dict[str, Any]]]:
+    """The prose with each dead person it shows acting cut out (above the floor), and any "returned" events."""
+    match = matcher or Matcher(records.get("people"), records.get("places"))
+    events: list[dict[str, Any]] = []
+    dead = [row for row in match.people if is_dead(row)]
+    for row in match.named(text, dead, records.get("player_names"))[:MAX_HELD]:
         name = str(row.get("name") or row.get("code"))
         turn = int(row.get("died_turn") or 0)
-        passage = passage_for(text, row)
+        passage = passage_for(text, row, matcher=match)
         if not passage:
             continue
-        alive = yes_no(_ask(ask, report, PHASE_HOLD, ask_hold(name, turn, passage), 8))
-        held = {"code": row.get("code"), "name": name, "alive": alive}
+        acts = yes_no(_ask(ask, report, PHASE_HOLD, ask_hold(name, passage)))
+        held: dict[str, Any] = {"code": row.get("code"), "name": name, "acts": acts}
         report["held"].append(held)
-        if alive is not True:
+        if acts is not True:
             continue
-        back = yes_no(_ask(ask, report, PHASE_RETURNED, ask_returned(name, turn, passage), 8))
+        back = yes_no(_ask(ask, report, PHASE_RETURNED, ask_returned(name, turn, passage)))
         held["returned"] = back
-        if back is True:
+        if back is True and _confirmed(ask, report, PHASE_RETURNED_CHECK, ask_returned_check(name, passage), row, KIND_RETURNED):
             events.append(_event(KIND_RETURNED, "npc", row, passage))
             continue
-        text, repairs = _repair(text, row, name, turn, ask, report, records.get("player_quotes") or [])
-        held["repairs"] = repairs
+        text, held["repairs"] = _cut_acts(text, row, name, ask, report, records.get("player_quotes") or [], match)
     return text, events
 
 
-def _repair(text: str, row: dict[str, Any], name: str, turn: int, ask: Ask, report: dict[str, Any], keep: list[str]) -> tuple[str, list[dict[str, Any]]]:
-    """Rewrite (else cut) each sentence the model points to as the dead person alive."""
-    spans = [
-        span for span in units(text)
-        if _names_row(_paragraph_of(text, span[0]), row)
-    ][-MAX_UNITS:]
-    if not spans:
-        return text, []
-    picked = numbers(_ask(ask, report, PHASE_WHICH, ask_which(name, turn, [plain(s[2]) for s in spans]), 24), len(spans))
+def _cut_acts(
+    text: str, row: dict[str, Any], name: str, ask: Ask, report: dict[str, Any], keep: list[str], match: Matcher
+) -> tuple[str, list[dict[str, Any]]]:
+    """Cut each sentence, asked one at a time, that has the dead person say or do something."""
+    spans = [span for span in units(text) if match.names(_paragraph_of(text, span[0]), row)][-MAX_UNITS:]
     repairs: list[dict[str, Any]] = []
+    picked: list[tuple[int, int, str]] = []
+    for start, end, sentence in spans:
+        if players_own(sentence, keep):
+            continue
+        paragraph = plain(_paragraph_of(text, start))
+        if yes_no(_ask(ask, report, PHASE_WHICH, ask_which(name, paragraph, plain(sentence)))) is True:
+            picked.append((start, end, sentence))
     if not picked:
         return text, repairs
-    # Back to front, so the earlier offsets still hold.
-    for index in sorted(picked, reverse=True):
-        start, end, sentence = spans[index - 1]
-        if any(q and q.lower() in sentence.lower() for q in keep):
-            repairs.append({"sentence": sentence, "action": "kept_player_words"})
-            continue
-        new = rewritten(_ask(ask, report, PHASE_REWRITE, ask_rewrite(name, sentence), 220), sentence)
-        if new:
-            still = yes_no(_ask(ask, report, PHASE_HOLD, ask_hold(name, turn, plain(new)), 8))
-            if still is not True:
-                text = text[:start] + new + text[end:]
-                repairs.append({"sentence": sentence, "action": "rewritten", "to": new})
-                continue
-        text = _cut(text, start, end)
-        repairs.append({"sentence": sentence, "action": "cut"})
-    return text, repairs
+    cut = text
+    for start, end, _sentence in sorted(picked, reverse=True):  # back to front, so offsets hold
+        cut = _cut(cut, start, end)
+    before = len(plain(text))
+    after = len(plain(cut))
+    if after < FLOOR_CHARS or after < before * FLOOR_SHARE:
+        repairs.append({"action": "kept_floor", "sentences": [s for _a, _b, s in picked], "chars_left": after, "chars": before})
+        _note("hold_floor", code=str(row.get("code") or ""), chars=before, chars_left=after)
+        return text, repairs
+    repairs.extend({"sentence": s, "action": "cut"} for _a, _b, s in picked)
+    return cut, repairs
+
+
+def _note(event: str, **fields: Any) -> None:
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("interpreter", event, **fields)
+    except Exception:
+        pass
 
 
 def _paragraph_of(text: str, at: int) -> str:
@@ -405,37 +516,17 @@ def _cut(text: str, start: int, end: int) -> str:
     return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
-def interpret(text: str, records: dict[str, Any], ask: Ask, report: dict[str, Any]) -> list[dict[str, Any]]:
-    """The deaths and destructions the final prose shows, one yes/no ask per named candidate."""
-    events: list[dict[str, Any]] = []
-    living = [row for row in records.get("people") or [] if int(row.get("died_turn") or 0) == 0]
-    for row in named(text, living, records.get("player_names"))[:MAX_PEOPLE]:
-        name = str(row.get("name") or "").strip()
-        passage = passage_for(text, row)
-        if not name or not passage:
-            continue
-        if yes_no(_ask(ask, report, PHASE_DIED, ask_died(name, passage), 8)) is True:
-            events.append(_event(KIND_DIED, "npc", row, passage))
-    standing = [row for row in records.get("places") or [] if int(row.get("destroyed_turn") or 0) == 0]
-    for row in named(text, standing)[:MAX_PLACES]:
-        name = str(row.get("name") or "").strip()
-        passage = passage_for(text, row)
-        if not name or not passage:
-            continue
-        if yes_no(_ask(ask, report, PHASE_DESTROYED, ask_destroyed(name, passage), 8)) is True:
-            events.append(_event(KIND_DESTROYED, "place", row, passage))
-    return events
-
-
 def run(text: str, records: dict[str, Any], ask: Ask) -> dict[str, Any]:
-    """Hold the prose to the dead, then read its new events. Returns {narration, events, report}."""
+    """Read the prose's new events, then hold it to the dead. Returns {narration, events, report}."""
     started = time.time()
-    report: dict[str, Any] = {"asks": [], "held": [], "events": []}
+    report: dict[str, Any] = {"asks": [], "held": [], "events": [], "unconfirmed": []}
     events: list[dict[str, Any]] = []
     try:
-        text, returned = hold_the_dead(text, records, ask, report)
+        match = Matcher(records.get("people"), records.get("places"))
+        # The facts first (they change the save), so the ask cap never starves them.
+        events.extend(interpret(text, records, ask, report, match))
+        text, returned = hold_the_dead(text, records, ask, report, match)
         events.extend(returned)
-        events.extend(interpret(text, records, ask, report))
     except Exception as exc:  # never break a turn
         report["error"] = f"{type(exc).__name__}: {exc}"[:300]
     report["events"] = [dict(e) for e in events]
@@ -465,20 +556,37 @@ def event_line(event: dict[str, Any]) -> str:
     return ""
 
 
-def prose_line(text: str, limit: int = 360) -> str:
-    """A short line from the final prose: its first sentence and its last one."""
+def _hook(sentence: str) -> bool:
+    """A question the narration puts to the player, outside any quote ("What do you do now?")."""
+    return sentence.rstrip().endswith("?") and not _has_quote(sentence)
+
+
+def prose_line(text: str, player_quotes: list[str] | None = None, limit: int = 420) -> str:
+    """What happened, from the final prose: the player's act, the first reply someone gives, and how it ends.
+
+    By grammar only: the act is the first sentence the player is the subject
+    of; the reply is the first quoted line that is not the player's own; the
+    end is the last sentence that is not a question put to the player. Each
+    is taken once, in the order the prose has them.
+    """
     pieces = [" ".join(s[2].split()) for s in units(str(text or "")) if s[2].strip()]
     if not pieces:
         return ""
-    picked = [pieces[0]] if len(pieces) == 1 else [pieces[0], pieces[-1]]
-    line = " ".join(picked)
-    if len(line) > limit:
-        line = pieces[0][:limit]
-    return line
+    keep = player_quotes or []
+    act = next((i for i, s in enumerate(pieces) if players_own(s, []) and not _hook(s)), 0)
+    reply = next(
+        (i for i, s in enumerate(pieces) if i != act and _has_quote(s) and not players_own(s, keep)),
+        None,
+    )
+    end = next((i for i in range(len(pieces) - 1, -1, -1) if not _hook(pieces[i])), None)
+    picked = sorted({i for i in (act, reply, end) if i is not None})
+    share = max(80, limit // max(1, len(picked)))
+    parts = [p if len(p) <= share else p[: share - 3].rstrip() + "..." for p in (pieces[i] for i in picked)]
+    return " ".join(parts)[:limit]
 
 
-def summary(events: list[dict[str, Any]], text: str, limit: int = 700) -> str:
-    """The turn's summary: its events first ("Beth [[B]] died."), then a short line from the prose.
+def summary(events: list[dict[str, Any]], text: str, limit: int = 700, player_quotes: list[str] | None = None) -> str:
+    """The turn's summary: its events first ("Beth [[B]] died."), then what happened, from the prose.
 
     A model's own summary is not used: on the 8B it invented what the prose
     never said (T7 'You apologize and leave the clinic') and contradicted it
@@ -486,7 +594,7 @@ def summary(events: list[dict[str, Any]], text: str, limit: int = 700) -> str:
     """
     lines = [event_line(e) for e in events if e.get("status") != "refused"]
     lines = [line for line in lines if line]
-    tail = prose_line(text)
+    tail = prose_line(text, player_quotes)
     return " ".join([*lines, tail]).strip()[:limit]
 
 
@@ -517,10 +625,33 @@ def allow_event(event: dict[str, Any], turn_result: dict[str, Any] | None = None
     return ""
 
 
+def keep_for_rewind(conn, turn: int, table: str, row_id: int) -> None:
+    """Add the row, as it is before the event writes it, to this turn's rewind record (the first copy wins)."""
+    try:
+        snap = conn.execute(
+            "SELECT id, snapshot FROM turn_snapshots WHERE turn = ? ORDER BY id DESC LIMIT 1", (int(turn),)
+        ).fetchone()
+        if snap is None:
+            return
+        data = json.loads(snap["snapshot"] or "{}")
+        if not isinstance(data, dict) or data.get("format") != "ai-rpg-delta-v1":
+            return
+        if int(row_id) > int((data.get("max_ids") or {}).get(table) or 1 << 62):
+            return  # made this turn: the rewind deletes it anyway
+        bucket = data.setdefault("rows", {}).setdefault(table, [])
+        if any(isinstance(r, dict) and r.get("id") == int(row_id) for r in bucket):
+            return
+        found = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (int(row_id),)).fetchone()
+        if found is None:
+            return
+        bucket.append({key: found[key] for key in found.keys()})
+        conn.execute("UPDATE turn_snapshots SET snapshot = ? WHERE id = ?", (json.dumps(data, ensure_ascii=True), int(snap["id"])))
+    except Exception as exc:
+        _note("rewind_record_failed", table=table, error=f"{type(exc).__name__}: {exc}"[:200])
+
+
 def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Check each event against the records and write it, or refuse it with a ledger note."""
-    from app import turn_ledger
-
     out: list[dict[str, Any]] = []
     for raw in events or []:
         if not isinstance(raw, dict):
@@ -531,6 +662,7 @@ def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dic
         kind = str(event.get("kind") or "")
         reason = allow_event(event, turn_result)
         row = None
+        table = "npcs" if kind in (KIND_DIED, KIND_RETURNED) else "locations"
         if not reason:
             if kind in (KIND_DIED, KIND_RETURNED):
                 row = conn.execute("SELECT id, died_turn FROM npcs WHERE code = ?", (code,)).fetchone() if code else None
@@ -551,8 +683,9 @@ def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dic
         if reason:
             event["status"] = "refused"
             event["reason"] = reason
-            turn_ledger.note("interpreter", "event_refused", kind=kind, code=code, reason=reason)
+            _note("event_refused", kind=kind, code=code, reason=reason)
         else:
+            keep_for_rewind(conn, turn, table, int(row["id"]))
             if kind == KIND_DIED:
                 conn.execute("UPDATE npcs SET died_turn = ? WHERE id = ?", (int(turn), int(row["id"])))
             elif kind == KIND_RETURNED:

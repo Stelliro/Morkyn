@@ -1423,9 +1423,9 @@ def _salvage_narration_from_text(content: str) -> str:
 
 def _recovered_summary(narration: str) -> str:
     try:
-        from app.interpreter import prose_line
+        from app.interpreter import summary
 
-        return prose_line(narration)[:700]
+        return summary([], narration)[:700]
     except Exception:
         return ""
 
@@ -17397,15 +17397,12 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 timeout=_model_timeout(60, 180, "AI_RPG_QUEST_PARSER_TIMEOUT"),
             )
             # What the final scene made happen, as events the engine checks
-            # (app/interpreter.py, #154, #157): last, so it reads the prose
-            # the player reads.
-            result = _run_interpreter(
-                result,
-                player_input,
-                usage=usage,
-                trace=trace,
-                timeout=_model_timeout(45, 120, "AI_RPG_INTERPRETER_TIMEOUT"),
-            )
+            # (app/interpreter.py, #154, #157): world.apply_turn runs it after
+            # its own edits to the prose and with the turn's new people on the
+            # roster, so it reads the scene the player reads. The model config
+            # rides along so its asks use this turn's model.
+            if isinstance(result, dict):
+                result["_interpreter_pending"] = {"config": dict(config or {})}
         narr = ""
         if isinstance(result, dict):
             narr = str(result.get("narration") or "")
@@ -17443,14 +17440,17 @@ def _run_interpreter(
     trace: list[dict[str, Any]] | None = None,
     timeout: int = 60,
     records: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> Any:
     """
-    Hold the final prose to the dead, read the deaths and destructions it
-    shows as events (turn["interpreted_events"], applied by world.apply_turn),
-    and write the turn summary from those events and the prose (#157 a).
+    Read the deaths and destructions the final prose shows as events
+    (turn["interpreted_events"], applied by world.apply_turn), hold the prose
+    to the dead, and write the turn summary from those events and the prose
+    (#157 a). world.apply_turn calls it with its own records, after its edits.
 
     Each ask goes through _chat_text with the turn's usage and trace, so its
-    prompt, raw reply and seconds are in the turn trace and model_usage.
+    prompt, raw reply and seconds are in the turn trace and model_usage;
+    ``config`` is the turn's model (generate_turn's theme routing).
     Nothing here may break a turn: any failure is traced and the turn goes on.
     """
     if not isinstance(turn, dict):
@@ -17464,21 +17464,22 @@ def _run_interpreter(
         narration = "\n\n".join(
             str(s.get("text") or "") for s in (turn.get("narration_segments") or []) if isinstance(s, dict)
         )
+    try:
+        from app.narration_pipeline import player_quotes
+
+        quotes = player_quotes(player_input)
+    except Exception:
+        quotes = []
     events: list[dict[str, Any]] = []
     try:
         if record["enabled"] and narration.strip():
             if records is None:
                 with connect().closing() as conn:
                     records = interpreter.load_records(conn)
-            try:
-                from app.narration_pipeline import player_quotes
-
-                records = {**records, "player_quotes": player_quotes(player_input)}
-            except Exception:
-                pass
+            records = {**records, "player_quotes": quotes}
 
             def ask(phase: str, prompt: str, max_tokens: int) -> str:
-                return _chat_text(
+                call = lambda: _chat_text(  # noqa: E731
                     interpreter.SYSTEM_PROMPT,
                     prompt,
                     timeout=timeout,
@@ -17488,6 +17489,10 @@ def _run_interpreter(
                     trace=trace,
                     temperature=0.0,
                 )
+                if config:
+                    with model_config_scope(config):
+                        return call()
+                return call()
 
             out = interpreter.run(narration, records, ask)
             events = out["events"]
@@ -17509,7 +17514,7 @@ def _run_interpreter(
     # contradicted the prose on the 8B, #157 a).
     try:
         record["model_summary"] = str(turn.get("turn_summary") or "")[:700]
-        built = interpreter.summary(events, narration)
+        built = interpreter.summary(events, narration, player_quotes=quotes)
         if built:
             turn["turn_summary"] = built
             record["summary"] = built
