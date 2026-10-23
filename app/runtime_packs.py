@@ -247,6 +247,29 @@ def _add_site(site: Path, added: list[str]) -> None:
                 os.add_dll_directory(str(lib))
             except Exception:
                 pass
+    elif sys.platform.startswith("linux"):
+        _preload_cuda(site)
+
+
+# The Linux CUDA wheel of llama-cpp-python links libcudart.so.12 and cuBLAS
+# but does not carry them, and a desktop with only the NVIDIA driver (Pop!_OS,
+# 2026-10-23) has neither: "libcudart.so.12: cannot open shared object file".
+# The Linux CUDA pack carries NVIDIA's own wheels (site/nvidia/*/lib); loading
+# them by path first, RTLD_GLOBAL, lets libllama.so find them by soname.
+# Order matters: cuBLAS needs cudart, and libcublas needs libcublasLt.
+_CUDA_LIBS = ("cuda_runtime/lib/libcudart.so.12", "cublas/lib/libcublasLt.so.12", "cublas/lib/libcublas.so.12")
+
+
+def _preload_cuda(site: Path) -> None:
+    import ctypes
+
+    for rel in _CUDA_LIBS:
+        lib = site / "nvidia" / rel
+        if lib.is_file():
+            try:
+                ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
 
 
 def activate() -> list[str]:

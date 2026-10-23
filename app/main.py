@@ -1097,6 +1097,31 @@ def api_runtime_packs_remove(request: PackRequest):
     return result
 
 
+# One-click local models (app/model_catalog.py): install, use, remove.
+class CatalogModelRequest(BaseModel):
+    id: str = Field(default="", max_length=80)
+
+
+@app.get("/api/models/catalog")
+def api_models_catalog():
+    from app.model_catalog import status
+
+    return status()
+
+
+@app.post("/api/models/{action}")
+def api_models_action(action: str, request: CatalogModelRequest):
+    from app import model_catalog
+
+    handler = {"install": model_catalog.install, "use": model_catalog.use, "remove": model_catalog.remove}.get(action)
+    if handler is None:
+        raise HTTPException(status_code=404, detail=f"unknown action {action!r}")
+    result = handler(request.id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or f"{action} failed")
+    return result
+
+
 @app.post("/api/runtime/engine")
 def api_runtime_engine(request: EngineChoiceRequest):
     from app.runtime_packs import set_choice

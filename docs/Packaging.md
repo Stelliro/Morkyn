@@ -144,6 +144,12 @@ add-on pack (below), built by the packs job.
   ends, so every child is forked from one long-lived spawner thread (`launcher._spawn`): the
   window started the server from the short-lived `morkyn-start` thread and it was killed a second
   after it was ready (2026-10-23, the first Linux window).
+- Linux CUDA pack: llama-cpp-python's Linux CUDA wheel links `libcudart.so.12` and cuBLAS but
+  does not carry them (the Windows wheel carries its DLLs), and a desktop with only the NVIDIA
+  driver has neither. `build_packs.py cuda` on Linux adds `nvidia-cuda-runtime-cu12` and
+  `nvidia-cublas-cu12` (12.4) to the pack, and `runtime_packs._preload_cuda` loads them by path,
+  RTLD_GLOBAL, before llama_cpp is imported. Checked on Pop!_OS 24.04 without a CUDA toolkit:
+  the packaged app ran Hermes 3 8B on the RTX 4070 Ti at a 16K context.
 - Linux window (Stell, 2026-10-23, Pop!_OS: "it doesnt have a standalone application on
   linux"): the `qt-window` add-on pack, `pywebview[qt]` (PyQt6 + Qt WebEngine 6.11, all pip
   wheels, nothing from the distribution; 203 MB zipped, about 530 MB unpacked), built with

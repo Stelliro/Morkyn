@@ -70,6 +70,10 @@ def build(acc: str, out_dir: Path) -> Path:
     work = Path(tempfile.mkdtemp(prefix="morkyn-pack-"))
     site = work / "site"
     cmd = [sys.executable, "-m", "pip", "install", "--target", str(site), "--upgrade", requirement]
+    if acc == "cuda" and os_tag() == "linux":
+        # The Linux CUDA wheel links the CUDA runtime and cuBLAS without carrying
+        # them; a desktop with only the driver has neither (app/runtime_packs._preload_cuda).
+        cmd += ["nvidia-cuda-runtime-cu12==12.4.*", "nvidia-cublas-cu12==12.4.*"]
     env = dict(os.environ)
     if acc in ADDONS:
         cmd += ["--prefer-binary"]

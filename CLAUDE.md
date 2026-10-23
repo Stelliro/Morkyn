@@ -176,9 +176,13 @@ belong to, with the date).
 
 ## What to expect
 
-- **Models.** The target is local Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf`) via
-  MLE; `data/mle-models/` holds only Qwen2.5 7B. Check `/api/model-status` → `file` to see which
-  GGUF actually loaded. On the RTX 4070 Ti a turn takes about 10-40 s on the 8B and about 15 s on
+- **Models.** Stell (2026-10-23) chose **Hermes 3 (Llama 3.1 8B, Q4_K_M)** as the model to
+  move to: "lets go with llama 3.1 ... expecting less and getting more is our goal anyway".
+  It is the recommended entry of the one-click catalog (app/model_catalog.py), installed on the
+  Pop!_OS machine in `~/.local/share/morkyn/data/mle-models/`; it has no 8B-run baseline yet.
+  The runs so far were measured on Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf` on
+  Windows; also in the catalog), so compare Hermes against that. Check `/api/model-status` →
+  `file` to see which GGUF actually loaded. On the RTX 4070 Ti a turn takes about 10-40 s on the 8B and about 15 s on
   the 7B; a retry costs 30-80 s and usually returns nothing better.
 - **Typical model faults** (handle them with the guiding rule above): acting or speaking for the
   player, prose and ops disagreeing (moves, places, people, items, gold), stock phrases, codes
