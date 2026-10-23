@@ -165,7 +165,7 @@ class Words(unittest.TestCase):
         self.assertEqual(read("Another ghoul crawls out of the vent."), [("ghoul", "another", 1, 0)])
         self.assertEqual(read("The raider snarls at you."), [("raider", "the", 0, 0)])
         self.assertEqual(read("A guard in a dented helmet steps in front of you."), [("guard", "count", 1, 0)])
-        # An unstated plural is two, the least a plural can be.
+        # An unstated plural reads as two, the least a plural can be (filing rolls how many).
         self.assertEqual(read("A pack of wolves circles you."), [("wolf", "count", 2, 0)])
         self.assertEqual(read("Some ghouls shamble toward you."), [("ghoul", "count", 2, 0)])
         # A named one is no unnamed figure; quoted speech is never read.
@@ -926,8 +926,14 @@ class WhatThePlayerSees(unittest.TestCase):
         _fresh_world()
 
     def test_unnamed2_t1_mints_two_ghouls(self):
+        from unittest import mock
+
+        from app import unnamed
+
         asker = _RecordedAsker()
-        _play(UNNAMED2_T1_PROSE, UNNAMED2_T1_LINE, asker)
+        # The pack is not counted: the engine rolls it (forced to two here).
+        with mock.patch.object(unnamed, "UNSTATED_DICE", "2"):
+            _play(UNNAMED2_T1_PROSE, UNNAMED2_T1_LINE, asker)
         rows = _rows()
         self.assertEqual([r["name"] for r in rows], ["Ghoul 1", "Ghoul 2"])
         # figure_hostile said no: feasting on a corpse is no threat to the player.
@@ -942,7 +948,12 @@ class WhatThePlayerSees(unittest.TestCase):
         self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3"])
 
     def test_the_third_ghoul_after_an_uncounted_pack(self):
-        _play("You see a pack of ghouls.", "i look", _Asker(figures=("ghoul",)))
+        from unittest import mock
+
+        from app import unnamed
+
+        with mock.patch.object(unnamed, "UNSTATED_DICE", "2"):
+            _play("You see a pack of ghouls.", "i look", _Asker(figures=("ghoul",)))
         self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2"])
         _play("The third ghoul lunges at you.", "i fight", _Asker())
         self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3"])
