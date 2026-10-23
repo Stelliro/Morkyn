@@ -1903,6 +1903,11 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
             "facts_to_keep are true at this moment. ===NAR=== may add anything else to the scene, "
             "but does not contradict them: the time of day is that time, an open place is open, a closed one is closed."
         )
+        # Death is a 0/1 state told only when it is 1 (#154): Stell's one line, with a flag only.
+        from app.interpreter import DEAD_RULE, shows_dead
+
+        if shows_dead(facts):
+            instructions.append(DEAD_RULE)
     # Fresh per turn (app/example_pools.py): options, not people who exist.
     cast = context.get("cast_options") if isinstance(context, dict) else None
     if isinstance(cast, dict) and (cast.get("names") or cast.get("jobs")):

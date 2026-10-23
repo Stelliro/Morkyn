@@ -120,3 +120,34 @@ Same harness (the merged code's own builders, `app.llm._chat_text`, temperature 
 Pairs as the engine uses them (a fact recorded only when the first ask says yes and the check agrees): died + died_check 81/81, destroyed + destroyed_check 42/42, returned + returned_check 48/48; where_ended letter + the new still-here check: 60 right actions, 0 wrong moves, 12 no-actions in 72 (the old pair made 15 wrong moves).
 
 Also found: a place row named "None" was offered as "A) still in None" (#163's placeholder ops; now never offered), and `interpreter.units` keeps a quote apart from a speech tag that opens on a capitalised name ('"Back so soon?"' / 'Beth asks ...').
+
+---
+
+# Rounds 4 and 5 of the measurement: the dead-body asks and the unnamed-figure asks (2026-10-24)
+
+Same harness. Raw replies: scratchpad live-eval-4/ and live-eval-5/results.json.
+
+**Body asks** (branch e26f756), 28 + 6 cases:
+
+| ask | accuracy | false-yes | false-no | verdict |
+|---|---|---|---|---|
+| body_here ("Is X's body with the player at the end of it?") | 92% | 3/24 | 3/51 | KEEP |
+| body_here_check ("Has the player left X's body behind?") | 59% | 25/51 | 6/24 | **replaced** by "Has the player walked away from X's body?" (27/27 on death turns, 0 false facts) |
+| body_buried ("Is X's body buried?") | 92% | 8/84 | 0/15 | **replaced** by "Is X's body in a grave?" (97%; the acid pit is no longer a burial) |
+| body_buried_check ("Can X's body be seen?") | 86% | 3/24 | 9/60 | KEEP |
+| body_carried ("Is the player carrying X's body?") | 64% | 36/90 | 0/9 | **replaced** by "Is X's body in the player's arms or over the player's shoulder?" (96%) |
+| body_carried_check ("Is X's body lying on the ground?") | 68% | 15/36 | 9/39 | KEEP (with the new carried ask) |
+
+Body outcomes as the engine reads them: 76.4% with the first wordings, 95.8% with the replacements.
+
+**Unnamed-figure asks** (branch f3d3620), 29 cases:
+
+| ask | accuracy | unparseable | verdict |
+|---|---|---|---|
+| figure_kind ("is X a person, an animal or a monster?") | 44% | 42/75 | **replaced**: a choice question, cut off at 4 tokens before any answer; "is X a being that can act on its own?" 100% |
+| figure_kind_check ("could the player fight or talk to the X?") | 53% | 0 | **replaced**: said no to nearly every true figure; "could you fight or talk to the X? Answer yes or no." 93%, 0 false yes |
+| figure_hostile ("does X attack or threaten the player?") | 100% | 0 | KEEP |
+
+The reviewer's fear (a yes-leaning 8B filing "Ping 1" and "Counter 1" as hostile figures) was the wrong way round: on these asks Hermes did not lean yes, it failed to answer, so the branch as written filed no figures at all, real or phantom. The replacement pair: 89%, 0 false files.
+
+Lessons: a question that offers a choice is not a yes/no question, and a 4-token cap cuts the 8B off while it restates the question; "Answer yes or no." at the end does most of the work for a yes/no; a "left behind" or "carrying" word in a question is read loosely, so ask for the physical fact ("walked away from", "in the arms or over the shoulder", "in a grave").

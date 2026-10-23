@@ -148,6 +148,37 @@ belong to, with the date).
   is not relied on). Cleaner
   closing comes later.
 
+- **Where the player is, the people met are** (2026-10-24, #33): "play state needs to be in the
+  same location as npc and hadded to the llm to ensure that the llm knows where the player is". A
+  person the player meets is filed at the player's place, and the narrator is always told plainly
+  where the player is.
+- **Death is a 0/1 state the narrator is told only when it is 1** (2026-10-24, #154): "npc death
+  state needs to be changed from 0 to 1 ... if not the llm should assume all npc's state is 0 (we
+  dont need to tell it that npc's are alive as it already asumes that, we just need to tell it
+  characters are dead so add something like 'if state "dead = 1" character is dead')". The row
+  holds dead 0/1; the narrator gets the dead=1 people at the player's place (and the turn a state
+  changes), with one line saying dead = 1 means the character is dead; living people carry no
+  flag. Stell asked for that line, so it is the one allowed addition to the narrator's text here.
+- **The player is asked before a move they did not ask for** (2026-10-24, #46/#76): "the player
+  should be asked if they wish to move unless a state forces them to (eg. the player gets pushed
+  out a doorway or they player gets thrown or gets blown out a wall)". When the prose ends the
+  scene somewhere the player's line did not go, the game offers the move instead of making it;
+  a forced move (pushed, thrown, blown out) is applied.
+- **Transactions and items are read by their own agent, before and after the act** (2026-10-24,
+  #41/#85/#155/#152): "we likely need a seperate agent to parse transactions and items before and
+  after actions, this includes but is not limited to items and gold". The interpreter's gold read
+  grows into a transaction parser: what the player and the people here hold before the act, what
+  the scene shows changing, applied by the engine. For attacks: "the llm should roll before they
+  decide on how the player or an npc attacks and should be determined by the roll" (how the roll
+  reaches the prose: Stell chose, the same day, "Engine writes the outcome line": the roll comes
+  first, the engine writes the attack's result line itself from the roll and the weapon, the
+  narrator writes the scene around it, and when the draft leaves the line out or contradicts it
+  the engine puts its own line in; no model rewrite, no extra model call).
+- **#157's cross-reference is a system, not a fix** (2026-10-24): "this will be a big undertaking,
+  as to do this we will need to ensure we build a cross referencing system between npc's and the
+  llm, as well as what the player says and what the llm what the llm wants to say". Design it as
+  one mechanism (the records the engine holds, checked against what the draft wants to say)
+  before building.
 - **The dead leave a body** (2026-10-24): "we shouldnt just remove dead npcs, as they should not
   just vanish, they should have a dead body". A dead person stays where they died as a body: in
   the place's records and the narrator's context as dead and present, never as someone who

@@ -827,7 +827,7 @@ class TheDeadKeepTheirStoryName(unittest.TestCase):
         facts = I.facts(context)
         self.assertTrue(facts, context)
         self.assertFalse(any("Ghoul 1" in f for f in facts), facts)
-        self.assertEqual(facts[0], "The ghoul [[A]] died in turn 3 and is dead.")
+        self.assertEqual(facts[0], "The ghoul [[A]] dead=1")  # #154: the 0/1 flag, story label
         self.assertIn("The body of the ghoul [[A]] lies here.", facts)
         names = story_names(context)
         self.assertIn("Ghoul 1", names)
@@ -841,7 +841,7 @@ class TheDeadKeepTheirStoryName(unittest.TestCase):
             {"code": "B", "name": "Beth", "died_turn": 10, "location_id": 2}]}]}
         context = {"current_location": {"id": 2, "code": "L2", "npcs": []}, "locations": [{"id": 2, "code": "L2", "npcs": []}]}
         I.hold_context(state, context)
-        self.assertEqual(I.facts(context)[0], "Beth [[B]] died in turn 10 and is dead.")
+        self.assertEqual(I.facts(context)[0], "Beth [[B]] dead=1")
 
 
 class ACreatureThatSpeaksIsTheCreature(unittest.TestCase):
