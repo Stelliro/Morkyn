@@ -136,6 +136,16 @@ belong to, with the date).
 
 ## Design decisions
 
+- **Narrator, interpreter, engine** (2026-10-23, planned; Stell's fix for prose and state
+  disagreeing): the **narrator** only describes; it "cant make anything happen". The
+  **interpreter** (Stell's name for it: not "translator") reads the player's line (what was
+  tried) and the finished scene (what happened) in one small ask and states the outcome as
+  plain events ("player gives 5 gold to merchant"); handing those to the engine is when
+  anything happens. The **engine** checks each event against its records (purse, roster,
+  places), applies or refuses it, and owns the math. The narrator stops writing state ops, so
+  there is one source of truth. First step: gold only, in shadow mode beside
+  `world._settle_stated_gold` on recorded 8B turns, logging disagreements before anything
+  changes; items and moves follow if it wins, and the prose_state gold readers retire.
 - **Prompts, not gates, for content fields.** A wrong-kind answer is fixed by changing the ask
   and shipping the context, never by a regex that refuses it.
 - **No fixed examples in prompts.** The local models paste them verbatim. Draw 3-5 fresh ones per
