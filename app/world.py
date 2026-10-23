@@ -13320,6 +13320,10 @@ def _restore_snapshot_rows(conn, rows: dict[str, list[dict[str, Any]]]) -> None:
 
 
 def _update_or_insert_row(conn, table: str, row: dict[str, Any]) -> None:
+    if table == "npcs" and "died_turn" in row and "dead" not in row:
+        # A snapshot taken before npcs.dead existed (#154): the state follows died_turn, so a rewind
+        # over an older death does not leave dead=1 on a person it brought back.
+        row = {**row, "dead": 1 if int(row.get("died_turn") or 0) > 0 else 0}
     pk = _primary_key(table)
     columns = list(row.keys())
     exists = conn.execute(f"SELECT 1 FROM {table} WHERE {pk} = ?", (row[pk],)).fetchone()
