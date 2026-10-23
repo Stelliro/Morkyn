@@ -332,6 +332,18 @@ _MULTIWORD_LIMIT = {"ROLE": 4, "LOC": 6, "NAME": 4, "TO": 6}
 # read as one quoted argument. Only a bracket at a token edge counts, so
 # "[[L1]]" and arrows inside quoted text are left alone.
 _ANGLE_SPAN_RE = re.compile(r"(?<!\S)<\s*([^<>\n]*?)\s*>(?!\S)")
+# A quoted part that opens on a field word and a colon: "NAME: Beth".
+_FIELD_LABEL_RE = re.compile(r"^\s*([A-Za-z]{2,10})\s*:\s*(\S.*)$", re.S)
+# The named parts each op has (the op list in OPS_INSTRUCTIONS): only these
+# read as a label inside quotes, so "npc: the guard watches" on FOCUS stays text.
+_OP_FIELDS: dict[str, frozenset[str]] = {
+    "NPC_NEW": frozenset({"NAME", "ROLE", "LOC", "ATTITUDE", "RACE", "RANK"}),
+    "QUEST": frozenset({"GIVER", "STEP", "AT", "REWARD"}),
+    "GRANT": frozenset({"QTY", "TYPE", "DESC", "RARITY"}),
+    "TAKE": frozenset({"QTY"}),
+    "KARMA": frozenset({"VIS", "REASON"}),
+    "EVENT": frozenset({"LOC", "NPC", "SUMMARY"}),
+}
 
 
 def _ends_multiword(token: str, flag_keys: set[str]) -> bool:
@@ -411,13 +423,28 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
     # ordinary words elsewhere, so they are flags on QUEST lines alone.
     flag_keys = flag_keys | _OPCODE_FLAG_KEYS.get(normalize_opcode(opcode), set())
     force_positional_remaining = _LEADING_POSITIONALS.get(opcode, 0)
+    own_op = normalize_opcode(opcode)
     i = 1
     while i < len(parts):
         token = parts[i]
+        # "NAME: Beth": the field word written with a colon is the field word.
+        if token.endswith(":") and token[:-1].upper() in flag_keys:
+            token = token[:-1]
         upper = token.upper()
         str_match = re.fullmatch(r"__STR(\d+)__", token)
         if str_match:
-            positionals.append(strings[int(str_match.group(1))])
+            value = strings[int(str_match.group(1))]
+            # Playtest #28 (Hermes 3 8B, cc87dd29 T10): NPC_NEW: "NAME: Beth"
+            # minted a second person called "NAME: Beth" beside Beth [[B]], and
+            # QUEST "AT: New Vegas" lost its place (T2). A field word and a
+            # colon opening a quoted part label that part; they are not its text.
+            label = _FIELD_LABEL_RE.match(value) if not force_positional_remaining else None
+            key_u = label.group(1).upper() if label else ""
+            if label and key_u in _OP_FIELDS.get(own_op, ()) and key_u not in flags:
+                flags[key_u] = label.group(2).strip()
+                i += 1
+                continue
+            positionals.append(value)
             if force_positional_remaining:
                 force_positional_remaining -= 1
             i += 1
