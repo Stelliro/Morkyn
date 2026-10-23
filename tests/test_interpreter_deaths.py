@@ -551,10 +551,11 @@ class TestTheDeadAreHeld(unittest.TestCase):
         self.assertEqual(out["narration"], text)
 
     def test_facts_state_who_is_dead(self):
-        context = {"the_dead": {"people": [{"code": "B", "name": "Beth", "turn": 10}], "places": [
+        # The turn after her death (#154: the turn a state changes, the flag only).
+        context = {"turn": 10, "the_dead": {"people": [{"code": "B", "name": "Beth", "turn": 10}], "places": [
             {"code": "L3", "name": "Radiation Fenced Sanctuary Clinic", "turn": 5}]}}
         kept = facts_to_keep(context)
-        self.assertIn("Beth [[B]] died in turn 10 and is dead.", kept)
+        self.assertIn("Beth [[B]] dead=1", kept)
         self.assertIn("Radiation Fenced Sanctuary Clinic [[L3]] was destroyed in turn 5.", kept)
 
 
@@ -687,7 +688,7 @@ class TestTheEngineHoldsTheRecord(unittest.TestCase):
         self.assertNotIn("What do you do now?", summary)
         # The next turn is told, and she is not present.
         context = world.build_prompt_context(world.get_state(), "i search Marisol's body")
-        self.assertIn(f"Marisol [[{self.code}]] died in turn {died} and is dead.", facts_to_keep(context))
+        self.assertIn(f"Marisol [[{self.code}]] dead=1", facts_to_keep(context))
         for location in context.get("locations") or []:
             self.assertNotIn(self.code, [n.get("code") for n in location.get("npcs") or []])
         # T4: searching the body she reaches for a knife (Hermes's real picks).

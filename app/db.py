@@ -828,6 +828,10 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         # The turn the interpreter recorded this person dead (app/interpreter.py, #154);
         # 0 = alive. A later "returned" event sets it back to 0.
         ("died_turn", "INTEGER NOT NULL DEFAULT 0"),
+        # Death as a 0/1 state (#154, Stell 2026-10-24): 1 = dead. Kept in step
+        # with died_turn by interpreter.set_dead (a death, a return; rewind
+        # restores the whole row).
+        ("dead", "INTEGER NOT NULL DEFAULT 0"),
         # What a dead person's body is doing (app/interpreter.py, the dead leave a
         # body, 2026-10-24): '' lies where it fell, 'carried', 'buried'.
         ("body", "TEXT NOT NULL DEFAULT ''"),
@@ -849,6 +853,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
                     )
                 except Exception:
                     pass
+            # A save from before the 0/1 state: its dead are the rows with a death turn.
+            if column == "dead":
+                conn.execute("UPDATE npcs SET dead = 1 WHERE died_turn > 0")
 
     player_columns = table_columns["player"]
     if "karma" not in player_columns:
