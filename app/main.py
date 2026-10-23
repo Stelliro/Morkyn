@@ -1135,7 +1135,14 @@ def api_runtime_engine(request: EngineChoiceRequest):
 @app.get("/api/state")
 def api_state():
     # get_state() blanks the speech key itself; it only ever leaves masked (/api/tts-config).
-    return get_state()
+    state = get_state()
+    # A page that redraws the last turn from the save (the live viewer, a
+    # reload) learns from resume whether the offline narrator wrote it (#156).
+    try:
+        state["resume"] = resume_snapshot(state)
+    except Exception:
+        pass
+    return state
 
 
 @app.get("/api/world-facts")

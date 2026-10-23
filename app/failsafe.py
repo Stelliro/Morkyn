@@ -21,6 +21,7 @@ player, not the developer: what to close, what to lower, where the setting is.
 from __future__ import annotations
 
 import re
+import sys
 from typing import Any
 
 MLE_FALLBACK_ENDPOINT = "/api/failsafe/mle-fallback"
@@ -90,9 +91,15 @@ _COPY: dict[str, dict[str, Any]] = {
     "engine_missing": {
         "title": "The local engine is missing or did not load",
         "summary": "llama_cpp would not import or load its library, so no GGUF can run in-process. A smaller context will not help.",
+        # The first tip depends on the build (playtest #156: a packaged-game
+        # player was shown the .venv tip). build_tips() picks one.
+        "packaged_tips": [
+            "Open Updates → Local engine, reinstall the pack for your graphics card, then restart Mørkyn.",
+        ],
+        "source_tips": [
+            "Run the launcher once with the install step, or run: pip install llama-cpp-python inside .venv.",
+        ],
         "tips": [
-            "In the packaged game: open Updates → Local engine, reinstall the pack for your graphics card, then restart Mørkyn.",
-            "From the source folder: run the launcher once with the install step, or run: pip install llama-cpp-python inside .venv.",
             "Or switch Provider in LLM settings to a llama.cpp server or a cloud API.",
         ],
     },
@@ -163,6 +170,18 @@ _COPY: dict[str, dict[str, Any]] = {
 }
 
 
+def is_packaged_build() -> bool:
+    """True in the packaged game (a frozen exe or .deb build), False from a source checkout."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def build_tips(copy: dict[str, Any], packaged: bool | None = None) -> list[str]:
+    """A copy's tips for this build: the packaged or the source-folder tips first, then the shared ones."""
+    packaged = is_packaged_build() if packaged is None else packaged
+    first = copy.get("packaged_tips" if packaged else "source_tips") or []
+    return [*first, *(copy.get("tips") or [])]
+
+
 def classify_failure(message: Any, *, stage: str = "turn", provider: str = "") -> dict[str, Any]:
     """Map an error message to a problem the UI can show.
 
@@ -180,7 +199,7 @@ def classify_failure(message: Any, *, stage: str = "turn", provider: str = "") -
     if code == "unknown" and _HTTP_AUTH_RE.search(raw):
         code = "auth"
     copy = _COPY.get(code) or _COPY["unknown"]
-    tips = list(copy["tips"])
+    tips = build_tips(copy)
     if provider == "mle" and code == "server_unreachable":
         # The in-process engine has no server; the message came from somewhere else.
         tips = _COPY["unknown"]["tips"]
@@ -202,7 +221,7 @@ def engine_problem(error: str = "") -> dict[str, Any]:
     """The MLE loader's case: llama_cpp would not import or load its library, so no context size can help."""
     problem = classify_failure(error, stage="load", provider="mle")
     copy = _COPY["engine_missing"]
-    problem.update(code="engine_missing", title=copy["title"], summary=copy["summary"], tips=list(copy["tips"]))
+    problem.update(code="engine_missing", title=copy["title"], summary=copy["summary"], tips=build_tips(copy))
     return problem
 
 

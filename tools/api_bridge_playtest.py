@@ -282,6 +282,7 @@ def main() -> int:
             "model_calls": list(run.calls_this_turn),
             "used_fallback": bool(res.get("used_fallback")),
             "fallback_reason": res.get("fallback_reason") or "",
+            "fallback_problem": res.get("fallback_problem") or None,
             "narration": next((j["content"] for j in journal if j["kind"] == "narration"), ""),
             "engine_journal": [j for j in journal if j["kind"] not in {"narration", "player"}],
             "dice": dice,
