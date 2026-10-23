@@ -26482,6 +26482,71 @@ def _rate_persuasion_asks(
     return out
 
 
+def _dead_talk_outcome(
+    context: dict[str, Any],
+    model_input: str,
+    *,
+    usage: list[dict[str, Any]] | None = None,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """The engine's answer when the player's line talks to someone recorded dead (#164), or None.
+
+    Engine first, the way it owns a check's outcome: the line names a dead
+    person in the records (app/interpreter.dead_talked_to), the engine's own
+    check reading takes the line as talk (a social check), and one small ask
+    says the line is talking to that person. Then the draft is told the
+    outcome through act_outcome: they are dead and do not answer. A search of
+    the body, a burial or a shot at the corpse is no talk and stays free.
+    Each ask's prompt, reply and seconds go on ``usage`` and ``trace``.
+    """
+    own = re.split(r"\n\s*\n", _player_line(model_input), maxsplit=1)[0].strip()
+    if not own:
+        return None
+    from app import interpreter
+
+    with connect().closing() as conn:
+        records = interpreter.load_records(conn)
+        if not any(interpreter.is_dead(row) for row in records.get("people") or []):
+            return None
+        match = interpreter.Matcher(records.get("people"), records.get("places"))
+        named = match.named(own, [r for r in match.people if interpreter.is_dead(r)], records.get("player_names"))
+        if not named:
+            return None
+        here_row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        here_id = int((here_row["current_location_id"] if here_row else 0) or 0)
+        where = {
+            str(r["code"] or ""): int(r["location_id"] or 0)
+            for r in conn.execute("SELECT code, location_id FROM npcs WHERE died_turn > 0").fetchall()
+        }
+    try:
+        from app.skill_checks import infer_check_from_action
+
+        inferred = infer_check_from_action(model_input, context)
+    except Exception:
+        inferred = None
+    reads = [inferred, (inferred or {}).get("also_check") if isinstance(inferred, dict) else None]
+    if not any(isinstance(item, dict) and item.get("social") for item in reads):
+        turn_ledger.note("check", "dead_named_not_talk", codes=[str(r.get("code") or "") for r in named][:4])
+        return None
+
+    def ask(phase: str, prompt: str, max_tokens: int) -> str:
+        from app.llm import _chat_text
+
+        return _chat_text(interpreter.SYSTEM_PROMPT, prompt, timeout=45, usage=usage, phase=phase,
+                          max_tokens=max_tokens, trace=trace, temperature=0.0)
+
+    report: dict[str, Any] = {"asks": []}
+    row = interpreter.dead_talked_to(own, records, ask, report)
+    if row is None:
+        turn_ledger.note("check", "dead_not_talked_to", codes=[str(r.get("code") or "") for r in named][:4],
+                         asks=report["asks"])
+        return None
+    code = str(row.get("code") or "")
+    outcome = interpreter.dead_talk_outcome(row, own, here=bool(here_id) and where.get(code) == here_id)
+    turn_ledger.note("check", "dead_talked_to", code=code, means=outcome["means"], asks=report["asks"])
+    return outcome
+
+
 @turn_ledger.recorded("turn")
 @_turn_start_record
 def play_turn(
@@ -26855,6 +26920,19 @@ def play_turn(
     quest_match = _quest_step_match(player_input) if input_kind == "player" else None
     quest_dice_ran = False
 
+    # Talk to someone recorded dead (#164): the engine answers it, the way it
+    # answers a roll. Its asks are put on the turn's trace and usage below.
+    dead_talk: dict[str, Any] | None = None
+    pre_usage: list[dict[str, Any]] = []
+    pre_trace: list[dict[str, Any]] = []
+    if input_kind == "player" and not str(model_input).startswith("__"):
+        try:
+            dead_talk = _dead_talk_outcome(context, model_input, usage=pre_usage, trace=pre_trace)
+        except Exception as exc:
+            turn_ledger.note("check", "dead_talk_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+            dead_talk = None
+    dead_talk_code = str((dead_talk or {}).pop("dead", "") or "").upper()
+
     # Pre-resolve action checks so the LLM must honor social rolls / DCs.
     skill_check_results: list[dict[str, Any]] = []
     # Model asks made before the draft (the attack ask): joined to the turn's
@@ -26943,6 +27021,17 @@ def play_turn(
             # (Stell, 2026-10-21): a question anyone would answer is easier
             # than a favour against their interest. The engine found the check
             # and its person; one small ask rates the request (app/ask_weight).
+            # Talk the engine answered (#164) rolls nothing: no one alive is
+            # its other side, so its social roll is not made. A roll against
+            # someone else the line also talks to stands.
+            if dead_talk:
+                pending = [
+                    item for item in pending
+                    if not (
+                        isinstance(item, dict) and item.get("social") and not item.get("act")
+                        and str((item.get("npc_ref") or {}).get("code") or dead_talk_code).upper() == dead_talk_code
+                    )
+                ]
             ask_ratings = _rate_persuasion_asks(pending, context, _player_line(player_input))
             # The d20 is seeded like every other server roll: an unseeded
             # Random() made a rewind + regenerate of the same input roll a
@@ -27130,6 +27219,15 @@ def play_turn(
                 context["mechanics_context"] = mechanics_context
     except Exception:
         skill_check_results = []
+
+    if dead_talk:
+        mechanics_context = dict(context.get("mechanics_context") or {})
+        if mechanics_context.get("act_outcome"):
+            # The dice decided an act in the same line; that outcome stands.
+            turn_ledger.note("check", "dead_talk_beside_act", code=dead_talk_code)
+        else:
+            mechanics_context["act_outcome"] = dead_talk
+            context["mechanics_context"] = mechanics_context
 
     # Health is a fact the prose keeps (playtest #88). The run that found this
     # hit 0 health at turn 15 and played 44 more turns: the number was clamped
@@ -27399,6 +27497,11 @@ def play_turn(
         )
         result["_model_trace"] = model_trace
         used_fallback = True
+
+    if pre_usage or pre_trace:
+        # The asks made before the draft (#164) lead the turn's own record.
+        result["_model_usage"] = pre_usage + list(result.get("_model_usage") or [])
+        result["_model_trace"] = pre_trace + list(result.get("_model_trace") or [])
 
     result["_deterministic_combat"] = mechanics_context.get("combat") or {}
     # The asks made before the draft go first in the turn's usage and trace.
