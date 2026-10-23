@@ -154,15 +154,30 @@ class APartReachedAfterLeavingIsNotInsideThePlaceLeft(unittest.TestCase):
         self.assertEqual(int(tunnel["parent_id"] or 0), town)
         self.assertEqual(_here()["name"], "Ruined Subway Tunnel")
 
-    def test_combined_t2_with_the_live_answer_outside_the_tunnel_is_outside(self):
-        # Live: "C) outside Radiation", "No." (confirmed).
+    def test_combined_t2_with_the_live_answer_the_player_stands_in_the_tunnel(self):
+        # Live: "C) outside Radiation", "No." (confirmed). Review of 5cbf444: the tunnel went into a new
+        # "Outside Radiation Fenced Sanctuary" and the venue gate stood the player there, not in the tunnel
+        # the prose has them in ("... is entered from Outside ...; the journey ends there.").
+        from app.db import connect
+
         town, clinic = _world()
         self._apply("C) outside Radiation", "No.")
         tunnel = _row("Ruined Subway Tunnel")
-        outside = _row("Outside Radiation Fenced Sanctuary")
-        self.assertTrue(outside)
-        self.assertEqual(int(tunnel["parent_id"] or 0), int(outside["id"]))
+        self.assertTrue(tunnel)
         self.assertNotEqual(int(tunnel["parent_id"] or 0), clinic)
+        self.assertEqual(int(tunnel["parent_id"] or 0), town)
+        self.assertEqual(_here()["name"], "Ruined Subway Tunnel")
+        # Settle made no move outside, so the engine's outside place is not made (#46).
+        self.assertFalse(_row("Outside Radiation Fenced Sanctuary"))
+        with connect().closing() as conn:
+            redirects = conn.execute("SELECT content FROM journal WHERE kind = 'venue_redirect'").fetchall()
+        self.assertEqual(redirects, [])
+
+    def test_combined_t2_with_a_checked_still_here_keeps_the_line_reader_out(self):
+        # A checked "still in the clinic" is the answer the engine acts on: the line's words do not override it.
+        town, clinic = _world()
+        self._apply("A) still in", "Yes")
+        self.assertEqual(int(_row("Ruined Subway Tunnel")["parent_id"] or 0), clinic)
 
     def test_a_part_reached_without_leaving_is_still_inside(self):
         from app import world
@@ -173,6 +188,156 @@ class APartReachedAfterLeavingIsNotInsideThePlaceLeft(unittest.TestCase):
                   "player": {"move_to_location": "storage cellar"}}
         world.apply_turn(result, "I climb down into the storage cellar")
         self.assertEqual(int(_row("Storage Cellar")["parent_id"] or 0), clinic)
+
+
+def _harbour():
+    """The reviewer's synthetic world: Saltmarrow (L1) with The Rusty Anchor (tavern), The Mistral (a ship)
+    and Old Watchtower in it; Dunmere apart."""
+    from app import world
+    from app.db import connect, init_db
+
+    init_db()
+    world.start_playthrough({"player_name": "Vault", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+    with connect().closing() as conn:
+        town = int(conn.execute("SELECT current_location_id FROM player").fetchone()[0])
+        conn.execute("DELETE FROM locations WHERE id != ?", (town,))
+        conn.execute("UPDATE locations SET code = 'L1', name = 'Saltmarrow', parent_id = 0 WHERE id = ?", (town,))
+        ids = {"Saltmarrow": town}
+        for code, name, parent, kind in (("L2", "The Rusty Anchor", town, "tavern"), ("L3", "The Mistral", town, ""),
+                                         ("L4", "Old Watchtower", town, ""), ("L5", "Dunmere", 0, "")):
+            cur = conn.execute("INSERT INTO locations (code, name, summary, visit_count, parent_id, kind) "
+                               "VALUES (?, ?, '', 1, ?, ?)", (code, name, parent, kind))
+            ids[name] = int(cur.lastrowid)
+    return ids
+
+
+class APartIsFiledWhereTheCheckedAnswerAndTheLineAgree(unittest.TestCase):
+    """The review of 5cbf444 (scratchpad vdr-scripts/synth.py), each case with its where_ended answer."""
+
+    def _turn(self, start: str, line: str, prose: str, new: str, move: str, letter: str | None, confirm: str = "No."):
+        from app import where_ended, world
+        from app.db import connect
+
+        ids = _harbour()
+        with connect().closing() as conn:
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (ids[start],))
+        result = {"narration": prose, "player": {"move_to_location": move or None},
+                  "locations": [{"name": new, "summary": ""}] if new else []}
+        previous = where_ended.set_ask((lambda s, u: f"{letter})" if s == where_ended.SYSTEM else confirm)
+                                       if letter else (lambda s, u: ""))
+        try:
+            with connect().closing() as conn:
+                where_ended.ask_where(conn, result, line, prose)
+            world.apply_turn(result, line)
+        finally:
+            where_ended.set_ask(previous)
+        return ids
+
+    def _parent(self, name: str) -> str:
+        row = _row(name)
+        parent = int(row.get("parent_id") or 0)
+        from app.db import connect
+
+        with connect().closing() as conn:
+            up = conn.execute("SELECT name FROM locations WHERE id = ?", (parent,)).fetchone()
+        return str(up["name"]) if up is not None else ""
+
+    HOLD = ("The Mistral", "I step out of my cabin and go down to the hold",
+            "You step out of your cabin and climb down the ladder into the hold. Crates of salt fish are lashed to the "
+            "ribs of the ship.", "The Hold", "The Hold")
+    COMMON_ROOM = ("The Rusty Anchor", "I leave the tavern's common room and go down to the cellar",
+                   "You leave the noise of the common room and take the stair down into the cellar. Casks line the walls.",
+                   "Cellar", "Cellar")
+    CELLAR = ("The Rusty Anchor", "I head down to the cellar",
+              "You take the narrow stair behind the bar down into the cellar. Casks line the damp walls and a lamp swings.",
+              "Cellar", "Cellar")
+
+    def test_the_hold_of_the_ship_under_a_checked_still_here(self):
+        # 8B run 150's class: out of a cabin is not out of the ship.
+        for letter, confirm in (("A", "Yes"), (None, "")):
+            self._turn(*self.HOLD, letter, confirm)
+            self.assertEqual(self._parent("The Hold"), "The Mistral", (letter, confirm))
+            self.assertEqual(_here()["name"], "The Hold")
+
+    def test_the_cellar_left_for_from_the_common_room_is_the_taverns(self):
+        for letter, confirm in (("A", "Yes"), (None, "")):
+            self._turn(*self.COMMON_ROOM, letter, confirm)
+            self.assertEqual(self._parent("Cellar"), "The Rusty Anchor", (letter, confirm))
+
+    def test_a_wrong_up_or_outside_answer_alone_moves_no_part_out(self):
+        # B = "in Saltmarrow, outside The Rusty Anchor", C = outside Saltmarrow; the line and prose stay in.
+        for letter in ("B", "C"):
+            self._turn(*self.CELLAR, letter, "No.")
+            self.assertEqual(self._parent("Cellar"), "The Rusty Anchor", letter)
+            self.assertEqual(_here()["name"], "Cellar", letter)
+            self.assertFalse(_row("Outside Saltmarrow"), letter)
+
+    def test_a_known_place_answer_files_the_part_there_and_the_player_in_it(self):
+        # C = "at Old Watchtower": the chamber is the tower's, and the player climbed into it (not stopped at the tower).
+        self._turn("Saltmarrow", "I walk to the watchtower and climb to its upper chamber",
+                   "You cross the square to the Old Watchtower and climb the spiral stair to the upper chamber. Wind "
+                   "whistles through the slits.", "Upper Chamber", "Upper Chamber", "C", "No.")
+        self.assertEqual(self._parent("Upper Chamber"), "Old Watchtower")
+        self.assertEqual(_here()["name"], "Upper Chamber")
+        self.assertFalse(_row("Outside Saltmarrow"))
+
+    def test_leaving_the_town_puts_the_part_outside_it(self):
+        # B = outside Saltmarrow, checked; the line leaves the town (no move outside was settled, so no
+        # outside place): the mine tunnel is a place of its own, not a part of Saltmarrow, and the player is in it.
+        self._turn("Saltmarrow", "I leave town and explore the old mine tunnel to the north",
+                   "You leave Saltmarrow behind and follow the cart track north to the mouth of the old mine tunnel. "
+                   "Cold air breathes out of it.", "Old Mine Tunnel", "Old Mine Tunnel", "B", "No.")
+        self.assertEqual(self._parent("Old Mine Tunnel"), "")
+        self.assertEqual(_here()["name"], "Old Mine Tunnel")
+        self.assertFalse(_row("Outside Saltmarrow"))
+
+
+class ALineThatMovesIsNeverRedrafted(unittest.TestCase):
+    """The reviewer's corpus (vdr-scripts/asks.py): a line whose act is going somewhere asks to go."""
+
+    MOVES = (
+        "I creep into the ruined subway tunnel where a pack of ghouls is feeding on a carcass",
+        "i get in my power armor, grab my minigun, and set off to New Vegas to fight a Deathclaw",
+        "I set off to New Vegas", "I sneak out the back", "I jump into the river", "I retreat to the surface",
+        "I explore the tunnel further", "I continue down the tunnel", "I take the stairs down", "I crawl through the vent",
+        "I get out of here", "I push on", "I ask Mara to take me to the clinic", "I head back to the clinic",
+        "I flee", "I go upstairs", "I climb out of the tunnel",
+    )
+    STAYS = (
+        "i search the dead ghoul", "i shoot the closest ghoul", "i shoot Dr. Vasilis",
+        "i buy some bandages from Dr. Vasilis for 2 gold", "i say hi to Dr. Vasilis", "I look around",
+        "I talk to the medic", "I wait for dawn", "I rest here for the night", "a group of 4 ghouls BRUTALLY attack me",
+    )
+
+    def test_the_corpus(self):
+        from app import world
+        from app.db import connect
+
+        _tunnel_world()
+        with connect().closing() as conn:
+            for line in self.MOVES:
+                self.assertTrue(world.line_asks_to_go(conn, line), line)
+            for line in self.STAYS:
+                self.assertFalse(world.line_asks_to_go(conn, line), line)
+
+    def test_unnamed2_t2_under_a_checked_elsewhere_is_not_redrafted(self):
+        # Recorded unnamed2 T2 from the sanctuary; a B/No. answer re-drafted it on 5cbf444.
+        from app import scene_drift, where_ended
+        from app.db import connect
+
+        town, _clinic = _world()
+        with connect().closing() as conn:
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (town,))
+        line = "I creep into the ruined subway tunnel where a pack of ghouls is feeding on a carcass"
+        calls: list = []
+        previous = where_ended.set_ask(lambda s, u: "B)" if s == where_ended.SYSTEM else "No.")
+        try:
+            first = {"narration": T2_PROSE, "player": {}}
+            kept = scene_drift.check(first, line, lambda note: calls.append(note) or {"narration": "x", "player": {}})
+        finally:
+            where_ended.set_ask(previous)
+        self.assertEqual(calls, [])
+        self.assertIs(kept, first)
 
 
 class DriftIsRedraftedOnce(unittest.TestCase):

@@ -10463,13 +10463,40 @@ def _invites_to_place(player_input: str, rows: list[Any], current_name: str = ""
     return False
 
 
+# The player's body going somewhere: a motion verb with a way to go after it
+# ("creep into", "retreat to", "continue down the tunnel", "set off to New
+# Vegas", "take the stairs down"), or one that is going on by itself ("I flee",
+# "I push on", "I explore"). Only line_asks_to_go reads it, so a scene the line
+# walked out of is never re-drafted back in place (review of the drift fix:
+# "I creep into the ruined subway tunnel ..." was). It errs towards motion: a
+# line read as moving only keeps the draft as it is.
+_LINE_MOTION_RE = re.compile(
+    r"\b(?:go|goes|going|went|walk\w*|run|runs|running|ran|head\w*|creep\w*|crept|sneak\w*|snuck|crawl\w*|"
+    r"climb\w*|clamber\w*|jump\w*|leap\w*|dive|dives|diving|dove|swim\w*|swam|wade\w*|retreat\w*|withdraw\w*|"
+    r"continu\w*|press\w*|push\w*|proceed\w*|advanc\w*|ventur\w*|delv\w*|descend\w*|ascend\w*|enter\w*|"
+    r"exit\w*|leave|leaves|leaving|left|return\w*|follow\w*|wander\w*|travel\w*|ride|rides|riding|rode|"
+    r"march\w*|stride|strides|striding|strode|slip\w*|step\w*|move|moves|moving|hurr\w*|dash\w*|sprint\w*|"
+    r"race|races|racing|rush\w*|escap\w*|cross\w*|make\s+my\s+way|set(?:s|ting)?\s+(?:off|out)|"
+    r"get\s+(?:out|away|back|down|up|off))\b"
+    r"(?:\s+(?!and\b|then\b)[\w'’-]+){0,4}?\s*"
+    r"\b(?:in|into|inside|out|outside|through|down|up|to|toward|towards|back|away|on|onward|onwards|further|"
+    r"farther|deeper|ahead|forward|across|over|along|past|around|off|north\w*|south\w*|east\w*|west\w*|home|"
+    r"there|upstairs|downstairs|below|above)\b"
+    r"|\b(?:flee|flees|fleeing|fled|explor\w*|retreat\w*|keep\s+(?:walking|going|moving|running)|move\s+on|"
+    r"get\s+(?:out|away)|"
+    r"take\s+(?:the\s+)?(?:stairs|steps|ladder|path|road|trail|track|passage|tunnel|corridor|exit|lift|elevator))\b",
+    re.I,
+)
+
+
 def line_asks_to_go(conn, player_input: str) -> bool:
     """The movement code's own reading of the player's line: it asks to go somewhere.
 
-    The same readers _unasked_unshown_move holds a move to (travel, a doorway, a
-    follow, business at another known place, an invitation to one), over the
-    narrated clauses the player does now. app/scene_drift.py reads it before it
-    calls a scene that ends elsewhere drift.
+    The same readers resolve_movement and _unasked_unshown_move hold a move to
+    (its movement intent, travel, a doorway, a follow, business at another known
+    place, an invitation to one), over the narrated clauses the player does now,
+    and a body moving (_LINE_MOTION_RE) for the motion the travel keywords miss.
+    app/scene_drift.py reads it before it calls a scene that ends elsewhere drift.
     """
     line = _without_quoted_questions(str(player_input or ""))
     acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", _player_line(line))
@@ -10481,6 +10508,14 @@ def line_asks_to_go(conn, player_input: str) -> bool:
         pass
     if travel_intent(acts) or venue_move_intent(acts) or _turn_intent(acts)[0] == "travel":
         return True
+    if _LINE_MOTION_RE.search(acts):
+        return True
+    try:
+        # resolve_movement's own intent: "I ask Mara to take me to the clinic".
+        if _movement_intent(conn, line) == "travel":
+            return True
+    except Exception:
+        pass
     try:
         rows = conn.execute("SELECT id, code, name FROM locations").fetchall()
         here = conn.execute(
@@ -14384,56 +14419,105 @@ def _part_anchor(
     # A part reached after leaving the place stood in is not inside it (drift
     # eval, combined T2: "I leave the clinic and creep into the ruined subway
     # tunnel" filed the tunnel inside the clinic, and every later scene read
-    # "inside ... Clinic" and went back there). Where the scene ended, when
-    # where_ended's checked answer says out of here, decides; else the line's
-    # own leaving puts it in the place the one left stands in.
-    if isinstance(left_for, dict) and left_for.get("kind") in {"up", "outside", "known"}:
-        anchor = _where_left_anchor(conn, left_for, player_input)
-        if anchor and anchor != here_id:
-            turn_ledger.note("place", "part_outside_place_left", name=name, parent=str(left_for.get("name") or ""),
-                             by="where_ended")
-            return anchor
+    # "inside ... Clinic" and went back there). One decision, in this order:
+    #   * where_ended checked "still here": here, whatever the line's words.
+    #   * it checked a known place the ending names: in that place.
+    #   * it checked "outside", settle moved the player there and the line or
+    #     the prose leaves: in the engine's outside place (found, never made
+    #     here: #46).
+    #   * it checked "up" or "outside" and the line or the prose leaves the
+    #     place stood in: in the place one left stands in ("up" names it).
+    #   * no checked answer: the line's own leaving does the same.
+    # A model answer alone moves no part out (a wrong "up" on "I head down to
+    # the cellar" kept the cellar in the tavern on dd527e4 and must still).
+    left = left_for if isinstance(left_for, dict) else {}
+    kind = str(left.get("kind") or "")
+    if kind == "here":
+        return here_id
     here_row = _location_row(conn, here_id) if here_id else None
-    if here_row is not None and _line_leaves_here(acts, here_row):
-        up = int(venues._field(here_row, "parent_id", 0) or 0)
-        turn_ledger.note("place", "part_outside_place_left", name=name, left=str(here_row["name"] or ""),
-                         parent=up, by="line")
-        return up if up else -1
-    return here_id
+    up = int(venues._field(here_row, "parent_id", 0) or 0) if here_row is not None else 0
+    anchor, by = 0, ""
+    if kind == "known" and int(left.get("id") or 0) and int(left.get("id") or 0) != here_id:
+        anchor, by = int(left["id"]), "where_ended"
+    elif kind == "outside" and left.get("moved") and left.get("leaves"):
+        found = conn.execute("SELECT id FROM locations WHERE LOWER(name) = LOWER(?)",
+                             (str(left.get("name") or ""),)).fetchone()
+        if found is not None and int(found["id"]) != here_id:
+            anchor, by = int(found["id"]), "where_ended"
+    if not anchor and kind in {"up", "outside"}:
+        if left.get("leaves"):
+            anchor = int(left.get("id") or 0) if kind == "up" else up
+            anchor, by = (anchor or -1), "where_ended"
+    elif not anchor and not kind and here_row is not None and _line_leaves_here(acts, here_row):
+        anchor, by = (up or -1), "line"
+    if not anchor or anchor == here_id:
+        return here_id
+    turn_ledger.note("place", "part_outside_place_left", name=name, left=str(here_row["name"] or "") if here_row is not None else "",
+                     parent=anchor, answer=kind, by=by)
+    if left_for is not None and anchor > 0:
+        # _apply_player reaches the part through this place (gate_venue_move's via).
+        left_for["anchor"] = anchor
+    return anchor
 
 
-def _where_left_for(movement_report: Any) -> dict[str, Any] | None:
-    """where_ended's checked answer on this turn's movement report, when it is out of the place stood in."""
+def _where_left_for(conn, movement_report: Any, player_input: str = "", narration: str = "") -> dict[str, Any] | None:
+    """where_ended's checked answer on this turn's movement report, for _part_anchor.
+
+    ``moved``: settle moved the player to it. ``leaves``: the player's line or the
+    prose's own "you" sentences go out of the place stood in.
+    """
     choice = movement_report.get("where_ended_choice") if isinstance(movement_report, dict) else None
-    if isinstance(choice, dict) and choice.get("kind") in {"up", "outside", "known"}:
-        return dict(choice)
-    return None
+    if not isinstance(choice, dict) or choice.get("kind") not in {"here", "up", "outside", "known"}:
+        return None
+    out = dict(choice)
+    out["moved"] = str(movement_report.get("rule") or "") in {"where_ended", "where_ended_outside"}
+    if out["kind"] in {"up", "outside"}:
+        try:
+            here_row = _location_row(conn, int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0] or 0))
+        except Exception:
+            here_row = None
+        acts = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input))
+        out["leaves"] = here_row is not None and (_line_leaves_here(acts, here_row) or _prose_leaves_here(narration, here_row))
+    return out
 
 
-def _where_left_anchor(conn, choice: dict[str, Any], player_input: str) -> int:
-    """The place where_ended's checked answer puts the player in: its id, or the engine's outside place."""
-    if choice.get("kind") == "outside":
-        from app import where_ended
-
-        code = where_ended.outside_place(conn, choice, player_input)
-        found = conn.execute("SELECT id FROM locations WHERE code = ?", (code,)).fetchone() if code else None
-        return int(found["id"]) if found is not None else 0
-    return int(choice.get("id") or 0)
+def _prose_leaves_here(narration: str, here_row: Any) -> bool:
+    """The prose's own sentences about "you" go out of the place stood in (_line_leaves_here's reading)."""
+    text = _unspoken(str(narration or ""))
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if re.match(r"^\s*(?:[\w'’,-]+\s+){0,3}you\b", sentence, re.I) and _line_leaves_here(sentence, here_row):
+            return True
+    return False
 
 
 def _line_leaves_here(acts: str, here_row: Any) -> bool:
     """The narrated line goes out of the place stood in: a doorway exit in any of its clauses
-    (venue_move_intent's own reading), or leaving it by a word of its name or kind ("I leave the clinic")."""
-    for clause in re.split(r"\s*(?:,|;|\band\b|\bthen\b)\s*", str(acts or ""), flags=re.I):
-        if clause.strip() and venue_move_intent(clause) == "exit":
-            return True
+    (venue_move_intent's own reading), or leaving it by a word of its name or kind ("I leave the clinic").
+
+    Going out of something else is not leaving here: "I step out of my cabin" on the Mistral, "I leave
+    the tavern's common room" in the tavern (a part of here, named by its possessive)."""
     own = {w for w in re.findall(r"[a-z]+", str(here_row["name"] or "").lower()) if len(w) >= 3} - {"the"}
     kind = str(venues._field(here_row, "kind", "") or "")
     if kind:
         own |= set(re.findall(r"[a-z]+", venues.kind_label(kind).lower()))
+
+    def names_here(obj: str) -> bool:
+        words = re.findall(r"[a-z]+(?:['’]s)?", obj.lower())
+        bases = [re.sub(r"['’]s$", "", w) for w in words]
+        if not any(b in own for b in bases):
+            return False
+        # "the tavern's common room": a part of here, not here.
+        return not any(w != b and b in own for w, b in zip(words[:-1], bases[:-1]))
+
+    for clause in re.split(r"\s*(?:,|;|\band\b|\bthen\b)\s*", str(acts or ""), flags=re.I):
+        if clause.strip() and venue_move_intent(clause) == "exit":
+            obj = re.search(r"\bout\s+of\s+(?:the\s+|this\s+|my\s+|our\s+|his\s+|her\s+|their\s+)?((?:[a-z'’-]+\s*){1,3})",
+                            clause, re.I)
+            if obj is None or names_here(obj.group(1)):
+                return True
     for m in re.finditer(r"\b(?:leave|leaves|leaving|exit|exits|exiting|depart|departs|departing)\s+"
                          r"(?:the\s+|this\s+|my\s+|our\s+)?((?:[a-z'’-]+\s*){1,3})", str(acts or "").lower()):
-        if set(re.findall(r"[a-z]+", m.group(1))) & own:
+        if names_here(m.group(1)):
             return True
     return False
 
@@ -18875,6 +18959,14 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
             conn, str(move_to), refusal=refusal, here_line=str(turn_line) if turn_line is not None else None,
             left_for=left_for if isinstance(left_for, dict) else None,
         )
+        # A part filed this turn in the place the scene went out to (_part_anchor)
+        # is reached through that place, as the prose shows both: the tunnel off
+        # the sanctuary, entered from the clinic (review of the drift fix, T3).
+        anchor = int(left_for.get("anchor") or 0) if isinstance(left_for, dict) else 0
+        if not via and anchor and anchor != previous_location_id:
+            dest_row = _location_row(conn, int(location_id or 0))
+            if dest_row is not None and int(venues._field(dest_row, "parent_id", 0) or 0) == anchor:
+                via = anchor
         gate = gate_venue_move(conn, previous_location_id, location_id, via=via)
         minted = int(location_id or 0) if top_before and int(location_id or 0) > top_before else 0
         location_id = int(gate["location_id"] or previous_location_id)
@@ -24988,6 +25080,12 @@ def apply_turn(
             max_place_before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
         except Exception:
             max_place_before = 0
+        # where_ended's checked answer, read once for this turn's new parts and
+        # its move (one dict, so the move can reach a part through its anchor).
+        try:
+            left_for = _where_left_for(conn, movement_report, player_input, narration) if input_kind == "player" else None
+        except Exception:
+            left_for = None
         for location in result.get("locations") or []:
             if not isinstance(location, dict):
                 continue
@@ -25055,7 +25153,7 @@ def apply_turn(
             new_place_id = _upsert_location(
                 conn, loc_name, str(location.get("summary") or ""),
                 here_line=str(player_input or "") if input_kind == "player" else None, move_to=turn_move,
-                left_for=_where_left_for(movement_report),
+                left_for=left_for,
             )
             try:
                 if int(new_place_id or 0) > max_place_before:
@@ -25294,8 +25392,8 @@ def apply_turn(
             here_before = 0
         if isinstance(result.get("player"), dict) and input_kind == "player":
             result["player"]["_turn_line"] = str(player_input or "")
-            if _where_left_for(movement_report):
-                result["player"]["_left_for"] = _where_left_for(movement_report)
+            if left_for:
+                result["player"]["_left_for"] = left_for
         _apply_player(conn, result.get("player") or {})
         try:
             # The engine's place outside the town is not a part of it (#46).

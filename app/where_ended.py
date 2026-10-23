@@ -404,7 +404,8 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
             patch["move_to_location_code"] = None
             result["map_walk"] = None
             return {"status": "dropped_unshown", "from": report.get("from"), "destination": str(dest["name"] or ""),
-                    "rule": "where_ended_here", "dropped_rule": rule, "where_ended": report["where_ended"]}
+                    "rule": "where_ended_here", "dropped_rule": rule, "where_ended": report["where_ended"],
+                    "where_ended_choice": report["where_ended_choice"]}
         if int(choice.get("id") or 0) == dest_id:
             return report
         # Further out the same way: out of the clinic and out of the town.
