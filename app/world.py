@@ -5163,6 +5163,10 @@ def _clear_playthrough(conn) -> None:
         "equipment_slots",
         "inventory_capacity_modifiers",
         "npcs",
+        # The people who faded out of the last game are that game's: a new
+        # one could bring them back by name, and the unnamed figures' count
+        # (app/unnamed.next_number reads them) started the new game at Ghoul 2.
+        "faded_people",
         "player",
         "locations",
         # A new campaign has seen no streets, and its era may differ.
@@ -5173,7 +5177,7 @@ def _clear_playthrough(conn) -> None:
     conn.execute(
         """
         DELETE FROM sqlite_sequence
-        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships', 'town_seen')
+        WHERE name IN ('locations', 'npcs', 'faded_people', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships', 'town_seen')
         """
     )
     conn.execute("DELETE FROM pacing")

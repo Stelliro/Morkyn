@@ -61,6 +61,12 @@ from app import turn_ledger
 
 KIND_PHASE = "figure_kind"
 KIND_QUESTION = 'In this text, is "{noun}" a person, an animal or a monster?'
+# The second, differently worded check that must agree before a noun is filed
+# as a figure (CLAUDE.md 2026-10-18: one small ask finds, a second checks).
+# Over the 44 recorded narrations the first ask was put to scenery ten times
+# in eleven (ping, counter, tear ...); one false yes minted "Ping 1".
+KIND_CHECK_PHASE = "figure_kind_check"
+KIND_CHECK_QUESTION = "In this text, could the player fight or talk to the {noun}?"
 HOSTILE_PHASE = "figure_hostile"
 HOSTILE_QUESTION = 'In this text, does "{phrase}" attack or threaten the player?'
 YES_NO_SYSTEM = "Answer yes or no."
@@ -89,7 +95,8 @@ _CLOSED = frozenset({
     "more", "most", "other", "another", "some", "any", "such", "own", "same", "one", "is", "are", "was",
     "were", "be", "been", "has", "have", "had", "do", "does", "did", "will", "would", "can", "could",
     "may", "might", "must", "shall", "should", "very", "too", "also", "just", "still", "even", "only",
-    "named", "called",
+    "named", "called", "between", "among", "amid", "beyond", "above", "below", "beneath", "underneath",
+    "upon", "within", "outside", "until", "because", "though", "although", "since", "once",
 })
 _BE_HAVE = frozenset({"is", "was", "are", "were", "has", "have", "had"})
 # Irregular English plurals (morphology, not meaning).
@@ -100,14 +107,31 @@ _IRREGULAR = {
     "zombies": "zombie", "rookies": "rookie", "junkies": "junkie", "pixies": "pixie", "newbies": "newbie",
 }
 _IRREGULAR_PLURALS = frozenset(_IRREGULAR) | {"sheep", "deer", "fish"}
-_TOKEN_RE = re.compile(r"[A-Za-z0-9][\w'’-]*|[,;:—–()]")
-_CLAUSE_MARKS = frozenset({",", ";", ":", "—", "–", "(", ")"})
+# A spaced hyphen is a dash ("flash a warning - supplies are running low").
+_TOKEN_RE = re.compile(r"[A-Za-z0-9][\w'’-]*|[,;:—–()]|(?<=\s)-(?=\s)")
+_CLAUSE_MARKS = frozenset({",", ";", ":", "—", "–", "(", ")", "-"})
+# Grammar for where a clause's subject may stand: what can come before it in
+# its own clause. Conjunctions and sentence adverbs ("when a sudden ping
+# pulls", "Then two raiders step out") and a leading prepositional phrase
+# ("From behind the counter a ghoul lunges"); anything else before the noun
+# ("you see", "the sensors flash", "as you stand over") makes it an object.
+_CLAUSE_OPENERS = frozenset({
+    "and", "but", "or", "nor", "then", "as", "when", "while", "until", "before", "after", "because", "so",
+    "once", "now", "yet", "where", "that", "who", "which", "if", "though", "although", "since", "just",
+    "still", "there", "here", "even", "again",
+})
+_PREPOSITIONS = frozenset({
+    "with", "in", "inside", "from", "of", "near", "at", "on", "under", "behind", "by", "out", "into", "onto",
+    "across", "through", "beyond", "above", "below", "among", "between", "outside", "over", "around",
+    "toward", "towards", "beside", "past", "along", "upon", "within", "beneath", "amid", "off", "down", "up",
+})
+_SUBJECT_PRONOUNS = frozenset({"i", "you", "he", "she", "they", "we", "it"})
+_OBJECT_PRONOUNS = frozenset({"you", "him", "her", "them", "it", "me", "us"})
 # A prepositional phrase between the noun and its verb: "A guard in a dented
 # helmet steps", "A ghoul with rotting skin lunges" (grammar words).
 _PP_OPENERS = frozenset({"with", "in", "from", "of", "near", "at", "on", "under", "behind", "by"})
 _PP_MAX = 5
 _YOU_RE = re.compile(r"\b(?:you|your|yours|yourself)\b", re.I)
-_HOSTILE_WORDS = frozenset({"hostile", "aggressive", "violent", "antagonistic", "angry", "enemy", "furious"})
 
 
 # ------------------------------------------------------------------ words
@@ -158,7 +182,12 @@ def numbered(kind: str, number: int) -> str:
 
 
 def next_number(conn, kind: str) -> int:
-    """The next number for this kind across the save: the living, the dead and the faded."""
+    """The next number for this kind in this game: the living, the dead and the faded.
+
+    Both tables hold only the current playthrough's people
+    (world._clear_playthrough empties npcs and faded_people for a new game),
+    so a new game in the same data folder starts again at Ghoul 1.
+    """
     key = str(kind or "").strip().lower()
     best = 0
     try:
@@ -230,37 +259,128 @@ def _count_of(tok: str) -> int:
     return _NUMBER_WORDS.get(low, 0)
 
 
-def mentions(text: str) -> list[dict[str, Any]]:
-    """Every figure-shaped noun phrase the prose shows, in order.
+def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
+    """Every figure the prose shows doing something, in order.
+
+    A figure does something when its noun phrase is the subject of a verb in
+    its own clause: the phrase opens the clause ("A ghoul lunges at you",
+    "At the front desk, a nurse ... looks up", "when a sudden ping ... pulls
+    you") and a verb follows it, or an -ing verb follows it right away ("You
+    see 4 ghouls eating someone"). A phrase after the clause's own verb is an
+    object ("you see a few scattered buildings", "flash a warning") and the
+    head of a prepositional phrase is not a subject ("stand over the two
+    halves"); neither is a figure shown acting. ``objects`` are the kinds the
+    player's own line acts on (player_objects: "i shoot the ghoul"): a phrase
+    of that kind counts wherever it stands ("Your shot takes a ghoul in the
+    shoulder").
 
     Each: {kind (lower singular), noun (as written), phrase, sentence, form,
-    count, ordinal, you}. ``form`` is "count" (a/an/one: 1, a number, an
-    unstated plural), "another", "ordinal" (the/a second ...), "the" (one
-    referred back to) or "the_plural" (several referred back to). ``you``: the
-    sentence has the player in it.
+    count, ordinal, you, acts, subject}. ``form`` is "count" (a/an/one: 1, a
+    number, an unstated plural), "another", "ordinal" (the/a second ...),
+    "the" (one referred back to) or "the_plural" (several referred back to).
+    ``you``: the clause has the player in it. ``acts``: the verb is an action,
+    not "is"/"has" alone ("An ironbound door is your only way in" shows a door,
+    not a door doing something; "a raider is aiming" acts). ``subject``: False
+    for a phrase taken only because the player's line acts on its kind.
     """
+    kinds = {singular(k) for k in objects or () if str(k or "").strip()}
     out: list[dict[str, Any]] = []
     for sentence in _sentences(text):
         toks = [m.group(0) for m in _TOKEN_RE.finditer(sentence)]
         i = 0
         while i < len(toks):
-            found = _mention_at(toks, i)
+            found = _mention_at(toks, i, kinds)
             if found is None:
                 i += 1
                 continue
-            end = found.pop("_end")
-            # The clause the mention stands in (between punctuation marks):
-            # "A ghoul lunges at you", "You see 4 ghouls eating someone".
+            # The clause the mention stands in (between punctuation marks).
             start = max([k for k in range(i) if toks[k] in _CLAUSE_MARKS] + [-1]) + 1
+            subject = found.pop("_object") is False and (found["_ing"] or _opens_clause(toks[start:i]))
+            if not subject and found["kind"] not in kinds:
+                i += 1
+                continue
+            end = found.pop("_end")
+            found.pop("_ing", None)
             stop = min([k for k in range(end, len(toks)) if toks[k] in _CLAUSE_MARKS] + [len(toks)])
             found["sentence"] = sentence
-            found["you"] = bool(_YOU_RE.search(" ".join(toks[start:stop])))
+            found["subject"] = bool(subject)
+            # The player's own act on it has the player in it.
+            found["you"] = (not subject) or bool(_YOU_RE.search(" ".join(toks[start:stop])))
+            if not subject:
+                found["acts"] = True
             out.append(found)
             i = end
     return out
 
 
-def _mention_at(toks: list[str], i: int) -> dict[str, Any] | None:
+def _opens_clause(before: list[str]) -> bool:
+    """Whether a noun phrase after these tokens of its clause is the clause's subject.
+
+    Only conjunctions, sentence adverbs and a leading prepositional phrase may
+    come before a subject; a subject pronoun ("you see", "as you stand") or a
+    noun with its verb ("the sensors flash") make the phrase an object.
+    """
+    in_pp = False
+    for tok in before:
+        low = tok.lower()
+        if low in _PREPOSITIONS:
+            in_pp = True
+            continue
+        if in_pp:
+            # Inside "from behind the counter", "behind you": its own object.
+            if low in _SUBJECT_PRONOUNS - _OBJECT_PRONOUNS:
+                return False
+            continue
+        if low in _CLAUSE_OPENERS or re.fullmatch(r"[a-z]+ly", low):
+            continue
+        return False
+    return True
+
+
+def _acts(toks: list[str], verb_at: int) -> bool:
+    """The verb is an action: not "is"/"was"/"has" on its own, but "is lunging" and "has drawn" are."""
+    low = toks[verb_at].lower() if 0 <= verb_at < len(toks) else ""
+    if low not in _BE_HAVE:
+        return True
+    nxt = toks[verb_at + 1].lower() if verb_at + 1 < len(toks) else ""
+    if low in {"has", "have", "had"}:
+        return bool(re.fullmatch(r"[a-z]+(?:ed|en|wn|ung|ught)", nxt))
+    return nxt.endswith("ing") and len(nxt) > 4
+
+
+def player_objects(line: str) -> set[str]:
+    """The kinds the player's own line acts on: "i shoot the ghoul" -> {"ghoul"}.
+
+    The noun phrase right after the player's verb ("i <verb> the <noun>", or
+    an order "shoot the ghouls"), in each clause of the line; a possessive
+    ("my gun") is the player's own and a preposition after the verb ("go into
+    the clinic") means no object. Quoted speech is not an act.
+    """
+    from app import venues
+
+    flat = re.sub(r"[@#!&]\w+|\[\[[^\]]*\]\]", " ", venues.strip_speech(str(line or "")))
+    out: set[str] = set()
+    for clause in re.split(r"[,;:.!?]|\b(?:and|then)\b", flat, flags=re.I):
+        toks = [m.group(0) for m in _TOKEN_RE.finditer(clause)]
+        while toks and (toks[0].lower() in {"i", "try", "to", "then"} or re.fullmatch(r"[a-z]+ly", toks[0].lower())):
+            toks = toks[1:]
+        if len(toks) < 3:
+            continue
+        det = toks[1].lower()
+        if not (det in {"the", "a", "an", "another", "that", "this", "these", "those"} or _count_of(det)):
+            continue
+        head = ""
+        for tok in toks[2:5]:
+            low = tok.lower()
+            if not _word(tok) or low in _CLOSED or low in _PREPOSITIONS:
+                break
+            head = low
+        if head and not _count_of(head):
+            out.add(singular(head))
+    return out
+
+
+def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = frozenset()) -> dict[str, Any] | None:
     low = toks[i].lower()
     if i > 0 and toks[i - 1].lower() in {"of"} and low in {"the"}:
         return None  # "one of the ghouls": the ghouls already met
@@ -273,6 +393,12 @@ def _mention_at(toks: list[str], i: int) -> dict[str, Any] | None:
         if n:
             j += 1
         form, count, plural_needed, stated = "count", n or UNSTATED_PLURAL, True, bool(n)
+        found = _head_at(toks, i, j, form, count, 0, True, bool(n), objects)
+        if found is not None:
+            return found
+        # Not a group of figures ("A flicker of understanding passes"): the
+        # phrase is "a flicker" with "of understanding" after it.
+        form, count, plural_needed, j, stated = "count", 1, False, i + 1, True
     elif low in {"a", "an"} and nxt == "few":
         form, count, plural_needed, j, stated = "count", UNSTATED_PLURAL, True, i + 2, False
     elif low in {"a", "an", "the"} and nxt in _ORDINALS:
@@ -296,26 +422,40 @@ def _mention_at(toks: list[str], i: int) -> dict[str, Any] | None:
             form = "the"
     else:
         return None
+    return _head_at(toks, i, j, form, count, ordinal, plural_needed, stated, objects)
+
+
+def _head_at(toks: list[str], i: int, j: int, form: str, count: int, ordinal: int, plural_needed: bool | None,
+             stated: bool, objects: frozenset[str] | set[str] = frozenset()) -> dict[str, Any] | None:
+    """The head noun (after up to two modifiers from ``j``) and the verb it is the subject of."""
     for k in range(3):
         at = j + k
-        if at + 1 >= len(toks):
+        if at >= len(toks):
             return None
         noun = toks[at]
         if not _word(noun) or noun.lower() in _CLOSED or noun.lower().endswith(("'s", "’s")):
             return None
-        # The modifiers before the noun must be words too ("a rotting ghoul").
-        verb_at = at + 1
-        if verb_at < len(toks) and re.fullmatch(r"[a-z]+ly", toks[verb_at], re.I) and verb_at + 1 < len(toks):
-            verb_at += 1  # an adverb: "4 ghouls brutally attack you"
         plural = is_plural(noun)
         if plural_needed is True and not plural:
             continue
         if plural_needed is False and plural and form != "the":
             continue
-        if not _verb_shaped(toks[verb_at], plural):
-            verb_at = _verb_after_phrase(toks, at + 1, plural)
+        # The modifiers before the noun must be words too ("a rotting ghoul").
+        verb_at = at + 1
+        if verb_at < len(toks) and re.fullmatch(r"[a-z]+ly", toks[verb_at], re.I) and verb_at + 1 < len(toks):
+            verb_at += 1  # an adverb: "4 ghouls brutally attack you"
+        ing = False
+        is_object = False
+        if verb_at < len(toks) and _verb_shaped(toks[verb_at], plural):
+            # Right after the noun, "-ing" is the figure doing it ("4 ghouls eating someone").
+            ing = toks[verb_at].lower().endswith("ing") and toks[verb_at].lower() not in _BE_HAVE
+        else:
+            verb_at = _verb_after_phrase(toks, at + 1, plural) if at + 1 < len(toks) else -1
             if verb_at < 0:
-                continue
+                if singular(noun) not in objects:
+                    continue
+                # The player's line acts on this kind: the phrase counts with no verb.
+                verb_at, is_object = at, True
         this_form = form
         if form == "the" and plural:
             this_form = "the_plural"
@@ -327,7 +467,10 @@ def _mention_at(toks: list[str], i: int) -> dict[str, Any] | None:
             "count": count,
             "ordinal": ordinal,
             "stated": stated,
+            "acts": True if is_object else _acts(toks, verb_at),
             "_end": verb_at + 1,
+            "_ing": ing,
+            "_object": is_object,
         }
     return None
 
@@ -422,15 +565,47 @@ def _stored_kinds(conn) -> set[str]:
         return set()
 
 
-def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, trace=None, usage=None) -> dict[str, Any]:
+def kind_check_prompt(sentence: str, noun: str) -> str:
+    """The user half of the second figure check, exactly as sent."""
+    return f"Text: {sentence}\n{KIND_CHECK_QUESTION.format(noun=noun)}"
+
+
+def _ask_yes_no(call, system: str, user: str, phase: str, kind: str, trace, usage) -> bool | None:
+    """One traced yes/no ask; None when it failed or the reply could not be read (both noted)."""
+    from app.entity_kinds import read_yes_no
+
+    try:
+        reply = call(system, user, phase, MAX_TOKENS, trace, usage)
+    except Exception as exc:
+        turn_ledger.note("npc", f"{phase}_ask_failed", kind=kind, error=f"{type(exc).__name__}: {exc}"[:160])
+        return None
+    said = read_yes_no(reply)
+    if said is None:
+        turn_ledger.note("npc", f"{phase}_unread", kind=kind, reply=str(reply or "")[:80])
+    return said
+
+
+def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, trace=None, usage=None,
+           line: str = "") -> dict[str, Any]:
     """Decide, before apply_turn's write block, which nouns are figures and whether new ones are hostile.
 
     Verdicts go on ``result["_figures"]``: {kind: {"figure": bool, "hostile":
     bool | None, "by": "record" | "op" | "ask"}}. ``call(system, user, phase,
     max_tokens, trace, usage)`` is entity_kinds' ask. ``ask=False`` (the
     offline narrator) asks nothing: only the records and the ops decide.
+    ``line`` is the player's own line: the kinds it acts on ("i shoot the
+    ghoul") are kept on ``result["_figure_objects"]`` for file_figures.
+
+    A noun with no record is asked about only when the prose shows it doing
+    something (the subject of an action verb in a clause that has the player
+    in it) or the player's line acts on it, and only in a form that could
+    file one (a count, "another", an ordinal). It is a figure only when two
+    differently worded asks both say yes.
     """
-    found = mentions(narration)
+    objects = sorted(player_objects(line)) if line else []
+    if objects:
+        result["_figure_objects"] = objects
+    found = mentions(narration, objects)
     if not found:
         return {}
     people = _person_words()
@@ -452,28 +627,31 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
         elif kind in ops:
             verdicts[kind] = {"figure": True, "hostile": None, "by": "op"}
         else:
-            # Only a noun in a sentence with the player in it is asked about.
-            shown = next((m for m in ms if m["you"] and m["form"] in {"count", "another", "ordinal"}), None)
+            # Only a noun shown doing something in a clause with the player
+            # in it, or one the player's own line acts on, is asked about.
+            shown = next((m for m in ms if m["you"] and m["acts"] and m["form"] in {"count", "another", "ordinal"}),
+                         None)
             if shown is None or not ask:
                 continue
             if kind_asks >= MAX_KIND_ASKS:
                 turn_ledger.note("npc", "figure_kind_not_asked", kind=kind, reason="ask limit")
                 continue
             kind_asks += 1
-            try:
-                reply = call(YES_NO_SYSTEM, kind_prompt(shown["sentence"], kind), KIND_PHASE, MAX_TOKENS, trace, usage)
-            except Exception as exc:
-                turn_ledger.note("npc", "figure_kind_ask_failed", kind=kind, error=f"{type(exc).__name__}: {exc}"[:160])
-                continue
-            from app.entity_kinds import read_yes_no
-
-            said = read_yes_no(reply)
+            said = _ask_yes_no(call, YES_NO_SYSTEM, kind_prompt(shown["sentence"], kind), KIND_PHASE, kind, trace, usage)
             if said is None:
-                turn_ledger.note("npc", "figure_kind_unread", kind=kind, reply=str(reply or "")[:80])
                 continue
-            turn_ledger.note("npc", "noun_is_a_figure" if said else "noun_is_no_figure", kind=kind, by="ask")
-            verdicts[kind] = {"figure": bool(said), "hostile": None, "by": "ask"}
-            if not said:
+            checked = None
+            if said:
+                # One yes files nothing: the second, differently worded check must agree.
+                checked = _ask_yes_no(call, YES_NO_SYSTEM, kind_check_prompt(shown["sentence"], kind),
+                                      KIND_CHECK_PHASE, kind, trace, usage)
+                if checked is None:
+                    continue
+            figure = bool(said and checked)
+            turn_ledger.note("npc", "noun_is_a_figure" if figure else "noun_is_no_figure", kind=kind, by="ask",
+                             first=bool(said), check=checked)
+            verdicts[kind] = {"figure": figure, "hostile": None, "by": "ask"}
+            if not figure:
                 continue
         # Hostility, for a kind this turn may mint (a count, another, an
         # ordinal). The person words the figure hints know keep their old
@@ -484,18 +662,11 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
         if hostile_asks >= MAX_HOSTILE_ASKS:
             continue
         hostile_asks += 1
-        try:
-            reply = call(YES_NO_SYSTEM, hostile_prompt(minting["sentence"], minting["phrase"]), HOSTILE_PHASE,
-                         MAX_TOKENS, trace, usage)
-        except Exception as exc:
-            turn_ledger.note("npc", "figure_hostile_ask_failed", kind=kind, error=f"{type(exc).__name__}: {exc}"[:160])
-            continue
-        from app.entity_kinds import read_yes_no
-
-        said = read_yes_no(reply)
+        said = _ask_yes_no(call, YES_NO_SYSTEM, hostile_prompt(minting["sentence"], minting["phrase"]), HOSTILE_PHASE,
+                           kind, trace, usage)
         verdicts[kind]["hostile"] = said
-        turn_ledger.note("npc", "figure_hostile" if said else "figure_not_hostile" if said is False else "figure_hostile_unread",
-                         kind=kind, reply=str(reply or "")[:40])
+        if said is not None:
+            turn_ledger.note("npc", "figure_hostile" if said else "figure_not_hostile", kind=kind)
     if verdicts:
         result["_figures"] = {**(result.get("_figures") or {}), **verdicts}
     return verdicts
@@ -577,16 +748,61 @@ def mint(conn, location_id: int, kind: str, *, attitude: str = "", role: str = "
     return shell
 
 
+def speaker_kinds(narration: str) -> list[str]:
+    """The kind of whoever speaks each quoted line, in order ("" when it is no figure kind the prose shows).
+
+    The speaker is the first noun outside the quotes of the line's own unit
+    ('"..." the nurse says' -> "nurse", '"Get down!" someone shouts' ->
+    "someone"); a pronoun alone ('"..." she asks') is the last figure shown
+    before the line. The player's own lines ("you say") are no one's here.
+    """
+    from app.conversation import _QUOTE_RE, _spoken_span
+    from app.narration_pipeline import quoted_spans, speech_units
+
+    flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[^\]]*\]\]", "", str(narration or ""))).strip()
+    out: list[str] = []
+    last = ""
+    for unit in speech_units(flat):
+        outside = _QUOTE_RE.sub(" ", unit)
+        if any(_spoken_span(s) for s in quoted_spans(unit)):
+            out.append(_speaker_word(outside, last))
+        shown = mentions(outside)
+        if shown:
+            last = shown[-1]["kind"]
+    return out
+
+
+def _speaker_word(outside: str, last: str) -> str:
+    for tok in _TOKEN_RE.findall(outside):
+        low = tok.lower()
+        if low in {"he", "she", "they"}:
+            return last
+        if low in {"you", "i", "we"} or not _word(tok):
+            return ""
+        if low in _CLOSED or _verb_shaped(low, False) or re.fullmatch(r"[a-z]+ly", low):
+            continue  # "says the nurse", "the nurse", "quietly"
+        return singular(low)
+    return ""
+
+
 def _fresh_unnamed(conn, location_id: int, max_id_before: int | None, narration: str,
-                   result: dict[str, Any]) -> list[Any]:
+                   result: dict[str, Any], kind: str = "") -> list[Any]:
     """People the cast seeding made here this turn under a drawn name the prose never uses.
 
     A line nobody known speaks seeds a face with a drawn name and no kind
     (world._ensure_npcs_from_narration): cc87dd29 T3's "a nurse in a blue
     helmet ... she asks" was stored as a drawn "Beth". That face is the figure
     the prose shows, so it is numbered as that figure, not minted beside it.
+
+    Only when the line is that figure's: the face is a figure of ``kind`` when
+    one of the turn's quoted lines is spoken by that kind (speaker_kinds). In
+    '"Get down!" someone shouts from behind the counter. A ghoul lunges at
+    you' the speaker is someone, not the ghoul: two figures, and the face
+    stays who it is.
     """
     if max_id_before is None:
+        return []
+    if kind and singular(kind) not in speaker_kinds(narration):
         return []
     try:
         rows = conn.execute(
@@ -643,7 +859,7 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
     """
     if not location_id or not isinstance(result, dict):
         return []
-    found = mentions(narration)
+    found = mentions(narration, result.get("_figure_objects") or ())
     ops = result.get("_unnamed_ops") or {}
     if not found and not ops:
         return []
@@ -697,7 +913,7 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
         attitude = str(op.get("attitude") or "")
         if not attitude and verdict.get("hostile"):
             attitude = "hostile"
-        fresh = _fresh_unnamed(conn, int(location_id), max_id_before, narration, result) if kind not in vague else []
+        fresh = _fresh_unnamed(conn, int(location_id), max_id_before, narration, result, kind) if kind not in vague else []
         for _ in range(new):
             if fresh:
                 numbered_row = _number_fresh(conn, fresh.pop(0), kind, attitude, result)
@@ -763,6 +979,75 @@ def rename_told(conn, text: str, name: str, location_id: int | None) -> dict[str
                         "attitude": str(row["attitude"] or "neutral"), "was": str(row["name"] or "")}
         return None
     return None
+
+
+# ------------------------------------------------------- what the story sees
+
+
+def story_label(kind: str) -> str:
+    """What the narrator is shown for an unnamed figure: what it is ("an unnamed ghoul"), never "Ghoul 1"."""
+    word = str(kind or "").strip().lower()
+    return f"an unnamed {word}" if word else ""
+
+
+def _numbered_rows(value: Any, out: dict[str, str], depth: int = 0) -> None:
+    if depth > 6:
+        return
+    if isinstance(value, dict):
+        kind = str(value.get("kind") or "").strip()
+        try:
+            number = int(value.get("kind_number") or 0)
+        except (TypeError, ValueError):
+            number = 0
+        name = str(value.get("name") or "").strip()
+        if kind and number and name == numbered(kind, number):
+            out[name] = story_label(kind)
+        for key in ("npcs", "current_location", "locations"):
+            if key in value:
+                _numbered_rows(value[key], out, depth + 1)
+    elif isinstance(value, list):
+        for item in value:
+            _numbered_rows(item, out, depth + 1)
+
+
+def story_names(context: dict[str, Any] | None) -> dict[str, str]:
+    """{numbered name: story label} for the unnamed figures still under their number in this context.
+
+    Read from the people records the context carries (locations[].npcs,
+    current_location.npcs, npcs), so a row named later ("Kade") is not in it.
+    """
+    out: dict[str, str] = {}
+    if isinstance(context, dict):
+        _numbered_rows(context, out)
+    return out
+
+
+def story_view(value: Any, names: dict[str, str]) -> Any:
+    """``value`` with every numbered name in it shown as the figure it is (see story_names).
+
+    The record keeps its name (the save and the UI number them: they are the
+    engine's and the player's); the narrator's packet does not, so "Woman 1"
+    and "Ghoul 1" never reach the prose. The code beside a name stays, so
+    "Ghoul 1 [[C]]" reads "an unnamed ghoul [[C]]".
+    """
+    if not names:
+        return value
+    pattern = re.compile(
+        r"(?<![\w'’])(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")(?![\w'’])"
+    )
+
+    def walk(item: Any) -> Any:
+        if isinstance(item, str):
+            return pattern.sub(lambda m: names[m.group(1)], item) if item else item
+        if isinstance(item, dict):
+            return {key: walk(v) for key, v in item.items()}
+        if isinstance(item, list):
+            return [walk(v) for v in item]
+        if isinstance(item, tuple):
+            return tuple(walk(v) for v in item)
+        return item
+
+    return walk(value)
 
 
 def ask_label(person: dict[str, Any], people: list[dict[str, Any]]) -> str:
