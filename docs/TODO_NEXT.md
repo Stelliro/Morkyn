@@ -271,3 +271,16 @@ One id per send keeps diffs reviewable.
 | Simple depth | `expandSimpleSetupDepth`, `scoreSetupDepth` in `static/app.js` |
 | Text to speech | `app/tts.py`, `/api/tts-config`, `/api/tts-catalog`, `/api/tts-status`, `/api/tts/speak`, `/api/tts/install`; `window.morkynSpeech`, `renderTtsPlayBar`, `renderTtsSettings` in `static/app.js`; `speechItems` in `static/ui/interact.js`; `docs/TextToSpeech.md` |
 | Built, not wired | `app/currency.py` (n17), `app/economy.py` (n1), `app/trade.py` (n15), `app/agreements.py` (n18), `app/needs.py` (n16), `app/body_health.py` (n23), `app/restraint.py` (n13), `app/scene_cast.py` (n14), `app/settlement_visits.py` (g8), `app/wild_places.py` (n22), `app/realtime_clock.py` (n2), `static/ui/scene_sequence.js` (g17), `static/ui/destination_marker.js` (n22); tests `tests/test_<module>.py`, `tools/test_scene_sequence.js`, `tools/test_destination_marker.js`; nothing in the live game calls them; `docs/BuiltNotWired.md` |
+
+## Planned (Stell, 2026-10-24, future change)
+
+"for a future change, i want to add the unaccessable locations to the areas the pleyer can go and add more in depth theft"
+
+| Id | Item | Notes |
+|----|------|--------|
+| a1 | Locked or guarded places the player can try to get into | A vault, a guarded gate, a private room exist as places but are shut now. The way in is a key, a lockpick, sneaking, a bribe or force: rolled by the engine, and the engine records how the player got in (and whether anyone saw). Engine-first: the place row carries its access state; the narrator is told it, not asked to decide it. |
+| a2 | Map areas now out of bounds become reachable | Parts of the world map the game will not let the player walk into become places the player can reach (see also the map "out of bounds while in bounds" fix). |
+| t1 | Stealing items and gold | Pickpocketing and lifting goods from people and shops: a stealth or sleight-of-hand roll, and the transaction parser (Stell 2026-10-24, #41/#85/#155/#152) moves the item or gold. |
+| t2 | Getting caught | Who saw it, the owner noticing later, guards, a bounty, and attitudes and prices changing. Witnesses come from the engine's record of who is at the place. |
+| t3 | Owned vs free items | The engine knows whose things are whose, so taking an owned item is theft even when the line does not say "steal". |
+| t4 | NPCs stealing from the player | Thieves can take the player's items or gold, rolled and recorded the same way. |
