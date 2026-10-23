@@ -52,11 +52,16 @@ LINE_CHARS = 600
 
 
 def ask_attack(name: str, line: str) -> str:
-    return f'{name} is here. The player wrote: "{line}"\n\nDoes the player try to hurt or kill {name}? Answer yes or no.'
+    return f'{_opening(name)} is here. The player wrote: "{line}"\n\nDoes the player try to hurt or kill {name}? Answer yes or no.'
 
 
 def ask_attack_check(name: str, line: str) -> str:
-    return f'{name} is here. The player wrote: "{line}"\n\nIs the player peaceful toward {name}? Answer yes or no.'
+    return f'{_opening(name)} is here. The player wrote: "{line}"\n\nIs the player peaceful toward {name}? Answer yes or no.'
+
+
+def _opening(name: str) -> str:
+    """The name opening a sentence: "the ghoul" -> "The ghoul" (a person's name is unchanged)."""
+    return name[:1].upper() + name[1:] if name else name
 
 
 def player_line(model_input: str) -> str:
@@ -163,8 +168,12 @@ def find_target(line: str, people: list[dict[str, Any]], ask: Ask, report: dict[
     """The first person the line attacks: yes to the attack ask, then no to the peaceful ask."""
     if not str(line or "").strip():
         return None
+    from app.unnamed import ask_label
+
     for person in people:
-        name = str(person.get("name") or "").strip()
+        # A numbered figure is asked about as the line names it: "the ghoul",
+        # when Ghoul 1 is the only ghoul here (app/unnamed.py).
+        name = ask_label(person, people)
         code = str(person.get("code") or "")
         if not name:
             continue

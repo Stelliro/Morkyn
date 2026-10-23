@@ -296,9 +296,14 @@ def candidates(conn, row: Any, unspoken: str = "") -> list[Any]:
     except Exception:
         return []
     same_place, same_job = [], []
+    numbered_kind = _numbered_kind(row)
     for other in pool:
         name = str(other["name"] or "").strip()
         if not name:
+            continue
+        # Two numbered figures of one kind (Ghoul 1, Ghoul 2) were counted
+        # apart by the engine (app/unnamed.py): never the same person.
+        if numbered_kind and _numbered_kind(other) == numbered_kind:
             continue
         if unspoken and world._named_as_present(unspoken, r"(?<![\w'])" + re.escape(name) + r"(?![\w'])"):
             continue
@@ -317,6 +322,14 @@ def candidates(conn, row: Any, unspoken: str = "") -> list[Any]:
             if int(other.get("location_id") or 0) in places and jobs & _job_words(str(other.get("role") or "")):
                 same_place.append(other)
     return (same_place + same_job)[:MAX_CANDIDATES]
+
+
+def _numbered_kind(row: Any) -> str:
+    """The kind of a numbered unnamed figure (app/unnamed.py), lower case, or ""."""
+    try:
+        return str(row["kind"] or "").strip().lower() if int(row["kind_number"] or 0) > 0 else ""
+    except (KeyError, IndexError, TypeError, ValueError):
+        return ""
 
 
 def _mark(row: Any) -> str:
@@ -698,6 +711,18 @@ def _collapse_twins(conn, turn: int, report: dict[str, Any], text: str, unspoken
         new = conn.execute("SELECT * FROM npcs WHERE sketch_turn = ? ORDER BY id", (turn,)).fetchall()
     except Exception:
         return
+    # Numbered figures app/unnamed.py counted from the prose are not twins:
+    # several of one kind ("a group of 4 ghouls" is four), or a kind the
+    # figure hints do not count (a ghoul beside "a guard" is two figures).
+    from app.unnamed import _person_words
+
+    counted: dict[str, int] = {}
+    for r in new:
+        if _numbered_kind(r):
+            counted[_numbered_kind(r)] = counted.get(_numbered_kind(r), 0) + 1
+    hint_kinds = _person_words()
+    new = [r for r in new if not _numbered_kind(r) or (
+        counted.get(_numbered_kind(r), 0) < 2 and _numbered_kind(r) in hint_kinds)]
     if len(new) < 2:
         return
     # Two sketches bound to the same figure phrase are that one figure.
