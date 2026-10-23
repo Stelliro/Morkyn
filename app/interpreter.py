@@ -132,6 +132,8 @@ PHASE_BODY_BURIED = "interpreter_body_buried"
 PHASE_BODY_BURIED_CHECK = "interpreter_body_buried_check"
 PHASE_BODY_CARRIED = "interpreter_body_carried"
 PHASE_BODY_CARRIED_CHECK = "interpreter_body_carried_check"
+PHASE_WITH_PLAYER = "interpreter_with_player"
+PHASE_WITH_PLAYER_CHECK = "interpreter_with_player_check"
 
 KIND_DIED = "died"
 KIND_DESTROYED = "destroyed"
@@ -475,6 +477,15 @@ def ask_body_here_check(name: str, passage: str) -> str:
     return f"Read this.\n\n{passage}\n\nHas the player walked away from {name}'s body at the end of it? Answer yes or no."
 
 
+def ask_with_player(name: str, passage: str) -> str:
+    # The body pair's shape for a living person (#33): presence, not acting. Not yet measured live.
+    return f"Read this.\n\n{passage}\n\nIs {name} with the player at the end of it? Answer yes or no."
+
+
+def ask_with_player_check(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nHas the player walked away from {name} at the end of it? Answer yes or no."
+
+
 def ask_body_buried(name: str, passage: str) -> str:
     # Measured (live-eval-4): "buried" took Beth's flesh dissolved in an acid pit for a burial; "in a grave": 97%.
     return f"Read this.\n\n{passage}\n\nIs {name}'s body in a grave at the end of it? Answer yes or no."
@@ -748,6 +759,59 @@ def hold_the_dead(text: str, records: dict[str, Any], ask: Ask, report: dict[str
             continue
         text, held["repairs"] = _cut_acts(text, row, name, ask, report, records.get("player_quotes") or [], match)
     return text, events
+
+
+def with_player_enabled() -> bool:
+    import os
+
+    return str(os.getenv("AI_RPG_WITH_PLAYER", "off")).strip().lower() in {"1", "on", "true", "yes"}
+
+
+def with_player(
+    text: str, events: list[dict[str, Any]], records: dict[str, Any], ask: Ask, report: dict[str, Any],
+    matcher: Matcher | None = None,
+) -> list[str]:
+    """The codes of living people on record at another place than the player's whom the scene shows with the player (#33).
+
+    A presence pair in the shape of the measured body pair (live-eval-4: "Is
+    <Name>'s body with the player at the end of it?" 92%, its check "Has the
+    player walked away from <Name>'s body ...?" 27/27): "Is <Name> with the
+    player at the end of it?", then "Has the player walked away from <Name>
+    at the end of it?", which must answer no. Presence, not acting: a keeper
+    calling from inside their shop to the player outside acts but is not with
+    the player. Asked only of people the prose names outside quoted speech, at
+    most MAX_PEOPLE a turn. The engine decides what a confirmed yes moves
+    (app/whereabouts.decide: not someone a sentence puts at another place, or
+    left behind). Someone who died this turn is the body asks' (place_bodies).
+    """
+    from app.venues import strip_speech
+
+    match = matcher or Matcher(records.get("people"), records.get("places"))
+    here_id = int(records.get("here_id") or 0)
+    if not here_id:
+        return []
+    died_now = {str((e.get("subject") or {}).get("code") or "") for e in events if e.get("kind") == KIND_DIED}
+    dead_names = {_key(row) for row in match.people if is_dead(row)}
+    elsewhere = [
+        row for row in match.people
+        if not is_dead(row) and _key(row) not in dead_names and str(row.get("code") or "") not in died_now
+        and "location_id" in row and int(row.get("location_id") or 0) != here_id
+    ]
+    unspoken = strip_speech(text)
+    out: list[str] = []
+    for row in match.named(unspoken, elsewhere, records.get("player_names"))[:MAX_PEOPLE]:
+        name = str(row.get("name") or "").strip()
+        passage = passage_for(text, row, matcher=match)
+        if not name or not passage:
+            continue
+        first = yes_no(_ask(ask, report, PHASE_WITH_PLAYER, ask_with_player(name, passage)))
+        present = first is True and _confirmed(
+            ask, report, PHASE_WITH_PLAYER_CHECK, ask_with_player_check(name, passage), row, "with_player"
+        )
+        report.setdefault("with_player", []).append({"code": row.get("code"), "name": name, "asked": first, "with_player": present})
+        if present:
+            out.append(str(row.get("code") or ""))
+    return out
 
 
 def place_bodies(
@@ -1031,6 +1095,7 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
     started = time.time()
     report: dict[str, Any] = {"asks": [], "held": [], "events": [], "unconfirmed": []}
     events: list[dict[str, Any]] = []
+    shown: list[str] = []
     try:
         match = Matcher(records.get("people"), records.get("places"))
         # The facts first (they change the save), so the ask cap never starves them.
@@ -1059,11 +1124,17 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
         # What became of a body the player's line acts on (read from the held prose).
         back = {str((e.get("subject") or {}).get("code") or "") for e in returned}
         events.extend(read_bodies(text, records, ask, report, match, back))
+        # Who on record elsewhere the scene shows with the player (#33, app/whereabouts.py). Off by
+        # default: measured live on Hermes 3 8B (live-eval-8) the presence pair moved the wrong
+        # person in 27 of 69 tries (calls from a doorway, a radio, someone talked about) and missed
+        # both real traces; "has the player walked away from X?" is honestly no whenever the two
+        # were never together. New people are still filed where the player is (no ask needed).
+        shown = with_player(text, events, records, ask, report, match) if with_player_enabled() else []
     except Exception as exc:  # never break a turn
         report["error"] = f"{type(exc).__name__}: {exc}"[:300]
     report["events"] = [dict(e) for e in events]
     report["seconds"] = round(time.time() - started, 3)
-    return {"narration": text, "events": events, "report": report}
+    return {"narration": text, "events": events, "report": report, "with_player": shown}
 
 
 # ---------------------------------------------------------------------------
