@@ -25005,7 +25005,25 @@ def apply_turn(
                 (turn, "self_check", json.dumps(result.get("self_check"), ensure_ascii=True)[:1800]),
             )
         # Movement repairs are state changes the model did not ask for — say so.
-        if movement_report.get("status") == "repaired":
+        # The where_ended rules say what decided them (#46, #76): the prose's
+        # ending, checked, not a MOVE.
+        where_rule = str(movement_report.get("rule") or "")
+        if where_rule.startswith("where_ended"):
+            if where_rule == "where_ended_here":
+                where_line = (
+                    f"The server's own move to {movement_report.get('destination') or '?'} "
+                    f"({movement_report.get('dropped_rule') or '?'}) was not made: the prose ends with the player "
+                    f"{movement_report.get('where_ended') or 'where they were'}."
+                )
+            else:
+                where_line = (
+                    f"The prose ends with the player {movement_report.get('where_ended') or '?'}; the server moved "
+                    f"the player to {movement_report.get('destination') or '?'} ({where_rule})."
+                )
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (turn, "system", where_line[:1400])
+            )
+        elif movement_report.get("status") == "repaired":
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                 (
@@ -27151,9 +27169,9 @@ def play_turn(
             npc_max_before = int(_conn_max.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
     except Exception:
         npc_max_before = None
-    # Where the prose leaves the player, asked once on a turn whose line moves
-    # and whose draft wrote no MOVE (#46, #76; app/where_ended.py). Asked here,
-    # outside apply_turn's write block; apply_turn acts on the answer.
+    # Where the prose leaves the player, asked and checked on every player turn
+    # (#46, #76; app/where_ended.py). Asked here, outside apply_turn's write
+    # block; apply_turn acts on a confirmed answer after the movement rules.
     if input_kind == "player" and not used_fallback and isinstance(result, dict):
         try:
             from app import where_ended

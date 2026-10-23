@@ -1,41 +1,48 @@
-"""Where the player is when the scene ends: one small ask, the engine's own places as the answers.
+"""Where the player is when the scene ends: one small ask, the engine's own places as the answers, and a check.
 
 Playtest #46 and #76 (Linux .deb playtest, Hermes 3 8B, cc87dd29) are one fault class seen from both
-sides: on a turn the draft wrote no MOVE for, the engine decided the move from the player's line alone.
+sides: the engine decided where the player stands from the player's line, not from where the prose
+leaves them.
 
 * T6 "i leave the town, and find a city that has a ghoul problem": the prose left the town for the forest
   trail, the line names no known place, so movement was "unresolved" and the player stayed in the clinic.
   T5, T10 and T12 were the same note.
-* T13 "i rip her head from her shoulders, her spine comes out still connected ...": the doorway reader
-  read "comes ... out" as leaving the building and the server walked the player from the clinic (L3) to
-  the town (L1), while the prose stayed at Beth's desk.
+* T13 "i rip her head from her shoulders, her spine comes out still connected ...": the draft wrote
+  MOVE "Radiation Fenced Sanctuary Clinic" (where the player already was), resolve_movement threw that
+  away as no move, and then its doorway reader read "comes ... out" as leaving the building: the server
+  walked the player from the clinic (L3) to the town (L1) while the prose stayed at Beth's desk.
 
-The fact that decides both is where the prose leaves the player, and only the prose knows it. So the
-engine lists its own answers, from its records, and asks the turn's model one plain question with one
-letter for a reply:
+The fact that decides both is where the prose leaves the player, and only the prose knows it. So on every
+player turn the engine lists its own answers, from its records, and asks the turn's model one plain
+question with one letter for a reply (live on Hermes 3 8B: 45/45, 0.05-0.2 s):
 
     Where is the player at the end of this text?
     A) still in <the place they are in>
     B) in <the place around it>, outside <the place they are in>
     C) outside <the settlement>, on the road or in the wilds
-    D) at <a known place this text names>
+    D) at <a known place named in the ending of the text>
 
 The options are the current place, each place it stands in (parent_id), "outside" the outermost one,
-and up to two other known places the text names by code or stored name. No word list decides anything.
-The engine then acts (``settle``), after resolve_movement, on the two cases the evidence showed:
+and up to two other known places named (by code or stored name) in the ending of the text, the second
+half of its sentences, in text order: a place left or looked at early in the scene is not offered.
 
-* a move the server made with no MOVE op, to a known place up the chain or elsewhere, is not applied
-  when the answer is the place the player is in (T13); when the answer is further out the same way
-  ("outside the town" for a walk out of the clinic) the move goes there instead;
-* a travel turn the movement rules could not resolve moves to the place answered: a place up the
-  chain, a known place, or for "outside" the engine's own place "Outside <settlement>" (made once per
-  settlement and kept), whose summary carries the line the player set off with (T6). "Still here"
-  leaves them where they are, as before.
+One letter does not move the player alone (CLAUDE.md 2026-10-18: one ask fills it in, a second checks
+it): the answer is put back as a yes/no question, "At the end of this text, is the player <answer>?",
+and the engine acts only on a yes. ``settle`` then runs after resolve_movement, on what the movement
+rules decided:
 
-Moves into a building (venue entry rules) and moves the draft wrote are left to their own rules. A
-missing, failed or unclear reply changes nothing. The ask goes through app.llm._chat_text with the
-turn's own usage and trace lists, so its prompt, raw reply and time are in the turn's trace file and
-model_logs (phase ``where_ended``).
+* a move the server made with no MOVE op, to a known place up the chain or elsewhere (venue_exit and the
+  other known-place rules), is not made when the answer is the place the player is in (T13); when the
+  answer is further out the same way ("outside the town" for a walk out of the clinic) it goes there;
+* a turn the rules left in place (no travel read in the line, or travel with no place found) moves to
+  the place answered: a place up the chain, a known place, or for "outside" the engine's own place
+  "Outside <settlement>" (made once per settlement and kept), whose summary carries the line the
+  player set off with (T6). "Still here" leaves them where they are.
+
+Moves into a building (the venue rules), moves the draft wrote, and map walks keep their own rules (a
+disagreement is noted in the ledger). A missing, failed, unclear or unconfirmed reply changes nothing.
+Both asks go through app.llm._chat_text with the turn's own usage and trace lists, so their prompts, raw
+replies and times are in the turn's trace file and model_logs (phase ``where_ended``).
 """
 from __future__ import annotations
 
@@ -50,6 +57,7 @@ MAX_KNOWN = 2
 OUTSIDE_PREFIX = "Outside "
 SYSTEM = "Answer with one letter."
 QUESTION = "Where is the player at the end of this text?"
+CONFIRM_SYSTEM = "Answer yes or no."
 
 Ask = Callable[[str, str], str]
 _ASK_OVERRIDE: list[Ask | None] = [None]
@@ -60,10 +68,12 @@ _CHECKED_RULES = frozenset({
     "venue_exit", "venue_exit_to", "player_input", "venue_return", "narration_code", "follow_named",
     "player_named",
 })
+# What the movement rules return when they left the player where they were.
+_STAYED = frozenset({"unresolved", "not_travel"})
 
 
 def set_ask(ask: Ask | None) -> Ask | None:
-    """Use ``ask`` (system, user) -> reply text for the question (None: the turn's model). Returns the previous one."""
+    """Use ``ask`` (system, user) -> reply text for both questions (None: the turn's model). Returns the previous one."""
     previous = _ASK_OVERRIDE[0]
     _ASK_OVERRIDE[0] = ask
     return previous
@@ -107,16 +117,31 @@ def _chain(conn, here_id: int) -> list[Any]:
     return rows
 
 
-def _named_in(text: str, name: str, code: str) -> bool:
+def _ending_start(text: str) -> int:
+    """Where the ending of the text begins: its second half by sentences (the last three at least)."""
+    from app.prose_state import sentence_spans
+
+    spans = sentence_spans(text)
+    if len(spans) <= 3:
+        return 0
+    return spans[max(0, min(len(spans) // 2, len(spans) - 3))][0]
+
+
+def _last_named_at(text: str, name: str, code: str) -> int:
+    """The offset of the last mention of a place in ``text`` (its [[code]] or its whole stored name), or -1."""
     low = text.lower()
-    if code and f"[[{code.lower()}]]" in low:
-        return True
+    at = -1
+    if code:
+        at = low.rfind(f"[[{code.lower()}]]")
     name = str(name or "").strip().lower()
-    return bool(name) and len(name) >= 4 and re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", low) is not None
+    if name and len(name) >= 4:
+        for found in re.finditer(rf"(?<![\w]){re.escape(name)}(?![\w])", low):
+            at = max(at, found.start())
+    return at
 
 
 def build_options(conn, narration: str) -> dict[str, Any] | None:
-    """The answers the engine has: here, each place around it, outside, known places the text names."""
+    """The answers the engine has: here, each place around it, outside, known places the ending names."""
     from app.world import _is_settlement
 
     row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
@@ -140,27 +165,38 @@ def build_options(conn, narration: str) -> dict[str, Any] | None:
     if not top_name.startswith(OUTSIDE_PREFIX) or _is_settlement(conn, top):
         options.append({"kind": "outside", "id": 0, "code": "", "name": f"{OUTSIDE_PREFIX}{top_name}"[:80],
                         "top_id": int(top["id"]), "label": f"outside {top_name}, on the road or in the wilds"})
+    # Known places named in the ending, nearest the end first, offered in text order.
+    text = str(narration or "")
+    ending = text[_ending_start(text):]
     chain_ids = {int(r["id"]) for r in chain}
-    known = 0
+    named: list[tuple[int, Any]] = []
     for other in conn.execute("SELECT id, code, name FROM locations ORDER BY id").fetchall():
-        if known >= MAX_KNOWN:
-            break
         if int(other["id"]) in chain_ids:
             continue
-        if _named_in(narration, str(other["name"] or ""), str(other["code"] or "")):
-            options.append({"kind": "known", "id": int(other["id"]), "code": str(other["code"] or ""),
-                            "name": str(other["name"] or ""), "label": f"at {other['name']}"})
-            known += 1
+        at = _last_named_at(ending, str(other["name"] or ""), str(other["code"] or ""))
+        if at >= 0:
+            named.append((at, other))
+    for _at, other in sorted(sorted(named, key=lambda item: -item[0])[:MAX_KNOWN], key=lambda item: item[0]):
+        options.append({"kind": "known", "id": int(other["id"]), "code": str(other["code"] or ""),
+                        "name": str(other["name"] or ""), "label": f"at {other['name']}"})
     for i, option in enumerate(options):
         option["letter"] = chr(ord("A") + i)
     return {"here_id": here_id, "options": options}
 
 
+def _plain(narration: str) -> str:
+    return re.sub(r"\s*\[\[[^\]]*\]\]", "", str(narration or "")).strip()
+
+
 def build_prompt(narration: str, options: list[dict[str, Any]]) -> tuple[str, str]:
-    text = re.sub(r"\s*\[\[[^\]]*\]\]", "", str(narration or "")).strip()
-    lines = [text, "", QUESTION]
+    lines = [_plain(narration), "", QUESTION]
     lines += [f"{o['letter']}) {o['label']}" for o in options]
     return SYSTEM, "\n".join(lines)
+
+
+def confirm_prompt(narration: str, option: dict[str, Any]) -> tuple[str, str]:
+    """The second check: the chosen answer put back as one yes/no question."""
+    return CONFIRM_SYSTEM, f"{_plain(narration)}\n\nAt the end of this text, is the player {option['label']}?"
 
 
 def parse_letter(reply: Any, options: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -176,29 +212,27 @@ def parse_letter(reply: Any, options: list[dict[str, Any]]) -> dict[str, Any] | 
     return None
 
 
+def parse_yes(reply: Any) -> bool | None:
+    """True for a reply that starts with yes, False for no, None for anything else."""
+    first = re.match(r"^\W*(yes|no)\b", str(reply or "").strip(), re.I)
+    return None if first is None else first.group(1).lower() == "yes"
+
+
 # ----------------------------------------------------------------------- ask
 
 
 def wants_ask(conn, result: dict[str, Any], player_input: str) -> bool:
-    """A player turn with movement in its line and no MOVE or WALK from the draft."""
-    from app.world import _movement_intent, _player_line, travel_intent, venue_move_intent
+    """Every player turn, except one with no line, an engine request, or a map walk (the grid decides that)."""
+    from app.world import _player_line
 
     line = _player_line(player_input)
     if not line.strip() or line.lstrip().startswith("__"):
         return False
-    patch = result.get("player") if isinstance(result.get("player"), dict) else {}
-    if str(patch.get("move_to_location") or "").strip() or str(patch.get("move_to_location_code") or "").strip():
-        return False
-    if result.get("map_walk"):
-        return False
-    try:
-        return bool(travel_intent(line) or venue_move_intent(line) or _movement_intent(conn, line) == "travel")
-    except Exception:
-        return False
+    return not result.get("map_walk")
 
 
 def ask_where(conn, result: dict[str, Any], player_input: str, narration: str) -> dict[str, Any] | None:
-    """Ask where the prose leaves the player and put the answer on ``result["_where_ended"]``."""
+    """Ask where the prose leaves the player, check the answer, and put both on ``result["_where_ended"]``."""
     if not isinstance(result, dict) or not str(narration or "").strip():
         return None
     if not wants_ask(conn, result, player_input):
@@ -209,20 +243,28 @@ def ask_where(conn, result: dict[str, Any], player_input: str, narration: str) -
     built = build_options(conn, narration)
     if not built or len(built["options"]) < 2:
         return None
-    system, user = build_prompt(narration, built["options"])
-    started = time.time()
-    record: dict[str, Any] = {"here_id": built["here_id"], "options": built["options"]}
-    try:
-        reply = ask(system, user)
-    except Exception as exc:
-        record["error"] = f"{type(exc).__name__}: {exc}"[:200]
-        reply = ""
-    record["reply"] = str(reply or "")[:80]
-    record["seconds"] = round(time.time() - started, 3)
-    choice = parse_letter(reply, built["options"])
+    record: dict[str, Any] = {"here_id": built["here_id"], "options": built["options"], "confirmed": None}
+
+    def _one(system: str, user: str, key: str) -> str:
+        started = time.time()
+        try:
+            reply = ask(system, user)
+        except Exception as exc:
+            record[f"{key}_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            reply = ""
+        record[f"{key}_seconds"] = round(time.time() - started, 3)
+        return str(reply or "")
+
+    record["reply"] = _one(*build_prompt(narration, built["options"]), "reply")[:80]
+    choice = parse_letter(record["reply"], built["options"])
     record["choice"] = choice
+    if choice is not None:
+        record["confirm_reply"] = _one(*confirm_prompt(narration, choice), "confirm")[:80]
+        record["confirmed"] = parse_yes(record["confirm_reply"])
     turn_ledger.note("movement", "where_ended_asked", reply=record["reply"],
-                     answer=(choice or {}).get("label") or "unclear", seconds=record["seconds"])
+                     answer=(choice or {}).get("label") or "unclear", confirm=record.get("confirm_reply", ""),
+                     confirmed=record["confirmed"],
+                     seconds=round(float(record.get("reply_seconds") or 0) + float(record.get("confirm_seconds") or 0), 3))
     result["_where_ended"] = record
     return record
 
@@ -270,7 +312,7 @@ def outside_place(conn, option: dict[str, Any], player_input: str) -> str:
 
 
 def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: str) -> dict[str, Any]:
-    """Act on the answer: refuse an unshown server move, or resolve an unresolved trip."""
+    """Act on a checked answer: refuse an unshown server move, or move a player the rules left in place."""
     record = result.pop("_where_ended", None)
     if not isinstance(record, dict) or not isinstance(report, dict):
         return report
@@ -281,6 +323,12 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
     report = dict(report)
     report["where_ended"] = (choice or {}).get("label") or "unclear"
     if choice is None:
+        return report
+    if record.get("confirmed") is not True:
+        # One letter alone moves nobody: the check said no, or gave no answer.
+        turn_ledger.note("movement", "where_ended_not_confirmed", answer=choice["label"],
+                         confirm=str(record.get("confirm_reply") or ""))
+        report["where_ended_confirmed"] = False
         return report
     patch = result.get("player")
     if not isinstance(patch, dict):
@@ -322,15 +370,24 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
         turn_ledger.note("movement", "where_ended_disagrees", destination=str(dest["name"] or ""), answer=choice["label"])
         return report
 
-    if status == "unresolved":
+    if status in _STAYED and not result.get("map_walk"):
         if choice["kind"] == "here":
-            turn_ledger.note("movement", "travel_stays_shown", place=choice["name"])
+            turn_ledger.note("movement", "stays_as_shown", place=choice["name"], status=status)
             return report
         move_to(choice)
-        turn_ledger.note("movement", "travel_resolved_from_prose", destination=choice["name"], kind=choice["kind"])
+        turn_ledger.note("movement", "move_from_prose", destination=choice["name"], kind=choice["kind"], status=status)
         out = {"status": "repaired", "rule": "where_ended_outside" if choice["kind"] == "outside" else "where_ended",
-               "from": report.get("from"), "destination": choice["name"], "where_ended": report["where_ended"]}
+               "from": report.get("from"), "destination": choice["name"], "where_ended": report["where_ended"],
+               "was": status}
         if report.get("follow"):
             out["follow"] = report["follow"]
         return out
+
+    # The draft's own MOVE, a walk into a building, a map walk: their rules
+    # stand. A different answer is kept for measurement.
+    dest = _destination_row(conn, patch) if status in {"model", "repaired"} else None
+    dest_id = int(dest["id"]) if dest is not None else int(record.get("here_id") or 0)
+    if int(choice.get("id") or 0) != dest_id or choice["kind"] == "outside":
+        turn_ledger.note("movement", "where_ended_disagrees", status=status, rule=rule, answer=choice["label"],
+                         destination=str(dest["name"] or "") if dest is not None else "")
     return report
