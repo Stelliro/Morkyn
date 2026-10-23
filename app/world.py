@@ -18,7 +18,7 @@ from typing import Any
 
 from app import turn_ledger, venues
 from app.db import connect, row_to_dict, rows_to_dicts
-from app.narration_pipeline import _TITLE_ABBREVIATIONS
+from app.narration_pipeline import _SENTENCE_SPLIT_RE as _TITLED_SENTENCE_SPLIT_RE, _TITLE_ABBREVIATIONS
 from app.llm import (
     LlmError,
     ambient_llm_enabled,
@@ -20626,7 +20626,7 @@ def _figure_named_in_cut_tail(result: dict[str, Any], text: str, hint: str) -> d
     if not tail.strip():
         return None
     flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))).strip()
-    sentences = re.split(r"(?<=[.!?])\s+", flat)
+    sentences = _TITLED_SENTENCE_SPLIT_RE.split(flat)
     if hint:
         at = _sentence_index(text, hint)
         if at < 0 or at < len(sentences) - 2:
@@ -20649,9 +20649,15 @@ def _figure_named_in_cut_tail(result: dict[str, Any], text: str, hint: str) -> d
 
 
 def _sentence_index(text: str, phrase: str) -> int:
-    """Index of the first sentence holding ``phrase`` (codes stripped), or -9 when none does."""
+    """Index of the first sentence holding ``phrase`` (codes stripped), or -9 when none does.
+
+    A title is not a sentence end ("Behind the counter sits Dr. Vasilis, a
+    middle-aged man"), the same split the narration pipeline uses: split on
+    "Dr." the man's own description was a sentence of its own, away from the
+    name it describes (integ-r4 T1, #157).
+    """
     flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))).strip()
-    for index, sentence in enumerate(re.split(r"(?<=[.!?])\s+", flat)):
+    for index, sentence in enumerate(_TITLED_SENTENCE_SPLIT_RE.split(flat)):
         if phrase and phrase.lower() in sentence.lower():
             return index
     return -9
@@ -20965,7 +20971,6 @@ def _ensure_npcs_from_narration(
         known_names = []
     known_names += [str(n.get("name") or "") for n in (result.get("npcs") or []) if isinstance(n, dict)]
     taken = _figure_aliases_here(conn)
-    hints = [h for h in _figure_hints(text, known_names) if not _figure_alias(h) or _figure_alias(h) not in taken]
     # "Mattias Slade, a herbalist with a greying beard, is leaning against the
     # wall ... he says" (7B run 12, T0): the speaker is the person the prose
     # names. With no hint, the dialogue seeded a drawn "Dafydd, toll keeper"
@@ -20990,6 +20995,17 @@ def _ensure_npcs_from_narration(
         ]
     except Exception:
         player_names = []
+    # A person the prose introduces this turn is known to the figure hints, so
+    # their own apposition is them: "Dr. Vasilis [[B]], a middle-aged man with
+    # graying hair" seeded a drawn "Wyatt" from "a middle-aged man", who took
+    # the clinic's trade and its counter while Vasilis was filed a passerby,
+    # and the next turn's packet told the narrator Wyatt was the doctor
+    # (integ-r4 T1-T2, #157).
+    introduced_all = _introduced_people(text, known_names + player_names, places)
+    hints = [
+        h for h in _figure_hints(text, known_names + [p["name"] for p in introduced_all])
+        if not _figure_alias(h) or _figure_alias(h) not in taken
+    ]
     # Two hints in one sentence are one figure ("A figure steps out from behind
     # Coldwell and Sons, a woman with a warm smile"), and a hint whose sentence
     # or the next one names a person this turn already lists is that person
@@ -21000,7 +21016,7 @@ def _ensure_npcs_from_narration(
         seen_at: set[int] = set()
         kept_hints: list[str] = []
         flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", text)).strip()
-        flat_sentences = re.split(r"(?<=[.!?])\s+", flat)
+        flat_sentences = _TITLED_SENTENCE_SPLIT_RE.split(flat)
         for h in hints:
             at = _sentence_index(text, h)
             if at >= 0 and at in seen_at:
@@ -21031,7 +21047,6 @@ def _ensure_npcs_from_narration(
             seen_at.add(at)
             kept_hints.append(h)
         hints = kept_hints
-    introduced_all = _introduced_people(text, known_names + player_names, places)
     if introduced_all and hints:
         # "As you approach, a figure catches your eye. Stephen Lambard, a tide
         # watcher, is standing on a slight rise" (7B run 13, T4): the figure is
