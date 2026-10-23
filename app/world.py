@@ -10463,6 +10463,35 @@ def _invites_to_place(player_input: str, rows: list[Any], current_name: str = ""
     return False
 
 
+def line_asks_to_go(conn, player_input: str) -> bool:
+    """The movement code's own reading of the player's line: it asks to go somewhere.
+
+    The same readers _unasked_unshown_move holds a move to (travel, a doorway, a
+    follow, business at another known place, an invitation to one), over the
+    narrated clauses the player does now. app/scene_drift.py reads it before it
+    calls a scene that ends elsewhere drift.
+    """
+    line = _without_quoted_questions(str(player_input or ""))
+    acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", _player_line(line))
+    try:
+        from app.act_clauses import acts_now
+
+        acts = acts_now(acts)
+    except Exception:
+        pass
+    if travel_intent(acts) or venue_move_intent(acts) or _turn_intent(acts)[0] == "travel":
+        return True
+    try:
+        rows = conn.execute("SELECT id, code, name FROM locations").fetchall()
+        here = conn.execute(
+            "SELECT l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+        ).fetchone()
+    except Exception:
+        return False
+    current_name = str(here["name"] or "") if here is not None else ""
+    return _acts_at_known_place(acts, rows, current_name) or _invites_to_place(line, rows, current_name)
+
+
 def _acts_at_known_place(acts: str, rows: list[Any], current_name: str = "") -> bool:
     """The narrated line does its business at a known place that is not here: "report to Ulric at the Reeves' Office"."""
     text = str(acts or "")
@@ -13961,6 +13990,7 @@ def _upsert_location(
     refusal: dict[str, Any] | None = None,
     here_line: str | None = None,
     move_to: str = "",
+    left_for: dict[str, Any] | None = None,
 ) -> int:
     """Find or create a place. ``refusal``, when given, is filled in when the
     name is refused and another place id is handed back instead (playtest #46).
@@ -13968,7 +13998,8 @@ def _upsert_location(
     ``here_line`` is the player's line on a turn path that knows it; with it a
     new place named by a part of a structure (a hold, a corner, a cellar, a
     passage) is made a part of the place it belongs to (``_part_anchor``).
-    ``move_to`` is the turn's move, when the name is not its destination."""
+    ``move_to`` is the turn's move, when the name is not its destination;
+    ``left_for`` where_ended's checked answer when it is out of here."""
     name = humanize_place_name(name)
     if not name:
         raise ValueError("Location name is required.")
@@ -14010,12 +14041,15 @@ def _upsert_location(
     # the town (8B run 150: "The Hold" at T49, "The Hidden Passage" from a
     # search of the Hold at T85).
     if here_line is not None and kind is None and parent_id is None:
-        anchor = _part_anchor(conn, name, summary, here_line, move_to)
+        anchor = _part_anchor(conn, name, summary, here_line, move_to, left_for=left_for)
         if anchor:
             cursor = conn.execute(
                 "INSERT INTO locations (code, name, summary, visit_count, parent_id) VALUES (?, ?, ?, 0, ?)",
-                (_next_code(conn, "locations", "L"), name, summary[:1400] if len(summary or "") < 500 else summary[:200], anchor),
+                (_next_code(conn, "locations", "L"), name, summary[:1400] if len(summary or "") < 500 else summary[:200],
+                 max(0, anchor)),
             )
+            if anchor < 0:
+                return int(cursor.lastrowid)
             anchor_row = _location_row(conn, anchor)
             turn_ledger.note("place", "part_of_place", name=name,
                              parent=str(anchor_row["name"] or "") if anchor_row is not None else anchor)
@@ -14314,8 +14348,12 @@ def _part_head(name: str) -> str:
     return words[-1] if words and words[-1] in _PART_WORDS else ""
 
 
-def _part_anchor(conn, name: str, summary: str, player_input: str, move_to: str = "") -> int:
-    """The place a new part-of-a-structure place belongs to, or 0 to mint it as before.
+def _part_anchor(
+    conn, name: str, summary: str, player_input: str, move_to: str = "", left_for: dict[str, Any] | None = None
+) -> int:
+    """The place a new part-of-a-structure place belongs to, or 0 to mint it as before (-1: a place of its
+    own, with no parent: the line left a top-level place). ``left_for`` is where_ended's checked answer
+    when it puts the player out of the place stood in.
 
     Decided from engine facts, not phrasing: the name's last word is a part
     of a vessel or building; the owner the name gives ("The Mistral's Hold")
@@ -14342,7 +14380,62 @@ def _part_anchor(conn, name: str, summary: str, player_input: str, move_to: str 
         row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     except Exception:
         return 0
-    return int((row[0] if row else 0) or 0)
+    here_id = int((row[0] if row else 0) or 0)
+    # A part reached after leaving the place stood in is not inside it (drift
+    # eval, combined T2: "I leave the clinic and creep into the ruined subway
+    # tunnel" filed the tunnel inside the clinic, and every later scene read
+    # "inside ... Clinic" and went back there). Where the scene ended, when
+    # where_ended's checked answer says out of here, decides; else the line's
+    # own leaving puts it in the place the one left stands in.
+    if isinstance(left_for, dict) and left_for.get("kind") in {"up", "outside", "known"}:
+        anchor = _where_left_anchor(conn, left_for, player_input)
+        if anchor and anchor != here_id:
+            turn_ledger.note("place", "part_outside_place_left", name=name, parent=str(left_for.get("name") or ""),
+                             by="where_ended")
+            return anchor
+    here_row = _location_row(conn, here_id) if here_id else None
+    if here_row is not None and _line_leaves_here(acts, here_row):
+        up = int(venues._field(here_row, "parent_id", 0) or 0)
+        turn_ledger.note("place", "part_outside_place_left", name=name, left=str(here_row["name"] or ""),
+                         parent=up, by="line")
+        return up if up else -1
+    return here_id
+
+
+def _where_left_for(movement_report: Any) -> dict[str, Any] | None:
+    """where_ended's checked answer on this turn's movement report, when it is out of the place stood in."""
+    choice = movement_report.get("where_ended_choice") if isinstance(movement_report, dict) else None
+    if isinstance(choice, dict) and choice.get("kind") in {"up", "outside", "known"}:
+        return dict(choice)
+    return None
+
+
+def _where_left_anchor(conn, choice: dict[str, Any], player_input: str) -> int:
+    """The place where_ended's checked answer puts the player in: its id, or the engine's outside place."""
+    if choice.get("kind") == "outside":
+        from app import where_ended
+
+        code = where_ended.outside_place(conn, choice, player_input)
+        found = conn.execute("SELECT id FROM locations WHERE code = ?", (code,)).fetchone() if code else None
+        return int(found["id"]) if found is not None else 0
+    return int(choice.get("id") or 0)
+
+
+def _line_leaves_here(acts: str, here_row: Any) -> bool:
+    """The narrated line goes out of the place stood in: a doorway exit in any of its clauses
+    (venue_move_intent's own reading), or leaving it by a word of its name or kind ("I leave the clinic")."""
+    for clause in re.split(r"\s*(?:,|;|\band\b|\bthen\b)\s*", str(acts or ""), flags=re.I):
+        if clause.strip() and venue_move_intent(clause) == "exit":
+            return True
+    own = {w for w in re.findall(r"[a-z]+", str(here_row["name"] or "").lower()) if len(w) >= 3} - {"the"}
+    kind = str(venues._field(here_row, "kind", "") or "")
+    if kind:
+        own |= set(re.findall(r"[a-z]+", venues.kind_label(kind).lower()))
+    for m in re.finditer(r"\b(?:leave|leaves|leaving|exit|exits|exiting|depart|departs|departing)\s+"
+                         r"(?:the\s+|this\s+|my\s+|our\s+)?((?:[a-z'’-]+\s*){1,3})", str(acts or "").lower()):
+        if set(re.findall(r"[a-z]+", m.group(1))) & own:
+            return True
+    return False
 
 
 def _within(conn, place_id: int, ancestor_id: int) -> bool:
@@ -14487,7 +14580,8 @@ def _unstore_dropped_move_places(conn, max_place_at_start: int, model_move: str)
 
 
 def _find_location_id(
-    conn, name_or_code: str | None, *, refusal: dict[str, Any] | None = None, here_line: str | None = None
+    conn, name_or_code: str | None, *, refusal: dict[str, Any] | None = None, here_line: str | None = None,
+    left_for: dict[str, Any] | None = None,
 ) -> int:
     if name_or_code:
         # Slugs must resolve to the same row as their readable form, or
@@ -14544,7 +14638,7 @@ def _find_location_id(
             if player and player["current_location_id"]:
                 return int(player["current_location_id"])
             value = "Nearby street"
-        return _upsert_location(conn, value, refusal=refusal, here_line=here_line)
+        return _upsert_location(conn, value, refusal=refusal, here_line=here_line, left_for=left_for)
     player = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     return int(player["current_location_id"])
 
@@ -18770,6 +18864,7 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     venue_note: dict[str, Any] | None = None
     via = int(player_patch.pop("_enter_via", 0) or 0)
     turn_line = player_patch.pop("_turn_line", None)
+    left_for = player_patch.pop("_left_for", None)
     if move_to:
         refusal: dict[str, Any] = {}
         try:
@@ -18777,7 +18872,8 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
         except Exception:
             top_before = 0
         location_id = _find_location_id(
-            conn, str(move_to), refusal=refusal, here_line=str(turn_line) if turn_line is not None else None
+            conn, str(move_to), refusal=refusal, here_line=str(turn_line) if turn_line is not None else None,
+            left_for=left_for if isinstance(left_for, dict) else None,
         )
         gate = gate_venue_move(conn, previous_location_id, location_id, via=via)
         minted = int(location_id or 0) if top_before and int(location_id or 0) > top_before else 0
@@ -24959,6 +25055,7 @@ def apply_turn(
             new_place_id = _upsert_location(
                 conn, loc_name, str(location.get("summary") or ""),
                 here_line=str(player_input or "") if input_kind == "player" else None, move_to=turn_move,
+                left_for=_where_left_for(movement_report),
             )
             try:
                 if int(new_place_id or 0) > max_place_before:
@@ -25197,6 +25294,8 @@ def apply_turn(
             here_before = 0
         if isinstance(result.get("player"), dict) and input_kind == "player":
             result["player"]["_turn_line"] = str(player_input or "")
+            if _where_left_for(movement_report):
+                result["player"]["_left_for"] = _where_left_for(movement_report)
         _apply_player(conn, result.get("player") or {})
         try:
             # The engine's place outside the town is not a part of it (#46).
@@ -27953,8 +28052,13 @@ def play_turn(
         try:
             from app import where_ended
 
-            with connect().closing() as _conn_where:
-                where_ended.ask_where(_conn_where, result, actual_player_input, _narration_text_of(result))
+            asked = result.get("_where_ended")
+            # The drift check after the draft (app/scene_drift.py) asked already;
+            # its answer stands for the prose it read, and only that prose.
+            if not (isinstance(asked, dict) and asked.get("text") == _narration_text_of(result)):
+                result.pop("_where_ended", None)
+                with connect().closing() as _conn_where:
+                    where_ended.ask_where(_conn_where, result, actual_player_input, _narration_text_of(result))
         except Exception as exc:
             turn_ledger.note("movement", "where_ended_failed", error=f"{type(exc).__name__}: {exc}"[:200])
     state = apply_turn(

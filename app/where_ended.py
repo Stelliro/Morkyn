@@ -376,6 +376,9 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
                          confirm=str(record.get("confirm_reply") or ""))
         report["where_ended_confirmed"] = False
         return report
+    # The checked answer rides on the report: a part of a place reached this
+    # turn is filed where the scene ended, not in the place left (drift eval, combined T2).
+    report["where_ended_choice"] = {k: choice.get(k) for k in ("kind", "id", "code", "name", "top_id", "letter")}
     patch = result.get("player")
     if not isinstance(patch, dict):
         patch = {}
@@ -432,7 +435,7 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
         turn_ledger.note("movement", "move_from_prose", destination=choice["name"], kind=choice["kind"], status=status)
         out = {"status": "repaired", "rule": "where_ended_outside" if choice["kind"] == "outside" else "where_ended",
                "from": report.get("from"), "destination": choice["name"], "where_ended": report["where_ended"],
-               "was": status}
+               "was": status, "where_ended_choice": report["where_ended_choice"]}
         if report.get("follow"):
             out["follow"] = report["follow"]
         return out
