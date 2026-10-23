@@ -8061,7 +8061,10 @@ function lastHistoryEntry(kinds) {
  * Server `resume` (if present) is preferred; otherwise dig journal history.
  */
 function restoreLastTurnPanels(resume = null) {
-  const snap = resume && typeof resume === "object" ? resume : {};
+  // /api/state carries resume too, so a redraw with no resume handed in (the
+  // live viewer, a note after a turn) still knows the last turn's source (#156).
+  const given = resume && typeof resume === "object" ? resume : state?.resume;
+  const snap = given && typeof given === "object" ? given : {};
   const narrationText =
     String(snap.last_narration || "").trim() ||
     String(lastHistoryEntry(["narration"])?.content || "").trim();
@@ -8094,8 +8097,10 @@ function restoreLastTurnPanels(resume = null) {
   }
 
   if (latestOutput) {
+    const fallback = snap.last_fallback && typeof snap.last_fallback === "object" ? snap.last_fallback : null;
+    updateModelFallbackBanner(fallback);
     if (narrationText) {
-      latestOutput.innerHTML = `<article class="turnNarration">${paragraphs(narrationText)}</article>`;
+      latestOutput.innerHTML = `${fallbackTurnMarkHtml(fallback)}<article class="turnNarration">${paragraphs(narrationText)}</article>`;
     } else {
       latestOutput.innerHTML = paragraphs("No scene text for this turn.");
     }
@@ -19855,6 +19860,52 @@ function skillChecksHtml(payload) {
     .join("");
 }
 
+// Playtest #156: a first game ran eight turns on the offline narrator and the
+// only sign was a note under the prose. A fallback turn now opens with a mark,
+// and a banner with the problem's tips (server-classified, fitted to the build)
+// stays up until a model-written turn lands. A turn redrawn from the save
+// (reload, slot load, rewind, the live viewer) reads the same from
+// resume.last_fallback.
+function fallbackTurnMarkHtml(fallback) {
+  if (!fallback) return "";
+  return `<p class="fallbackTurnMark" role="status" data-fallback-mark>Offline narrator: the model did not write this turn.</p>`;
+}
+
+function payloadFallback(payload) {
+  if (!payload?.used_fallback) return null;
+  return {
+    reason: payload.fallback_reason || payload.turn?.llm_error || "",
+    problem: payload.fallback_problem || null,
+  };
+}
+
+function updateModelFallbackBanner(fallback) {
+  const host = latestOutput?.parentElement;
+  if (!host) return;
+  let banner = document.querySelector("#modelFallbackBanner");
+  if (!fallback) {
+    if (banner) banner.hidden = true;
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement("section");
+    banner.id = "modelFallbackBanner";
+    banner.className = "modelFallbackBanner";
+    banner.setAttribute("role", "alert");
+    host.insertBefore(banner, latestOutput);
+  }
+  const problem = fallback.problem || {};
+  const tips = (Array.isArray(problem.tips) ? problem.tips : []).slice(0, 3);
+  const reason = fallback.reason || problem.detail || "";
+  banner.innerHTML = `
+    <strong>The model is not writing: ${escapeHtml(problem.title || "it could not be used")}</strong>
+    <p>${escapeHtml(problem.summary || "Turns are written by the offline narrator until the model is back.")}</p>
+    ${tips.length ? `<ul>${tips.map((tip) => `<li>${escapeHtml(tip)}</li>`).join("")}</ul>` : ""}
+    ${reason ? `<small>Model issue: ${escapeHtml(clipText(reason, 300))}</small>` : ""}
+  `;
+  banner.hidden = false;
+}
+
 function appendTurnMeta(payload) {
   const rewardsHtml = turnRewardsHtml(payload);
   if (rewardsHtml) latestOutput.innerHTML += rewardsHtml;
@@ -19957,8 +20008,10 @@ function displayTurnPayload(payload, options = {}) {
     scenePlanLines(payload.turn.scene_plan).forEach(addStartSplashLine);
     addStartSplashLine("Opening scene received. Revealing prose.");
   }
+  const fallback = payloadFallback(payload);
+  updateModelFallbackBanner(fallback);
   if (options.animateNarration) {
-    latestOutput.innerHTML = `<article class="turnNarration streaming" data-turn-narration></article>`;
+    latestOutput.innerHTML = `${fallbackTurnMarkHtml(fallback)}<article class="turnNarration streaming" data-turn-narration></article>`;
     const narrationEl = latestOutput.querySelector("[data-turn-narration]");
     const splashTargets = options.startSplash && startSplashDraft ? [startSplashDraft] : [];
     if (startSplashDraft && options.startSplash) startSplashDraft.classList.add("startSplashCursor");
@@ -19976,7 +20029,7 @@ function displayTurnPayload(payload, options = {}) {
       if (typeof options.afterNarration === "function") window.setTimeout(options.afterNarration, 900);
     }, { durationMs: options.startSplash ? 9000 : 4200 });
   } else {
-    latestOutput.innerHTML = turnNarrationHtml(payload.turn);
+    latestOutput.innerHTML = fallbackTurnMarkHtml(fallback) + turnNarrationHtml(payload.turn);
     appendTurnMeta(payload);
     renderTtsPlayBar();
     if (typeof options.afterNarration === "function") window.setTimeout(options.afterNarration, 600);
@@ -27591,7 +27644,7 @@ let ttsPlayBarBound = false;
 let ttsSpeechModalBound = false;
 const TTS_MAX_PARAGRAPHS = 60;
 const TTS_MAX_PARAGRAPH_CHARS = 3500; // the route caps text at 4000; split long paragraphs under that
-const TTS_META_SELECTOR = ".askNote, .fallbackNotice, .turnDebugPanel, .rewardsPanel, .rewardBanner, .skillChecks, .scenePlan, .ttsPlayBar";
+const TTS_META_SELECTOR = ".askNote, .fallbackNotice, .fallbackTurnMark, .turnDebugPanel, .rewardsPanel, .rewardBanner, .skillChecks, .scenePlan, .ttsPlayBar";
 
 /**
  * Pure: narration text → what is read aloud. Drops [[A]] / [[L1]] codes, bare

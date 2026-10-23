@@ -10059,6 +10059,37 @@ body.popoutBody .iibEmbedFrame {
   line-height: 1.35;
 }
 
+/* A turn the offline narrator wrote (playtest #156): a mark at the top of the
+   turn and a banner above the scene until a model-written turn lands. Layout
+   here; the look is in ui/skin.css (09 Play · scene). */
+.fallbackTurnMark {
+  margin: 0 0 8px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.modelFallbackBanner {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  font-size: 13px;
+}
+
+.modelFallbackBanner[hidden] {
+  display: none;
+}
+
+.modelFallbackBanner p,
+.modelFallbackBanner ul {
+  margin: 0;
+}
+
+.modelFallbackBanner ul {
+  padding-left: 18px;
+}
+
 /* ==========================================================================
    Speech (tts): the Play bar under the narration and the Speech settings
    form. Layout only; the look lives in ui/skin.css ("Speech" section).
