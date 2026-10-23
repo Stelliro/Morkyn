@@ -21,7 +21,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
-> New entries go here. The next push is `0.11.1` (Stell, 2026-10-22: "later changelogs would be 0.11.1^"), then `0.11.2` and on.
+> New entries go here. The next push is `0.11.2`.
+
+## [0.11.1] - 2026-10-24
+
+> The first 0.11 build pushed to GitHub (0.11.0 was a local build only). Unnamed people and creatures are stored and numbered per kind, a group with no count is rolled and the number written into the story, the dead are a 0/1 state and leave a body, the narrator is told where the player is first, a place reached by leaving another is filed where the scene ended, and the interpreter's deaths, gold and summaries, the dice (one roll decides an attack), the Hermes 3 op shapes, the rewind, the world-scale map and the Linux window and terminal fixes from the .deb playtest.
 
 ### Added
 - [CLAUDE] Unnamed people and creatures are stored and numbered per kind (Stell, 2026-10-24: "they should be provided an increasing id intiger per appearing non named npc"). A ghoul, raider or guard the scene shows acting gets a row named by its kind and the next number (Ghoul 1, Ghoul 2, Raider 1), checked by two small asks; a creature is a person row, a capitalised name is never a kind, and the dead keep their story name. A plural with no count is rolled (Stell: "roll a dice on it and stick to it"): "Ghouls lunge at you" rolls 1d4+1, files that many and writes the number into the prose and summary ("Four ghouls lunge at you"); "a couple of" stays two, and a memory or the past ("you have killed many ghouls", "years ago") files nothing. Live on Hermes 3 8B: "a group of two ghouls", Ghoul 1 and Ghoul 2 filed hostile where the player stood. - `app/unnamed.py`
