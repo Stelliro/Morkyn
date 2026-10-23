@@ -357,11 +357,17 @@ class TestVerifyPromptContract(unittest.TestCase):
 # 6. Through the turn pipeline, on both draft paths
 # ---------------------------------------------------------------------------
 class TestVerdictThroughThePipeline(unittest.TestCase):
+    # The broad verdict is off by default since playtest #157 (b) / #77
+    # (app/turn_checks.py); these tests keep the comparison switch working.
     def setUp(self):
         llm.reset_verifier_breaker()
         _clear_env()
+        os.environ["AI_RPG_BROAD_VERIFIER"] = "1"
 
-    tearDown = setUp
+    def tearDown(self):
+        llm.reset_verifier_breaker()
+        _clear_env()
+        os.environ.pop("AI_RPG_BROAD_VERIFIER", None)
 
     _CONTEXT = {"player": {"name": "Ash"}, "turn_plan": {"turn_kind": "player_action"}}
 
@@ -448,8 +454,12 @@ class TestCompactVerifyRetryAndTheBreaker(unittest.TestCase):
     def setUp(self):
         llm.reset_verifier_breaker()
         _clear_env()
+        os.environ["AI_RPG_BROAD_VERIFIER"] = "1"  # the compact retry is the broad verifier's
 
-    tearDown = setUp
+    def tearDown(self):
+        llm.reset_verifier_breaker()
+        _clear_env()
+        os.environ.pop("AI_RPG_BROAD_VERIFIER", None)
 
     def _run_overflow_turn(self, compact_reply):
         calls = []

@@ -3798,6 +3798,36 @@ def _copy_slot(source_name: str, target_name: str) -> dict[str, Any] | None:
     )
 
 
+# The journal row apply_turn writes for a turn the offline narrator wrote; the
+# engine's own record, read back by resume_snapshot (playtest #156).
+FALLBACK_JOURNAL_PREFIX = "Used deterministic fallback. LLM error: "
+
+
+def last_turn_fallback(history: list[dict[str, Any]], turn: int) -> dict[str, Any] | None:
+    """The fallback record of ``turn`` from the journal (newest first), or None for a model-written turn.
+
+    A reload, a slot load, a rewind and the live viewer redraw the last turn
+    from the save, not from a turn payload; this is how they know the offline
+    narrator wrote it (playtest #156).
+    """
+    if not turn:
+        return None
+    for entry in history or []:
+        if str(entry.get("kind") or "") != "system":
+            continue
+        try:
+            entry_turn = int(entry.get("turn") or 0)
+        except (TypeError, ValueError):
+            continue
+        if entry_turn != turn:
+            continue
+        content = str(entry.get("content") or "")
+        if content.startswith(FALLBACK_JOURNAL_PREFIX):
+            reason = content[len(FALLBACK_JOURNAL_PREFIX):].strip()
+            return {"turn": turn, "reason": reason, "problem": _fallback_problem(reason)}
+    return None
+
+
 def resume_snapshot(state: dict[str, Any] | None = None) -> dict[str, Any]:
     """Last narration/input + counts for Continue UI rehydration."""
     state = state if isinstance(state, dict) else get_state(include_hidden=False)
@@ -3832,7 +3862,13 @@ def resume_snapshot(state: dict[str, Any] | None = None) -> dict[str, Any]:
                         map_id = str(any_map["id"])
         except Exception:
             has_map = False
+    narration_turn = 0
+    try:
+        narration_turn = int((narration or {}).get("turn") or 0)
+    except (TypeError, ValueError):
+        narration_turn = 0
     return {
+        "last_fallback": last_turn_fallback(history, narration_turn),
         "last_narration": str((narration or {}).get("content") or "").strip(),
         "last_input": str((last_input or {}).get("content") or "").strip(),
         "last_input_kind": str((last_input or {}).get("kind") or "").strip(),
@@ -25285,7 +25321,7 @@ def apply_turn(
             reason = fallback_reason or "Local LLM was unavailable or returned invalid JSON."
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
-                (turn, "system", f"Used deterministic fallback. LLM error: {reason}"[:1400]),
+                (turn, "system", f"{FALLBACK_JOURNAL_PREFIX}{reason}"[:1400]),
             )
         for entry in result.get("journal") or []:
             # "quest" lines are the engine's record of jobs offered, taken and
@@ -25409,6 +25445,30 @@ def _turn_reward_summary(before_state: dict[str, Any], after_state: dict[str, An
         "items_gained": items_gained,
         "quests_completed": quests_done,
     }
+
+
+def _fallback_problem(reason: str) -> dict[str, Any]:
+    """What went wrong on a fallback turn and what to do (app/failsafe.classify_failure): title, summary, tips.
+
+    The tips fit the build: the packaged game is never told to pip install
+    inside .venv (playtest #156).
+    """
+    try:
+        from app.failsafe import classify_failure, is_packaged_build
+
+        try:
+            from app.llm import get_model_config
+
+            provider = str((get_model_config() or {}).get("provider") or "")
+        except Exception:
+            provider = ""
+        problem = classify_failure(reason, stage="runtime", provider=provider)
+        packaged = is_packaged_build()
+    except Exception:
+        return {"code": "unknown", "title": "The model could not be used", "summary": "", "tips": [], "detail": str(reason or "")[:600], "packaged": False}
+    out = {key: problem.get(key) for key in ("code", "title", "summary", "tips", "detail")}
+    out["packaged"] = packaged
+    return out
 
 
 def _fallback_notice(reason: str) -> str:
@@ -27376,6 +27436,11 @@ def play_turn(
         "used_fallback": used_fallback,
         "fallback_reason": fallback_reason,
         "fallback_notice": _fallback_notice(fallback_reason) if used_fallback else "",
+        # What went wrong and what to do (playtest #156: eight turns of a first
+        # game ran on the offline narrator and nothing on screen made it plain).
+        # The page keeps a banner up with these tips until a model turn lands;
+        # an agent driving /api/agent/turn reads the same field.
+        "fallback_problem": _fallback_problem(fallback_reason) if used_fallback else None,
         "input_kind": input_kind,
         "debug_trace_path": debug_trace_path or "",
         "debug": debug_bundle,

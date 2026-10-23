@@ -182,10 +182,14 @@ class _PipelineCase(unittest.TestCase):
     def setUp(self):
         llm.reset_verifier_breaker()
         # Force the model verifier so the turn has a verify call to inspect.
+        # The broad verdict is the switch-on comparison path since #157 (b);
+        # its prompt is the big phase that shares the prefix.
         os.environ["AI_RPG_FAST_VERIFICATION"] = "0"
+        os.environ["AI_RPG_BROAD_VERIFIER"] = "1"
 
     def tearDown(self):
         os.environ.pop("AI_RPG_FAST_VERIFICATION", None)
+        os.environ.pop("AI_RPG_BROAD_VERIFIER", None)
         llm.reset_verifier_breaker()
 
     def _run(self, config, *, dsl: bool = True):
