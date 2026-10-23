@@ -787,6 +787,59 @@ def reconcile_refused_death(
     return out
 
 
+def _beat_before_hook(text: str, beat: str) -> str:
+    """The beat at the end of the scene, or before the question it closes on ("What do you do?")."""
+    body = str(text or "").rstrip()
+    every = units(body)
+    if every and _hook(every[-1][2]) and every[-1][0] > 0:
+        start = every[-1][0]
+        head = body[:start].rstrip(" \t")
+        joiner = "\n\n" if head.endswith("\n") else " "
+        return f"{head.rstrip()} {beat}{joiner}{body[start:].lstrip()}"
+    return _append_beat(body, beat)
+
+
+def show_unnamed_attacks(
+    text: str, turn_result: dict[str, Any] | None, match: Matcher, report: dict[str, Any]
+) -> str:
+    """The attack the dice decided, put in a scene that never names its target (#129, both ways).
+
+    A rolled attack check carries the person it was aimed at (its "attack"
+    record, app/attack_intent.py). When the final prose names that person
+    nowhere, by code or by a name only they have (the Matcher), the prose
+    ignored the act (integ-r4 T3: 'i shoot Dr. Vasilis', a critical success,
+    became a shooting test with someone else). The engine adds the roll's own
+    outcome line ("Your shot hits Vasilis [[B]].") and keeps the prose. A
+    prose that names the target is left alone: whether it shows the right
+    outcome is not decided here.
+    """
+    checks = (turn_result or {}).get("skill_checks") if isinstance(turn_result, dict) else None
+    if not isinstance(checks, list):
+        return text
+    from app.attack_intent import attack_target, outcome_line
+
+    done: set[str] = set()
+    for check in checks:
+        code = attack_target(check)
+        if not code or code in done:
+            continue
+        done.add(code)
+        attack = check.get("attack") if isinstance(check.get("attack"), dict) else {}
+        row = next((r for r in match.people if str(r.get("code") or "").upper() == code), None) or {
+            "code": code, "name": clean_name(attack.get("name")),
+        }
+        if match.names(text, row):
+            continue
+        name = str(row.get("name") or "").strip()
+        beat = outcome_line(check, f"{name} [[{code}]]" if name else f"[[{code}]]")
+        if not beat:
+            continue
+        text = _beat_before_hook(text, beat)
+        report.setdefault("attack_beats", []).append({"code": code, "outcome": str(check.get("outcome") or ""), "beat": beat})
+        _note("attack_not_in_prose", code=code, outcome=str(check.get("outcome") or ""), beat=beat)
+    return text
+
+
 def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any] | None = None) -> dict[str, Any]:
     """Read the prose's new events, refuse what the dice did not allow, then hold it to the dead.
 
@@ -814,6 +867,9 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
             text = reconcile_refused_death(
                 text, event, attack_rolls(event, turn_result), ask, report, match, records.get("player_quotes") or []
             )
+        # The other way round: an attack the prose never shows its target in
+        # gets the roll's outcome line (no ask: the records and the codes).
+        text = show_unnamed_attacks(text, turn_result, match, report)
         text, returned = hold_the_dead(text, records, ask, report, match)
         events.extend(returned)
     except Exception as exc:  # never break a turn

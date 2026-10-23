@@ -2559,6 +2559,65 @@ def _resolve_player_attack(state: dict[str, Any], player_input: str, target: dic
     }
 
 
+def _combat_follows_attack_check(combat: Any, checks: Any) -> dict[str, Any] | None:
+    """The combat resolution with its hit or miss set by the attack check rolled on the same person (#129).
+
+    Two engine rolls decided one attack and could disagree: the combat math's
+    own d20 (_resolve_player_attack) and the attack check the player sees
+    (app/attack_intent.py). integ-r4 T3 'i shoot Dr. Vasilis': the check rolled
+    a natural 20, a critical success, the combat roll a miss, and the narrator
+    got both and wrote the miss. The check is the one shown and the one the
+    interpreter holds a death to, so it decides whether the blow lands
+    (attack_intent.LANDS); the damage is still the combat math's own roll
+    against the target's defense. Returns a new combat dict when it changed,
+    else None.
+    """
+    if not isinstance(combat, dict) or combat.get("status") != "resolved_player_attack":
+        return None
+    resolution = combat.get("resolution") if isinstance(combat.get("resolution"), dict) else None
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+    code = str(target.get("code") or "").strip().upper()
+    if resolution is None or not code:
+        return None
+    from app.attack_intent import attack_target, lands
+
+    check = next(
+        (c for c in (checks if isinstance(checks, list) else []) if isinstance(c, dict) and attack_target(c) == code and lands(c)),
+        None,
+    )
+    if check is None:
+        return None
+    landed = lands(check)
+    if landed == str(resolution.get("outcome") or ""):
+        return None
+    profile = target.get("combat_profile") if isinstance(target.get("combat_profile"), dict) else {}
+    if landed == "miss":
+        damage = 0
+    else:
+        absorb = max(0, _int_from_any(profile.get("defense"), 0) // 4)
+        damage = max(1, _int_from_any(resolution.get("raw_damage_roll"), 1) - absorb)
+        if landed == "glancing_hit":
+            damage = max(1, damage // 2)
+    before = max(0, _int_from_any(resolution.get("target_health_before"), 0))
+    top = max(before, _int_from_any(profile.get("max_health"), before))
+    after = clamp(before - damage, 0, top)
+    out = dict(combat)
+    out["resolution"] = {
+        **resolution,
+        "outcome": landed,
+        "damage": damage,
+        "target_health_after": after,
+        "target_defeated": after == 0 and before > 0,
+        "decided_by": "attack_check",
+        "combat_roll_outcome": str(resolution.get("outcome") or ""),
+    }
+    turn_ledger.note(
+        "check", "combat_follows_attack_check", code=code, check_outcome=str(check.get("outcome") or ""),
+        was=str(resolution.get("outcome") or ""), now=landed, damage=damage,
+    )
+    return out
+
+
 def _combat_target_summary(npc: dict[str, Any]) -> dict[str, Any]:
     return {
         "code": npc.get("code"),
@@ -27184,6 +27243,11 @@ def play_turn(
             if skill_check_results:
                 mechanics_context = dict(mechanics_context or {})
                 mechanics_context["resolved_checks"] = skill_check_results
+                # One roll decides an attack (#129): the combat math's hit or
+                # miss follows the attack check on the same person.
+                followed = _combat_follows_attack_check(mechanics_context.get("combat"), skill_check_results)
+                if followed is not None:
+                    mechanics_context["combat"] = followed
                 # The act's outcome in plain words, for the prose (playtest #85a).
                 from app.skill_checks import act_outcome
 
