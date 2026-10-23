@@ -14394,3 +14394,10 @@ body.compact-mode .indexContent {
 .chatOutputBlock .sceneBox {
   padding-inline: clamp(22px, calc((100% - 80ch) / 2), 160px);
 }
+
+/* History: Back to this turn (playtest #158). */
+.historyRewind {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
