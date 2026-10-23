@@ -26364,6 +26364,74 @@ def _ability_risk_tier(context: dict[str, Any], player_line: str) -> int:
     return 2 if _CONTEST_WORDS.search(player_line or "") else 1
 
 
+def _attack_ask_enabled() -> bool:
+    """AI_RPG_ATTACK_ASK=0|off turns the attack ask off (the trigger tables alone decide, as before)."""
+    raw = str(os.environ.get("AI_RPG_ATTACK_ASK", "") or "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _model_attack_ask(usage: list[dict[str, Any]], trace: list[dict[str, Any]]) -> Any:
+    """The turn's model for the attack ask, through _chat_text with the turn's usage and trace.
+
+    None when the turn is not written by the model: tests and harness stubs
+    replace generate_turn, and a stub turn has no model to ask (the rule
+    where_ended._model_ask keeps after the draft).
+    """
+    from app import llm
+    from app.interpreter import SYSTEM_PROMPT
+
+    if generate_turn is not llm.generate_turn:
+        return None
+
+    def ask(phase: str, prompt: str, max_tokens: int) -> str:
+        return llm._chat_text(
+            SYSTEM_PROMPT,
+            prompt,
+            timeout=llm._model_timeout(30, 90, "AI_RPG_ATTACK_ASK_TIMEOUT"),
+            usage=usage,
+            phase=phase,
+            max_tokens=max_tokens,
+            trace=trace,
+            temperature=0.0,
+        )
+
+    return ask
+
+
+def _attack_check_for_line(
+    model_input: str,
+    context: dict[str, Any],
+    inferred: dict[str, Any] | None,
+    usage: list[dict[str, Any]],
+    trace: list[dict[str, Any]],
+    ask: Any = None,
+) -> dict[str, Any] | None:
+    """The attack check for the player's line, if it attacks someone here (#85, #129; app/attack_intent.py).
+
+    Marks an inferred blow already aimed at a person as the attack on them.
+    Every ask and the outcome are noted in the turn ledger.
+    """
+    from app import attack_intent
+
+    if not _attack_ask_enabled():
+        return None
+    chosen = ask or attack_intent.ASK_OVERRIDE[0] or _model_attack_ask(usage, trace)
+    check, report = attack_intent.decide(model_input, context, inferred, chosen)
+    if report.get("asks") or report.get("target") or report.get("error"):
+        turn_ledger.note(
+            "check",
+            "attack_found" if report.get("target") else "attack_not_found",
+            target=report.get("target"),
+            source=report.get("from") or "ask",
+            skill=report.get("skill") or "",
+            asks=report.get("asks") or [],
+            unconfirmed=report.get("unconfirmed") or [],
+            error=report.get("error") or "",
+            seconds=report.get("seconds"),
+        )
+    return check
+
+
 def _rate_persuasion_asks(
     pending: list[Any], context: dict[str, Any], line: str, ask: Any = None
 ) -> dict[int, dict[str, Any]]:
@@ -26789,6 +26857,10 @@ def play_turn(
 
     # Pre-resolve action checks so the LLM must honor social rolls / DCs.
     skill_check_results: list[dict[str, Any]] = []
+    # Model asks made before the draft (the attack ask): joined to the turn's
+    # model_usage and trace once the draft's lists exist.
+    pre_draft_usage: list[dict[str, Any]] = []
+    pre_draft_trace: list[dict[str, Any]] = []
     try:
         from app.skill_checks import (
             infer_check_from_action,
@@ -26817,7 +26889,15 @@ def play_turn(
                 # Work and talk in one line roll both (#85 review): the act's
                 # check and the social one it carries, each through its gate.
                 also = inferred.pop("also_check", None) if isinstance(inferred, dict) else None
-                for candidate in (inferred, also):
+                # An attack on someone here, in any words (#85, #129): one ask
+                # per person the engine has in the scene, a second to confirm
+                # (app/attack_intent.py). The roll decides it, not the line.
+                attack = None
+                if check_cfg.get("auto_check_on_risky_actions"):
+                    attack = _attack_check_for_line(model_input, context, inferred, pre_draft_usage, pre_draft_trace)
+                    if attack and attack.pop("replaces_inferred", False):
+                        inferred, attack = attack, None
+                for candidate in (attack, inferred, also):
                     if isinstance(candidate, dict) and (
                         candidate.get("social") or check_cfg.get("auto_check_on_risky_actions")
                     ):
@@ -26907,6 +26987,10 @@ def play_turn(
                 # The declared act this roll decides (playtest #85a): the draft
                 # is told its outcome, the next turn reads it back, and practice
                 # counts it.
+                # Who this roll attacks (#85, #129): the interpreter allows
+                # that person's death only on a success (interpreter.allow_event).
+                if isinstance(item.get("attack"), dict) and resolved.get("enabled") is not False:
+                    resolved["attack"] = dict(item["attack"])
                 if item.get("act") and resolved.get("enabled"):
                     resolved["act"] = str(item.get("act"))[:100]
                     resolved["act_family"] = str(item.get("act_family") or "")
@@ -27317,6 +27401,11 @@ def play_turn(
         used_fallback = True
 
     result["_deterministic_combat"] = mechanics_context.get("combat") or {}
+    # The asks made before the draft go first in the turn's usage and trace.
+    if pre_draft_usage:
+        result["_model_usage"] = [*pre_draft_usage, *(result.get("_model_usage") or [])]
+    if pre_draft_trace:
+        result["_model_trace"] = [*pre_draft_trace, *(result.get("_model_trace") or [])]
 
     # Attach the checks rolled before the draft to the turn output.
     try:
