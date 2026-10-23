@@ -12901,6 +12901,28 @@ def _resolve_verified_turn(
     return resolved
 
 
+def _broad_verifier_enabled() -> bool:
+    """AI_RPG_BROAD_VERIFIER=1 brings back the one-verdict verifier (VERIFY_PROMPT), for comparing on a replay.
+
+    Off by default since playtest #157 (b) / #77: the engine's own checks in
+    app/turn_checks.py write self_check instead, with no model ask.
+    """
+    return _env_bool("AI_RPG_BROAD_VERIFIER", False)
+
+
+def _run_turn_checks(
+    result: dict[str, Any],
+    policy: dict[str, Any] | None,
+    trace: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """The engine's checks of the finished scene write self_check (app/turn_checks.py); no model call."""
+    from app import turn_checks
+
+    checked, report = turn_checks.check_turn(result, policy)
+    _append_trace(trace, {"phase": "verify", "event": "engine_checks", **report})
+    return checked
+
+
 def _turn_for_depth_retry(turn: dict[str, Any]) -> dict[str, Any]:
     return _trim_strings({key: turn.get(key) for key in TURN_SHAPE_KEYS if key in turn}, MAX_TURN_NARRATION_CHARS)
 
@@ -13049,6 +13071,10 @@ def _nonempty_turn_keys(turn: dict[str, Any], keys: set[str]) -> list[str]:
 
 
 def _verification_memory_covered_checks(context: dict[str, Any], checks: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    if not _broad_verifier_enabled():
+        # Rows are the broad verifier's (and its skip policy's); with it off no
+        # model re-checks what a row would clear (#157 b, app/turn_checks.py).
+        return [], []
     memory = context.get("verification_memory") or {}
     entries = memory.get("entries") if isinstance(memory, dict) else []
     if not isinstance(entries, list):
@@ -18179,23 +18205,25 @@ def _generate_turn_body(
             return result
 
         try:
-            progress_update(
-                "verify",
-                "Verifier is checking continuity and state changes…",
-                step=3,
-                line="Model verifier pass in progress.",
-            )
-            verified = _chat_json(
-                verify_prompt,
-                build_verify_prompt(active_context, player_input, _prompt_draft(draft)),
-                timeout=verify_timeout,
-                usage=usage,
-                phase="verify",
-                max_tokens=_turn_max_tokens(active_context, "verify"),
-                trace=trace,
-            )
-            result = _resolve_verified_turn(verified, draft, active_context, trace, phase="verify")
-            _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
+            result = draft
+            if _broad_verifier_enabled():
+                progress_update(
+                    "verify",
+                    "Verifier is checking continuity and state changes…",
+                    step=3,
+                    line="Model verifier pass in progress.",
+                )
+                verified = _chat_json(
+                    verify_prompt,
+                    build_verify_prompt(active_context, player_input, _prompt_draft(draft)),
+                    timeout=verify_timeout,
+                    usage=usage,
+                    phase="verify",
+                    max_tokens=_turn_max_tokens(active_context, "verify"),
+                    trace=trace,
+                )
+                result = _resolve_verified_turn(verified, draft, active_context, trace, phase="verify")
+                _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
             progress_update(
                 "narration",
                 "Polishing narration quality…",
@@ -18205,6 +18233,9 @@ def _generate_turn_body(
             result = ensure_quality(
                 result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_retry", trace
             )
+            if not _broad_verifier_enabled():
+                # The engine's checks read the prose the player will read.
+                result = _run_turn_checks(result, verification_policy, trace)
             result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
             result["_verification_policy"] = verification_policy
             result["_draft_mode"] = "dsl"
@@ -18223,7 +18254,8 @@ def _generate_turn_body(
             result["_model_trace"] = trace
             return result
         except LlmError as exc:
-            _note_verify_outcome(False, _trim_text(str(exc), 120))
+            if _broad_verifier_enabled():  # only a verifier ask is charged to its breaker
+                _note_verify_outcome(False, _trim_text(str(exc), 120))
             draft = _normalize_turn(draft, active_context)
             draft["self_check"] = {
                 "passed": False,
@@ -18422,23 +18454,25 @@ def _generate_turn_body(
         return result
 
     try:
-        progress_update(
-            "verify",
-            "Verifier is checking continuity and state changes…",
-            step=3,
-            line="Model verifier pass in progress.",
-        )
-        verified = _chat_json(
-            verify_prompt,
-            build_verify_prompt(active_context, player_input, _prompt_draft(draft)),
-            timeout=verify_timeout,
-            usage=usage,
-            phase="verify",
-            max_tokens=_turn_max_tokens(active_context, "verify"),
-            trace=trace,
-        )
-        result = _resolve_verified_turn(verified, draft, active_context, trace, phase="verify")
-        _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
+        result = draft
+        if _broad_verifier_enabled():
+            progress_update(
+                "verify",
+                "Verifier is checking continuity and state changes…",
+                step=3,
+                line="Model verifier pass in progress.",
+            )
+            verified = _chat_json(
+                verify_prompt,
+                build_verify_prompt(active_context, player_input, _prompt_draft(draft)),
+                timeout=verify_timeout,
+                usage=usage,
+                phase="verify",
+                max_tokens=_turn_max_tokens(active_context, "verify"),
+                trace=trace,
+            )
+            result = _resolve_verified_turn(verified, draft, active_context, trace, phase="verify")
+            _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
         progress_update(
             "narration",
             "Polishing narration quality…",
@@ -18446,6 +18480,8 @@ def _generate_turn_body(
             line="Narration quality / pipeline pass.",
         )
         result = ensure_quality(result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_retry", trace)
+        if not _broad_verifier_enabled():
+            result = _run_turn_checks(result, verification_policy, trace)
         result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
         result["_verification_policy"] = verification_policy
         _append_trace(
@@ -18467,7 +18503,7 @@ def _generate_turn_body(
         # out unverified. A context-length overflow that the compact retry
         # recovers is a verified turn, and charging the breaker for it would
         # disable the verifier after three overflows the retry absorbed.
-        if _is_context_length_error(exc):
+        if _broad_verifier_enabled() and _is_context_length_error(exc):
             try:
                 compact_context = _clean_context_for_handoff(_compact_turn_context(active_context), "planner_to_verify_compact_retry", trace)
                 verified = _chat_json(
@@ -18499,7 +18535,8 @@ def _generate_turn_body(
                 return result
             except LlmError:
                 pass
-        _note_verify_outcome(False, _trim_text(str(exc), 120))
+        if _broad_verifier_enabled():  # only a verifier ask is charged to its breaker
+            _note_verify_outcome(False, _trim_text(str(exc), 120))
         draft = _normalize_turn(draft, active_context)
         draft["self_check"] = {
             "passed": False,

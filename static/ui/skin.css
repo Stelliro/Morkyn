@@ -1540,6 +1540,22 @@ body.aiBusy:not(.llmChatThinking)::after {
   background: var(--surface-inset);
 }
 
+/* The offline narrator's mark and banner (playtest #156): the warm signal as a line. */
+.fallbackTurnMark {
+  border-left: 1px solid var(--warn);
+  color: var(--warn);
+}
+
+.modelFallbackBanner {
+  border: 1px solid var(--warn);
+  border-radius: 0;
+  color: var(--muted);
+}
+
+.modelFallbackBanner strong {
+  color: var(--warn);
+}
+
 .llmRuntimeBanner.isError {
   background: var(--moon-soft);
   border-color: var(--moon);
