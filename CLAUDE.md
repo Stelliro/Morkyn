@@ -148,6 +148,10 @@ belong to, with the date).
   is not relied on). Cleaner
   closing comes later.
 
+- **The Settlement map view is for the settlement you are in** (2026-10-23): "when the player is
+  not in a town or settlemnet the player can still view the settlement tab". It was built for
+  #19 as "the settlement you are in, or one you know"; outside a settlement it is not offered.
+
 - **Narrator, interpreter, engine** (2026-10-23, planned; Stell's fix for prose and state
   disagreeing): the **narrator** only describes; it "cant make anything happen". The
   **interpreter** (Stell's name for it: not "translator") reads the player's line (what was
