@@ -377,3 +377,29 @@ class NamesAreNoBarePlural(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MemoriesAreNotFiguresHereNow(unittest.TestCase):
+    """The reviewer of 4075bfc: a memory or the past was filed as figures present and rolled."""
+
+    def _kinds(self, text):
+        from app.unnamed import mentions
+
+        return [(m["kind"], m["stated"]) for m in mentions(text)]
+
+    def test_the_players_own_perfect_is_a_memory(self):
+        self.assertEqual(self._kinds("You have killed many ghouls in your time."), [])
+        self.assertEqual(self._kinds("You've seen raiders like him before."), [])
+        self.assertEqual(self._kinds("You have seen some raiders like him before."), [])
+
+    def test_ago_is_the_past(self):
+        self.assertEqual(self._kinds("Hundreds of years ago, ghouls roamed these tunnels around you."), [])
+
+    def test_many_is_not_a_count(self):
+        self.assertEqual(self._kinds("So many ghouls lunge at you that you lose count."), [])
+        self.assertEqual(self._kinds("You wonder how many raiders remain near you."), [])
+
+    def test_the_scene_now_is_still_filed(self):
+        self.assertEqual(self._kinds("Ghouls lunge at you."), [("ghoul", False)])
+        self.assertEqual(self._kinds("Ghouls have surrounded you."), [("ghoul", False)])
+        self.assertEqual(self._kinds("Countless rats swarm over you."), [("rat", False)])
