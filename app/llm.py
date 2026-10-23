@@ -17852,7 +17852,8 @@ def _run_interpreter(
                     records = interpreter.load_records(conn)
             records = {**records, "player_quotes": quotes}
             ask = _interpreter_ask(usage=usage, trace=trace, timeout=timeout, config=config)
-            out = interpreter.run(narration, records, ask)
+            # The turn's rolls ride along: a death the attack roll did not allow is refused (#85, #129).
+            out = interpreter.run(narration, records, ask, turn)
             events = out["events"]
             record.update(out["report"])
             record["event"] = "read"
