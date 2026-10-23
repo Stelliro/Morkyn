@@ -305,6 +305,10 @@ def candidates(conn, row: Any, unspoken: str = "") -> list[Any]:
         # apart by the engine (app/unnamed.py): never the same person.
         if numbered_kind and _numbered_kind(other) == numbered_kind:
             continue
+        # A figure of a kind is only ever someone of that kind: Ghoul 1 is
+        # never Guard 1, though both carry the default summary (app/unnamed.py).
+        if not same_kind(row, other):
+            continue
         if unspoken and world._named_as_present(unspoken, r"(?<![\w'])" + re.escape(name) + r"(?![\w'])"):
             continue
         at = int(other["location_id"] or 0) in places
@@ -332,6 +336,38 @@ def _numbered_kind(row: Any) -> str:
         return ""
 
 
+def _firm_kind(row: Any) -> str:
+    """A numbered figure's kind when it says what the figure is ("ghoul", "guard"); "" for none or a
+    vague person word ("woman": a woman seen may be anyone here, as before numbering)."""
+    from app.unnamed import _vague_words
+
+    kind = _numbered_kind(row)
+    return "" if kind in _vague_words() else kind
+
+
+def same_kind(row: Any, other: Any) -> bool:
+    """Whether two records may be one person by kind: a row with a kind matches only rows of that kind.
+
+    Kindless people match each other as before. A kind and a kindless person
+    match when that person's job is the kind (Guard 1 and Aldric the guard).
+    """
+    from app.unnamed import singular
+
+    mine, theirs = _firm_kind(row), _firm_kind(other)
+    if not mine and not theirs:
+        return True
+    if mine and theirs:
+        return mine == theirs
+    kind, plain = (mine, other) if mine else (theirs, row)
+    if _numbered_kind(plain):  # "Woman 1" is a woman, not a ghoul
+        return False
+    try:
+        role = str(plain["role"] or "")
+    except (KeyError, IndexError, TypeError):
+        role = ""
+    return kind in {singular(w) for w in re.findall(r"[a-z]+", role.lower())}
+
+
 def _mark(row: Any) -> str:
     summary = re.sub(r"\s+", " ", str(row["summary"] or "")).strip()
     return summary[:90]
@@ -352,7 +388,13 @@ def _mark_words(row: Any) -> set[str]:
 
 
 def _same_person_evidence(row: Any, other: Any) -> bool:
-    """The engine's own reason to believe a model-named match: the same trade, or a mark they share."""
+    """The engine's own reason to believe a model-named match: the same trade, or a mark they share.
+
+    Never across kinds (same_kind): the default summary "Someone at the edge of
+    the scene." gave a ghoul and a guard a shared mark.
+    """
+    if not same_kind(row, other):
+        return False
     if _job_words(str(row["role"] or "")) & _job_words(str(other["role"] or "")):
         return True
     return bool(_mark_words(row) & _mark_words(other))

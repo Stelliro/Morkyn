@@ -25,7 +25,9 @@ How the engine reads a figure, structurally (no list of monster words):
   that only says "a ghoul" / "the ghoul": a common noun, not a name). For any
   other noun in a sentence that has the player in it, one small ask decides,
   once per noun per turn, before apply_turn's write block (settle):
-      'In this text, is "ghoul" a person, an animal or a monster?'
+      'In this text, is "ghoul" a being that can act on its own?'
+  and a second, differently worded check must agree:
+      'In this text, could you fight or talk to the ghoul? Answer yes or no.'
 * Counts are per kind across the save: Ghoul 3 is the third ghoul ever met
   (npcs.kind / npcs.kind_number, the faded ones included), not the third here.
   A stated count is that many ("4 ghouls", "two raiders"); an unstated plural
@@ -60,15 +62,30 @@ from typing import Any
 from app import turn_ledger
 
 KIND_PHASE = "figure_kind"
-KIND_QUESTION = 'In this text, is "{noun}" a person, an animal or a monster?'
+# Measured live on Hermes 3 8B (live-eval-5, 75 attempts each): "a person, an
+# animal or a monster?" is a choice question, and 42 of 75 replies spent the
+# 4 tokens on "In this text," before answering; this one is yes/no: 75/75
+# right, 0 unparseable.
+KIND_QUESTION = 'In this text, is "{noun}" a being that can act on its own?'
 # The second, differently worded check that must agree before a noun is filed
 # as a figure (CLAUDE.md 2026-10-18: one small ask finds, a second checks).
 # Over the 44 recorded narrations the first ask was put to scenery ten times
 # in eleven (ping, counter, tear ...); one false yes minted "Ping 1".
+# Measured (live-eval-5, 87 attempts): "could the player fight or talk to the
+# ghoul?" said no to 41 of 51 true figures; "could you ...? Answer yes or no."
+# 93% right, 0 false yes in 36.
 KIND_CHECK_PHASE = "figure_kind_check"
-KIND_CHECK_QUESTION = "In this text, could the player fight or talk to the {noun}?"
+KIND_CHECK_QUESTION = "In this text, could you fight or talk to the {noun}? Answer yes or no."
 HOSTILE_PHASE = "figure_hostile"
 HOSTILE_QUESTION = 'In this text, does "{phrase}" attack or threaten the player?'
+# Asked only when a pronoun ('"..." she asks') would give a quoted line to a
+# figure that is no person word the figure hints know (the nurse in cc87dd29
+# T3; not the ghoul in 'A ghoul lunges at you. "Get down!" she shouts').
+# Not yet measured live on Hermes 3 8B.
+SPEAKS_PHASE = "figure_speaks"
+SPEAKS_QUESTION = 'In this text, does the {noun} say "{quote}"? Answer yes or no.'
+SPEAKS_QUOTE_CHARS = 120
+MAX_SPEAK_ASKS = 1
 YES_NO_SYSTEM = "Answer yes or no."
 MAX_TOKENS = 4
 MAX_KIND_ASKS = 3
@@ -99,6 +116,8 @@ _CLOSED = frozenset({
     "upon", "within", "outside", "until", "because", "though", "although", "since", "once",
 })
 _BE_HAVE = frozenset({"is", "was", "are", "were", "has", "have", "had"})
+# The mention forms that can file a new figure (a "the" refers back to one met).
+_MINTING_FORMS = frozenset({"count", "another", "more", "ordinal"})
 # Irregular English plurals (morphology, not meaning).
 _IRREGULAR = {
     "men": "man", "women": "woman", "people": "person", "children": "child", "feet": "foot", "teeth": "tooth",
@@ -276,7 +295,8 @@ def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
 
     Each: {kind (lower singular), noun (as written), phrase, sentence, form,
     count, ordinal, you, acts, subject}. ``form`` is "count" (a/an/one: 1, a
-    number, an unstated plural), "another", "ordinal" (the/a second ...),
+    number, an unstated plural), "another", "more" ("two more ghouls": that
+    many added), "ordinal" (the/a second ...),
     "the" (one referred back to) or "the_plural" (several referred back to).
     ``you``: the clause has the player in it. ``acts``: the verb is an action,
     not "is"/"has" alone ("An ironbound door is your only way in" shows a door,
@@ -413,7 +433,11 @@ def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = fr
         if nxt == "of":
             return None
         n = _count_of(low)
-        form, count, plural_needed = "count", n, n > 1
+        if nxt == "more":
+            # "Then two more ghouls follow": that many beside the ones already met.
+            form, count, plural_needed, j = "more", n, n > 1, i + 2
+        else:
+            form, count, plural_needed = "count", n, n > 1
     elif low == "the":
         n = _count_of(nxt)
         if n:
@@ -558,6 +582,12 @@ def hostile_prompt(sentence: str, phrase: str) -> str:
     return f"Text: {sentence}\n{HOSTILE_QUESTION.format(phrase=phrase)}"
 
 
+def speaks_prompt(text: str, kind: str, quote: str) -> str:
+    """The user half of the figure-speaks ask, exactly as sent."""
+    said = quote if len(quote) <= SPEAKS_QUOTE_CHARS else quote[:SPEAKS_QUOTE_CHARS].rsplit(" ", 1)[0] + " ..."
+    return f"Text: {text}\n{SPEAKS_QUESTION.format(noun=kind, quote=said)}"
+
+
 def _stored_kinds(conn) -> set[str]:
     try:
         return {str(r[0] or "").strip().lower() for r in conn.execute("SELECT DISTINCT kind FROM npcs").fetchall()} - {""}
@@ -629,7 +659,7 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
         else:
             # Only a noun shown doing something in a clause with the player
             # in it, or one the player's own line acts on, is asked about.
-            shown = next((m for m in ms if m["you"] and m["acts"] and m["form"] in {"count", "another", "ordinal"}),
+            shown = next((m for m in ms if m["you"] and m["acts"] and m["form"] in _MINTING_FORMS),
                          None)
             if shown is None or not ask:
                 continue
@@ -656,7 +686,7 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
         # Hostility, for a kind this turn may mint (a count, another, an
         # ordinal). The person words the figure hints know keep their old
         # default (neutral, or the op's ATTITUDE): only other kinds are asked.
-        minting = next((m for m in ms if m["form"] in {"count", "another", "ordinal"}), None)
+        minting = next((m for m in ms if m["form"] in _MINTING_FORMS), None)
         if not ask or minting is None or kind in op_attitudes or kind in people:
             continue
         if hostile_asks >= MAX_HOSTILE_ASKS:
@@ -667,6 +697,27 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
         verdicts[kind]["hostile"] = said
         if said is not None:
             turn_ledger.note("npc", "figure_hostile" if said else "figure_not_hostile", kind=kind)
+    # A line a pronoun gives to a figure that is no person word ('"..." she
+    # asks' after "a nurse looks up at you") is that figure's only when one ask
+    # says so: after "A ghoul lunges at you", the "she" who shouts "Get down!"
+    # is someone else, and the face seeded for the line stays the speaker.
+    speak_asks = 0
+    for spoken in speaker_lines(narration) if ask else []:
+        kind = spoken["kind"]
+        if spoken["by"] != "pronoun" or not kind or kind in people:
+            continue
+        verdict = verdicts.get(kind) or ({"figure": True, "hostile": None, "by": "record"} if kind in stored or kind in ops else None)
+        if not verdict or not verdict.get("figure") or "speaks" in verdict:
+            continue
+        if speak_asks >= MAX_SPEAK_ASKS:
+            turn_ledger.note("npc", "figure_speaks_not_asked", kind=kind, reason="ask limit")
+            continue
+        speak_asks += 1
+        said = _ask_yes_no(call, YES_NO_SYSTEM, speaks_prompt(spoken["text"], kind, spoken["quote"]), SPEAKS_PHASE,
+                           kind, trace, usage)
+        verdict["speaks"] = bool(said)
+        verdicts[kind] = verdict
+        turn_ledger.note("npc", "figure_speaks" if said else "figure_does_not_speak", kind=kind, reply=said)
     if verdicts:
         result["_figures"] = {**(result.get("_figures") or {}), **verdicts}
     return verdicts
@@ -748,41 +799,66 @@ def mint(conn, location_id: int, kind: str, *, attitude: str = "", role: str = "
     return shell
 
 
-def speaker_kinds(narration: str) -> list[str]:
-    """The kind of whoever speaks each quoted line, in order ("" when it is no figure kind the prose shows).
+def speaker_lines(narration: str) -> list[dict[str, Any]]:
+    """Who speaks each quoted line, in order: {"kind", "by", "quote", "text"}.
 
     The speaker is the first noun outside the quotes of the line's own unit
-    ('"..." the nurse says' -> "nurse", '"Get down!" someone shouts' ->
-    "someone"); a pronoun alone ('"..." she asks') is the last figure shown
-    before the line. The player's own lines ("you say") are no one's here.
+    ('"..." the nurse says' -> "nurse", by "noun"; '"Get down!" someone shouts'
+    -> "someone"); a pronoun alone ('"..." she asks') points at the last figure
+    shown before the line (by "pronoun"; ``text`` is that sentence and the
+    line). ``kind`` is "" when it is no figure kind the prose shows. The
+    player's own lines ("you say") are no one's here.
     """
     from app.conversation import _QUOTE_RE, _spoken_span
     from app.narration_pipeline import quoted_spans, speech_units
 
     flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[^\]]*\]\]", "", str(narration or ""))).strip()
-    out: list[str] = []
-    last = ""
+    out: list[dict[str, Any]] = []
+    last, last_unit = "", ""
     for unit in speech_units(flat):
         outside = _QUOTE_RE.sub(" ", unit)
-        if any(_spoken_span(s) for s in quoted_spans(unit)):
-            out.append(_speaker_word(outside, last))
+        spoken = [s for s in quoted_spans(unit) if _spoken_span(s)]
+        if spoken:
+            word, by = _speaker_word(outside, last)
+            text = unit if by != "pronoun" or not last_unit or last_unit == unit else f"{last_unit} {unit}"
+            out.append({"kind": word, "by": by, "quote": spoken[0], "text": text})
         shown = mentions(outside)
         if shown:
-            last = shown[-1]["kind"]
+            last, last_unit = shown[-1]["kind"], unit
     return out
 
 
-def _speaker_word(outside: str, last: str) -> str:
+def speaker_kinds(narration: str, speaks: Any = ()) -> list[str]:
+    """The kind of whoever speaks each quoted line, in order ("" when it is no figure kind the prose shows).
+
+    A pronoun ("she asks") is the last figure shown only when that figure is
+    a person word the figure hints know, or a kind in ``speaks`` (the turn's
+    figure_speaks ask said yes): in 'A ghoul lunges at you. "Get down!" she
+    shouts' the "she" is not the ghoul, and the face seeded for the line
+    stays the speaker.
+    """
+    people = _person_words()
+    allowed = {str(k).lower() for k in speaks or ()}
+    out: list[str] = []
+    for line in speaker_lines(narration):
+        kind = line["kind"]
+        if line["by"] == "pronoun" and kind and kind not in people and kind not in allowed:
+            kind = ""
+        out.append(kind)
+    return out
+
+
+def _speaker_word(outside: str, last: str) -> tuple[str, str]:
     for tok in _TOKEN_RE.findall(outside):
         low = tok.lower()
         if low in {"he", "she", "they"}:
-            return last
+            return last, "pronoun"
         if low in {"you", "i", "we"} or not _word(tok):
-            return ""
+            return "", ""
         if low in _CLOSED or _verb_shaped(low, False) or re.fullmatch(r"[a-z]+ly", low):
             continue  # "says the nurse", "the nurse", "quietly"
-        return singular(low)
-    return ""
+        return singular(low), "noun"
+    return "", ""
 
 
 def _fresh_unnamed(conn, location_id: int, max_id_before: int | None, narration: str,
@@ -802,7 +878,8 @@ def _fresh_unnamed(conn, location_id: int, max_id_before: int | None, narration:
     """
     if max_id_before is None:
         return []
-    if kind and singular(kind) not in speaker_kinds(narration):
+    speaks = [k for k, v in (result.get("_figures") or {}).items() if isinstance(v, dict) and v.get("speaks")]
+    if kind and singular(kind) not in speaker_kinds(narration, speaks):
         return []
     try:
         rows = conn.execute(
@@ -883,7 +960,7 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
         # meet the player ("Two men step out and level rifles at you"), not a
         # crowd ("A few people move between the shops", baseline T0).
         if kind in vague:
-            ms = [m for m in ms if m["form"] not in {"count", "ordinal"} or (
+            ms = [m for m in ms if m["form"] not in {"count", "more", "ordinal"} or (
                 is_plural(m["noun"]) and m.get("stated") and m["you"])]
         here = _here(conn, int(location_id), kind)
         total = len(here)
@@ -893,6 +970,8 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
                 total = max(total, int(m["count"] or 0))
             elif m["form"] == "another":
                 total += 1
+            elif m["form"] == "more":
+                total += int(m["count"] or 0)
             elif m["form"] == "ordinal":
                 total = max(total, int(m["ordinal"] or 0))
             elif m["form"] == "the":
@@ -915,6 +994,11 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
         if not new:
             if here and ms:
                 turn_ledger.note("npc", "figure_is_one_here", kind=kind, names=[str(r["name"] or "") for r in here])
+            elif ms:
+                # "The deathclaw charges you" with none here and no op: a "the"
+                # refers back to one met, which may be following the player
+                # from elsewhere, so nothing is minted (an op files it).
+                turn_ledger.note("npc", "figure_referred_back_none_here", kind=kind)
             continue
         attitude = str(op.get("attitude") or "")
         if not attitude and verdict.get("hostile"):
@@ -990,33 +1074,49 @@ def rename_told(conn, text: str, name: str, location_id: int | None) -> dict[str
 # ------------------------------------------------------- what the story sees
 
 
-def story_label(kind: str) -> str:
-    """What the narrator is shown for an unnamed figure: what it is ("an unnamed ghoul"), never "Ghoul 1"."""
+def story_label(kind: str, *, definite: bool = False) -> str:
+    """What the story is shown for an unnamed figure: what it is, never "Ghoul 1".
+
+    "an unnamed ghoul" in what the narrator reads (the context, the engine's
+    notes); ``definite`` gives "the ghoul", the form prose uses when the
+    engine writes the figure into the story itself (a bare [[B]] filled in).
+    """
     word = str(kind or "").strip().lower()
-    return f"an unnamed {word}" if word else ""
+    if not word:
+        return ""
+    return f"the {word}" if definite else f"an unnamed {word}"
 
 
-def _numbered_rows(value: Any, out: dict[str, str], depth: int = 0) -> None:
+def numbered_name(row: Any) -> tuple[str, str]:
+    """(name, kind) when the record is an unnamed figure still under its number ("Ghoul 1", "Ghoul"), else ("", "")."""
+    try:
+        getter = row.get if isinstance(row, dict) else (lambda key: row[key])
+        kind = str(getter("kind") or "").strip()
+        number = int(getter("kind_number") or 0)
+        name = str(getter("name") or "").strip()
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        return "", ""
+    if kind and number and name == numbered(kind, number):
+        return name, kind
+    return "", ""
+
+
+def _numbered_rows(value: Any, out: dict[str, str], depth: int = 0, definite: bool = False) -> None:
     if depth > 6:
         return
     if isinstance(value, dict):
-        kind = str(value.get("kind") or "").strip()
-        try:
-            number = int(value.get("kind_number") or 0)
-        except (TypeError, ValueError):
-            number = 0
-        name = str(value.get("name") or "").strip()
-        if kind and number and name == numbered(kind, number):
-            out[name] = story_label(kind)
+        name, kind = numbered_name(value)
+        if name:
+            out[name] = story_label(kind, definite=definite)
         for key in ("npcs", "current_location", "locations"):
             if key in value:
-                _numbered_rows(value[key], out, depth + 1)
+                _numbered_rows(value[key], out, depth + 1, definite)
     elif isinstance(value, list):
         for item in value:
-            _numbered_rows(item, out, depth + 1)
+            _numbered_rows(item, out, depth + 1, definite)
 
 
-def story_names(context: dict[str, Any] | None) -> dict[str, str]:
+def story_names(context: dict[str, Any] | None, *, definite: bool = False) -> dict[str, str]:
     """{numbered name: story label} for the unnamed figures still under their number in this context.
 
     Read from the people records the context carries (locations[].npcs,
@@ -1024,8 +1124,43 @@ def story_names(context: dict[str, Any] | None) -> dict[str, str]:
     """
     out: dict[str, str] = {}
     if isinstance(context, dict):
-        _numbered_rows(context, out)
+        _numbered_rows(context, out, definite=definite)
     return out
+
+
+def prose_view(text: str, names: dict[str, str]) -> str:
+    """Prose with every numbered name in it written as the figure it is ("the ghoul [[B]]").
+
+    The one place the engine's own label could reach the player's story: the
+    label repair fills a bare "[[B]]" with the record's name, and the narrator
+    may copy a name it saw. ``names`` is story_names(context, definite=True).
+    "while Ghoul 2 [[B]] lunges" reads "while the ghoul [[B]] lunges"; at a
+    sentence's start, "The ghoul [[B]]"; "the Ghoul 2" does not double the "the".
+    """
+    if not text or not names:
+        return text or ""
+    pattern = re.compile(
+        r"(?<![\w'’])(?:(the|a|an)\s+)?("
+        + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+        + r")(?![\w'’])",
+        re.IGNORECASE,
+    )
+    lookup = {n.lower(): label for n, label in names.items()}
+
+    def put(match: re.Match[str]) -> str:
+        label = lookup.get(match.group(2).lower(), "")
+        if not label:
+            return match.group(0)
+        article = match.group(1)
+        if article:
+            word = label.split(" ", 1)[-1]
+            return f"{article} {word}"
+        before = text[: match.start()].rstrip()
+        if not before or before[-1] in ".!?\"“”":
+            return label[:1].upper() + label[1:]
+        return label
+
+    return pattern.sub(put, text)
 
 
 def story_view(value: Any, names: dict[str, str]) -> Any:
