@@ -37,8 +37,11 @@ How the engine reads a figure, structurally (no list of monster words):
 * Counts are per kind across the save: Ghoul 3 is the third ghoul ever met
   (npcs.kind / npcs.kind_number, the faded ones included), not the third here.
   A stated count is that many ("4 ghouls", "two raiders"); an unstated plural
-  ("some ghouls", "a pack of wolves") is two, the least a plural can be, and
-  later prose that counts more ("the third ghoul") adds the rest.
+  ("some ghouls", "a pack of wolves", a bare "Ghouls lunge at you") is rolled
+  with the engine's seeded dice (UNSTATED_DICE, in the dice audit), and the
+  number is written into the prose where the group first appears ("Four
+  ghouls lunge at you"; Stell 2026-10-24: "roll a dice on it and stick to
+  it"). Later prose that counts more ("the third ghoul") adds the rest.
 * The rosters rule: the figures of that kind already here (alive) are matched
   first. "a ghoul" / "the ghoul" with one ghoul here is that ghoul; "two
   ghouls" with one here adds one; "another ghoul" and "the second ghoul" (with
@@ -108,12 +111,19 @@ MAX_TOKENS = 4
 MAX_FIGURE_ASKS = 6
 MAX_HOSTILE_ASKS = 2
 # A group the prose does not count ("a pack of ghouls", "some raiders", "a
-# few drifters", "a crowd of refugees") is the least a plural can be: two.
-# Later prose that counts more ("another ghoul", "the third ghoul", "two more
-# ghouls") adds the rest; "some ghouls" again with two here adds none. A
-# collective noun alone ("A crowd gathers", "a pack circles") is asked about
-# as itself and files nothing unless both asks say it is a being.
+# few drifters", "a crowd of refugees", or a bare plural that opens its
+# clause: "Ghouls lunge at you") reads as at least two, the least a plural can
+# be. When it is filed, the engine rolls how many (Stell, 2026-10-24: "we
+# should roll a dice on it and stick to it"): UNSTATED_DICE with the engine's
+# seeded dice, recorded in the dice audit, and the number is written into the
+# prose where the group first appears ("Four ghouls lunge at you"). Later
+# prose that counts more ("another ghoul", "the third ghoul", "two more
+# ghouls") adds the rest; "some ghouls" again with two or more here adds
+# none. A collective noun alone ("A crowd gathers", "a pack circles") is asked
+# about as itself and files nothing unless both asks say it is a being.
 UNSTATED_PLURAL = 2
+UNSTATED_DICE = "1d4+1"
+UNSTATED_ROLL_TAG = "unnamed_count"
 # Never more than this many rows of one kind from one turn.
 MAX_PER_KIND = 8
 
@@ -321,8 +331,9 @@ def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
     see a pack of ghouls", "you spot two raiders behind the wreck"), taken with
     or without a verb of its own; an -ing or a relative clause after the noun
     ("ghouls feasting", "a ghoul that lunges") makes it a subject wherever it
-    stands. ``form`` is "count" (a/an/one: 1, a
-    number, an unstated plural), "another", "more" ("two more ghouls": that
+    stands. A bare plural that opens its clause and has its verb ("Ghouls
+    lunge at you") is an unstated plural, like "some ghouls". ``form`` is "count" (a/an/one: 1, a
+    number, an unstated plural, ``stated`` False), "another", "more" ("two more ghouls": that
     many added), "ordinal" (the/a second ...),
     "the" (one referred back to) or "the_plural" (several referred back to).
     ``you``: the clause has the player in it. ``acts``: the verb is an action,
@@ -344,6 +355,12 @@ def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
                 i += 1
                 continue
             bare = found.pop("_bare", False)
+            if found.pop("_bare_plural", False):
+                # "Ghouls lunge at you": a bare plural is a figure only as its clause's subject.
+                if not _opens_clause(toks[start:i]):
+                    i += 1
+                    continue
+                found["_ing"] = True
             subject = (found.pop("_object") is False and not bare
                        and (found["_ing"] or _opens_clause(toks[start:i])))
             if not subject and not seen and found["kind"] not in kinds:
@@ -520,7 +537,23 @@ def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = fr
         else:
             form = "the"
     else:
-        return None
+        # A bare plural ("Ghouls lunge at you", "Rotting ghouls shamble"): a group the
+        # prose does not count, read like "some ghouls". It needs a verb of its own;
+        # mentions() keeps it only when it opens its clause. A capitalised word inside
+        # a sentence is a name, never a kind.
+        tok = toks[i]
+        if (not _word(tok) or low in _CLOSED or low in _PREPOSITIONS or low.endswith(("'s", "’s"))
+                or (i > 0 and tok[:1].isupper())):
+            return None
+        found = _head_at(toks, i, i, "count", UNSTATED_PLURAL, 0, True, False)
+        if found is None or found["_bare"] or found["_object"]:
+            return None
+        verb = toks[found["_end"] - 1].lower()
+        if verb.endswith("ing") and verb not in _BE_HAVE:
+            # "..., claws raking the asphalt": a participle phrase, no clause of its own.
+            return None
+        found["_bare_plural"] = True
+        return found
     return _head_at(toks, i, j, form, count, ordinal, plural_needed, stated, objects, bare)
 
 
@@ -1042,12 +1075,166 @@ def _number_fresh(conn, row: Any, kind: str, attitude: str, result: dict[str, An
     return out
 
 
+_COUNT_WORDS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+# Words that open a noun phrase (grammar): "the ghouls" is no bare plural.
+_DETERMINERS = frozenset({
+    "the", "a", "an", "some", "several", "any", "these", "those", "this", "that", "his", "her", "its", "their",
+    "my", "your", "our", "no", "few", "many", "more", "other", "another", "such", "all", "both", "each", "every",
+    "what", "which", "whose", "of",
+})
+_QUOTED_RE = re.compile(r"\"[^\"]*\"|“[^”]*”")
+
+
+def roll_count(conn, kind: str, turn: int) -> dict[str, Any]:
+    """How many of a group the prose does not count: UNSTATED_DICE on the engine's seeded dice.
+
+    Seeded by the campaign, the turn and the kind, so a regenerate of the
+    same turn rolls the same. The record has the dice-audit shape
+    (rng.record_roll); ``value`` is the count, never below two.
+    """
+    from app import rng
+
+    detail = rng.roll_dice(UNSTATED_DICE, rng.rng_for(UNSTATED_ROLL_TAG, turn=int(turn or 0),
+                                                      seed=rng.campaign_seed(conn), salt=kind))
+    value = max(UNSTATED_PLURAL, min(MAX_PER_KIND, int(detail["total"])))
+    return {
+        "turn": int(turn or 0), "tag": f"{UNSTATED_ROLL_TAG}:{kind}"[:80], "kind": "figure_count",
+        "band": kind[:20], "notation": UNSTATED_DICE, "rolls": detail["rolls"], "kept": detail["kept"],
+        "modifier": detail["modifier"], "raw_total": int(detail["total"]), "value": value,
+    }
+
+
+def count_word(number: int, capital: bool = False) -> str:
+    word = _COUNT_WORDS.get(int(number), str(int(number)))
+    return word[:1].upper() + word[1:] if capital else word
+
+
+def _counted(span: str, count: int) -> str:
+    """The unstated group's own words with the count in them, nothing else changed.
+
+    "some raiders" / "several raiders" / "a few raiders" -> "three raiders";
+    "a pack of ghouls" -> "a pack of four ghouls"; "Ghouls" -> "Four ghouls".
+    """
+    parts = re.split(r"(\s+)", span)
+    words = parts[0::2]
+    low = [w.lower() for w in words]
+    cap = span[:1].isupper()
+    if low[0] in {"some", "several"}:
+        return count_word(count, cap) + span[len(words[0]):]
+    if len(low) > 2 and low[0] in {"a", "an"} and low[1] == "few":
+        rest = re.match(r"\S+\s+\S+", span)
+        return count_word(count, cap) + span[rest.end():] if rest else span
+    if len(low) > 3 and low[0] in {"a", "an"} and low[2] == "of":
+        head = re.match(r"\S+\s+\S+\s+of\s+", span)
+        if head:
+            return span[: head.end()] + count_word(count) + " " + span[head.end():]
+        return span
+    first = words[0]
+    return count_word(count, cap) + " " + (first[:1].lower() + first[1:] if cap else first) + span[len(first):]
+
+
+def _count_into(text: str, phrase: str, count: int) -> str | None:
+    """``text`` with the count written into the first unquoted ``phrase``, or None when it is not there."""
+    words = str(phrase or "").split()
+    if not words or not text:
+        return None
+    bare = words[0].lower() not in {"a", "an", "some", "several"}
+    pattern = r"(?<![\w'’-])" + r"\s+".join(re.escape(w) for w in words) + r"(?![\w'’-])"
+    quoted = [(m.start(), m.end()) for m in _QUOTED_RE.finditer(text)]
+    for flags in (0, re.I):
+        for hit in re.finditer(pattern, text, flags):
+            if any(a <= hit.start() < b for a, b in quoted):
+                continue
+            if bare:
+                prev = re.search(r"([A-Za-z0-9'’-]+)\s+$", text[: hit.start()])
+                if prev and (prev.group(1).lower() in _DETERMINERS or _count_of(prev.group(1))):
+                    continue  # "the ghouls", "two ghouls": not the bare group
+            return text[: hit.start()] + _counted(hit.group(0), count) + text[hit.end():]
+    return None
+
+
+def write_count(result: dict[str, Any], phrase: str, count: int) -> bool:
+    """Write the rolled count into the turn's prose where the group first appears.
+
+    The prose lives in ``narration_segments`` (the one the player reads) and
+    ``narration``; the segment holding the phrase is edited in place, so its
+    label stays, and ``narration`` is the segments joined as world._narration_text
+    joins them. Only that one phrase changes.
+    """
+    segments = result.get("narration_segments")
+    if isinstance(segments, list) and any(
+        isinstance(s, dict) and str(s.get("text") or "").strip() for s in segments
+    ):
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            new = _count_into(str(segment.get("text") or ""), phrase, count)
+            if new is not None:
+                segment["text"] = new
+                result["narration"] = "\n\n".join(
+                    str(s.get("text") or "") for s in segments if isinstance(s, dict)
+                ).strip()
+                return True
+        return False
+    new = _count_into(str(result.get("narration") or ""), phrase, count)
+    if new is None:
+        return False
+    result["narration"] = new
+    return True
+
+
+def _summary_count(summary: str, phrase: str, noun: str, count: int) -> str | None:
+    """The turn summary with the same count: the same phrase, else the noun's first unstated use there."""
+    fixed = _count_into(summary, phrase, count)
+    if fixed is not None:
+        return fixed
+    for hit in re.finditer(rf"(?<![\w'’-]){re.escape(noun)}(?![\w'’-])", summary, re.I):
+        before = summary[: hit.start()]
+        group = re.search(r"(?<![\w'’-])(?:an?\s+few|some|several|an?\s+[A-Za-z]+\s+of)\s+$", before, re.I)
+        if group:
+            return summary[: group.start()] + _counted(summary[group.start(): hit.end()], count) + summary[hit.end():]
+        prev = re.search(r"([A-Za-z0-9'’-]+)\s+$", before)
+        if prev and (prev.group(1).lower() in _DETERMINERS or _count_of(prev.group(1))):
+            return None  # "the ghouls", "two ghouls": it says them already
+        return summary[: hit.start()] + _counted(hit.group(0), count) + summary[hit.end():]
+    return None
+
+
+def _keep_rolled(conn, result: dict[str, Any], kind: str, mention: dict[str, Any], record: dict[str, Any],
+                 turn: int) -> None:
+    """The rolled count goes in the dice audit, the prose and the turn summary (stick to it)."""
+    from app import rng
+
+    count = int(record["value"])
+    rng.record_roll(conn, record, turn=int(turn or 0), source=UNSTATED_ROLL_TAG,
+                    inputs={"kind": kind, "phrase": str(mention.get("phrase") or "")[:120]})
+    record = {**record, "line": rng.explain(record)}
+    result.setdefault("_unnamed_rolls", []).append(record)
+    phrase = str(mention.get("phrase") or "")
+    written = write_count(result, phrase, count)
+    summary = result.get("turn_summary")
+    summary_written = False
+    if isinstance(summary, str) and summary.strip():
+        fixed = _summary_count(summary, phrase, str(mention.get("noun") or kind), count)
+        if fixed is not None:
+            result["turn_summary"] = fixed
+            summary_written = True
+    turn_ledger.note("npc", "unstated_count_rolled", kind=kind, phrase=phrase, notation=record["notation"],
+                     rolls=record["rolls"], count=count, prose_written=written, summary_written=summary_written)
+
+
 def file_figures(conn, result: dict[str, Any], narration: str, location_id: int | None,
-                 max_id_before: int | None = None) -> list[dict[str, Any]]:
+                 max_id_before: int | None = None, turn: int = 0) -> list[dict[str, Any]]:
     """Resolve each figure the prose shows to the rows here, and mint the rest numbered per kind.
 
     Called by apply_turn after the cast seeding; ``max_id_before`` is the
     highest npcs id before the turn. Returns the new rows.
+
+    A group the prose does not count ("Ghouls lunge at you", "some raiders")
+    with fewer than two of its kind here is rolled (roll_count, written to
+    the dice audit and kept on ``result["_unnamed_rolls"]``), that many are
+    here after it, and the count is written into the prose and the turn
+    summary where the group first appears ("Four ghouls lunge at you").
     """
     if not location_id or not isinstance(result, dict):
         return []
@@ -1080,8 +1267,16 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
         here = _here(conn, int(location_id), kind)
         total = len(here)
         ambiguous = False
+        # A group the prose counts itself ("two raiders", "two more") is that many: nothing is rolled.
+        counted = any(m["form"] in {"count", "more"} and m.get("stated", True) and int(m["count"] or 0) > 1
+                      for m in ms)
+        rolled: tuple[dict[str, Any], dict[str, Any]] | None = None
         for m in ms:
-            if m["form"] == "count":
+            if m["form"] == "count" and not m.get("stated", True) and rolled is None and not counted and len(here) < 2:
+                # The prose does not say how many: the engine rolls it, once, and keeps to it.
+                rolled = (m, roll_count(conn, kind, turn))
+                total = max(total, int(rolled[1]["value"]))
+            elif m["form"] == "count":
                 total = max(total, int(m["count"] or 0))
             elif m["form"] == "another":
                 total += 1
@@ -1139,6 +1334,8 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
             turn_ledger.note("npc", "unnamed_figure_numbered", name=str(shell.get("name") or ""),
                              code=str(shell.get("code") or ""), attitude=entry["attitude"],
                              by=("op" if op else str(verdict.get("by") or "record")))
+        if rolled is not None:
+            _keep_rolled(conn, result, kind, rolled[0], rolled[1], turn)
     if created:
         result["npcs"] = [n for n in (result.get("npcs") or []) if isinstance(n, dict)] + created
     return created
