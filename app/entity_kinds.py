@@ -317,7 +317,7 @@ def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True)
     # write block; apply_turn files them.
     try:
         with connect().closing() as conn:
-            unnamed.settle(result, narration, conn, ask=ask, call=_call, trace=trace, usage=usage)
+            unnamed.settle(result, narration, conn, ask=ask, call=_call, trace=trace, usage=usage, line=line)
     except Exception as exc:
         turn_ledger.note("npc", "figure_settle_failed", error=f"{type(exc).__name__}: {exc}"[:160])
 

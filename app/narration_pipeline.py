@@ -3593,7 +3593,10 @@ def build_paragraph_briefs(
             brief["reply_status"] = REPLY_GIVEN_NOTE
             brief["player_intent"] = "Already answered above: " + _trim(player_input, 200)
         briefs.append(brief)
-    return briefs
+    # An unnamed figure is shown as what it is, not by its number (app/unnamed.py).
+    from app.unnamed import story_names, story_view
+
+    return story_view(briefs, story_names(context))
 
 
 def _state_ops_only(ops_summary: str) -> str:
