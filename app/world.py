@@ -24340,6 +24340,18 @@ def apply_turn(
                 town_report = {"error": f"{type(exc).__name__}: {exc}"[:200]}
             if town_report and isinstance(movement_report, dict):
                 movement_report["town"] = town_report
+        # The move the server made, or could not make, checked against where
+        # the prose leaves the player (#46, #76). After the snapshot, so a place
+        # made outside the town is undone by a rewind. Not in a plotted town.
+        if not town_turn and isinstance(movement_report, dict):
+            try:
+                from app import where_ended
+
+                movement_report = where_ended.settle(conn, result, movement_report, player_input)
+            except Exception as exc:
+                turn_ledger.note("movement", "where_ended_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        else:
+            result.pop("_where_ended", None)
 
         # A refused move ends the scene here, before any op is applied, and
         # the ops of the cut part go with it (#76).
@@ -24732,7 +24744,9 @@ def apply_turn(
             result["player"]["_turn_line"] = str(player_input or "")
         _apply_player(conn, result.get("player") or {})
         try:
-            _adopt_new_place_into_town(conn, here_before, max_place_before, player_input)
+            # The engine's place outside the town is not a part of it (#46).
+            if not (isinstance(movement_report, dict) and movement_report.get("rule") == "where_ended_outside"):
+                _adopt_new_place_into_town(conn, here_before, max_place_before, player_input)
         except Exception:
             pass
         try:
@@ -27137,6 +27151,17 @@ def play_turn(
             npc_max_before = int(_conn_max.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
     except Exception:
         npc_max_before = None
+    # Where the prose leaves the player, asked once on a turn whose line moves
+    # and whose draft wrote no MOVE (#46, #76; app/where_ended.py). Asked here,
+    # outside apply_turn's write block; apply_turn acts on the answer.
+    if input_kind == "player" and not used_fallback and isinstance(result, dict):
+        try:
+            from app import where_ended
+
+            with connect().closing() as _conn_where:
+                where_ended.ask_where(_conn_where, result, actual_player_input, _narration_text_of(result))
+        except Exception as exc:
+            turn_ledger.note("movement", "where_ended_failed", error=f"{type(exc).__name__}: {exc}"[:200])
     state = apply_turn(
         result,
         actual_player_input,
