@@ -145,7 +145,9 @@ def _here():
 
 
 def _model(letter: str | None, confirm: str | None = "Yes", calls: list | None = None):
-    """A mocked turn model: the letter for the lettered question, ``confirm`` for the yes/no check."""
+    """A mocked turn model: the letter for the lettered question; ``confirm`` "Yes" makes the
+    "are you still in <here>?" check agree with the letter and "No" makes it disagree (a raw
+    reply starting "raw:" is returned as it is)."""
     def ask(system: str, user: str) -> str:
         if calls is not None:
             calls.append((system, user))
@@ -155,7 +157,11 @@ def _model(letter: str | None, confirm: str | None = "Yes", calls: list | None =
             return letter
         if confirm is None:
             raise RuntimeError("model down")
-        return confirm
+        if confirm.startswith("raw:"):
+            return confirm[4:]
+        stays = str(letter or "").strip().upper().startswith("A")
+        agrees = confirm == "Yes"
+        return "Yes" if stays == agrees else "No"
     return ask
 
 
@@ -199,7 +205,7 @@ class TheOptionsAndTheAsk(unittest.TestCase):
         ])
         system, user = where_ended.build_prompt(T6_PROSE, built["options"])
         self.assertEqual(system, "Answer with one letter.")
-        self.assertIn("Where is the player at the end of this text?\nA) still in Radiation Fenced Sanctuary Clinic", user)
+        self.assertIn('In this text, "you" is the player. Where are you at the end of it?\nA) still in Radiation Fenced Sanctuary Clinic', user)
         self.assertNotIn("[[", user)
 
     def test_a_place_only_left_early_is_not_an_answer(self):
@@ -302,7 +308,7 @@ class TheOptionsAndTheAsk(unittest.TestCase):
         trace = [{"phase": "draft_dsl", "event": "request"}]
         usage: list = []
         result = {"narration": T6_PROSE, "player": {}, "_model_trace": trace, "_model_usage": usage}
-        with mock.patch("app.llm._chat_content", side_effect=["C) outside Radiation", "Yes"]) as chat:
+        with mock.patch("app.llm._chat_content", side_effect=["C) outside Radiation", "No."]) as chat:
             with connect().closing() as conn:
                 record = where_ended.ask_where(conn, result, T6_LINE, T6_PROSE)
         self.assertEqual(chat.call_count, 2)
@@ -312,12 +318,13 @@ class TheOptionsAndTheAsk(unittest.TestCase):
         response = [e for e in trace if e.get("phase") == "where_ended" and e.get("event") == "response"]
         self.assertEqual(len(request), 2)
         self.assertEqual(request[0]["system_prompt"], "Answer with one letter.")
-        self.assertIn("Where is the player at the end of this text?", request[0]["user_prompt"])
+        self.assertIn('Where are you at the end of it?', request[0]["user_prompt"])
         self.assertEqual(request[1]["system_prompt"], "Answer yes or no.")
         self.assertTrue(request[1]["user_prompt"].endswith(
-            "\n\nAt the end of this text, is the player outside Radiation Fenced Sanctuary, on the road or in the wilds?"))
+            '\n\nIn this text, "you" is the player. At the end of it, are you still in '
+            'Radiation Fenced Sanctuary Clinic? Answer yes or no.'))
         self.assertNotIn("[[", request[1]["user_prompt"])
-        self.assertEqual([r["raw_content"] for r in response], ["C) outside Radiation", "Yes"])
+        self.assertEqual([r["raw_content"] for r in response], ["C) outside Radiation", "No."])
         self.assertIn("duration_seconds", response[0])
         self.assertEqual([u["phase"] for u in usage], ["where_ended", "where_ended"])
 
@@ -384,6 +391,41 @@ class T13ServerMoveTheProseDoesNotShow(unittest.TestCase):
         here = _here()
         self.assertEqual(here["name"], "Outside Radiation Fenced Sanctuary")
         self.assertEqual(int(here["parent_id"] or 0), 0)
+
+
+class TheCheckIsAlwaysStillHere(unittest.TestCase):
+    """Live round 2 (docs/showcase/ask-live-eval-2026-10-24.md): the old check put the answer back and
+    echoed it. T11 'i search Beth's body' got the letter B and "Yes, the player" and was walked out of
+    the clinic 3/3; T6's "outside" got no yes/no at all and never moved."""
+
+    def test_t11_a_wrong_b_with_still_in_yes_moves_nobody(self):
+        town, clinic = _world()
+        _ask_then_apply("i search Beth's body", T13_PROSE, "B) in Radiation", confirm="raw:Yes, you are still in")
+        self.assertEqual(int(_here()["id"]), clinic)
+
+    def test_t6_outside_with_a_plain_no_moves(self):
+        town, clinic = _world()
+        _ask_then_apply(T6_LINE, T6_PROSE, "C) outside Radiation", confirm="raw:No.")
+        self.assertEqual(_here()["name"], "Outside Radiation Fenced Sanctuary")
+
+    def test_a_still_here_letter_needs_a_yes(self):
+        from app import where_ended
+
+        self.assertIs(where_ended.confirms({"kind": "here"}, True), True)
+        self.assertIs(where_ended.confirms({"kind": "here"}, False), False)
+        self.assertIs(where_ended.confirms({"kind": "up"}, False), True)
+        self.assertIs(where_ended.confirms({"kind": "outside"}, True), False)
+        self.assertIsNone(where_ended.confirms({"kind": "known"}, None))
+
+    def test_a_place_with_no_name_is_never_offered(self):
+        # Live: the merged code's clinic row had the name None ("A) still in None").
+        from app import where_ended
+        from app.db import connect
+
+        town, clinic = _world()
+        with connect().closing() as conn:
+            conn.execute("UPDATE locations SET name = 'None' WHERE id = ?", (clinic,))
+            self.assertIsNone(where_ended.build_options(conn, T6_PROSE))
 
 
 class T6TravelWithNoNamedPlace(unittest.TestCase):

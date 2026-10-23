@@ -267,7 +267,7 @@ class TheAskDecidesNotTheOps(unittest.TestCase):
         speaker = asker.asked("quote_speaker")
         self.assertEqual(len(speaker), 1)
         self.assertEqual(speaker[0][1], "Answer yes or no.")
-        self.assertTrue(speaker[0][2].endswith(f'In this text, does a person say "{T2_QUOTE}"?'), speaker[0][2])
+        self.assertTrue(speaker[0][2].endswith(f'In this text, is "{T2_QUOTE}" spoken by someone?'), speaker[0][2])
         self.assertIn("A new message blinks into existence", speaker[0][2])
         self.assertEqual(names, [])
         self.assertEqual(turn.get("_quotes_not_spoken"), [T2_QUOTE])

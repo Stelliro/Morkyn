@@ -27,8 +27,8 @@ and up to two other known places named (by code or stored name) in the ending of
 half of its sentences, in text order: a place left or looked at early in the scene is not offered.
 
 One letter does not move the player alone (CLAUDE.md 2026-10-18: one ask fills it in, a second checks
-it): the answer is put back as a yes/no question, "At the end of this text, is the player <answer>?",
-and the engine acts only on a yes. ``settle`` then runs after resolve_movement, on what the movement
+it): a second question, always "are you still in <here>?", must agree (a move needs no, staying needs
+yes); see confirm_prompt for why it is not the answer put back. ``settle`` then runs after resolve_movement, on what the movement
 rules decided:
 
 * a move the server made with no MOVE op, to a known place up the chain or elsewhere (venue_exit and the
@@ -56,7 +56,7 @@ PHASE = "where_ended"
 MAX_KNOWN = 2
 OUTSIDE_PREFIX = "Outside "
 SYSTEM = "Answer with one letter."
-QUESTION = "Where is the player at the end of this text?"
+QUESTION = 'In this text, "you" is the player. Where are you at the end of it?'
 CONFIRM_SYSTEM = "Answer yes or no."
 
 Ask = Callable[[str, str], str]
@@ -149,6 +149,9 @@ def build_options(conn, narration: str) -> dict[str, Any] | None:
     chain = _chain(conn, here_id)
     if not chain:
         return None
+    if any(not _named(r["name"]) for r in chain):
+        # A place with no name cannot be asked about ("A) still in None", live round 2).
+        return None
     here = chain[0]
     options: list[dict[str, Any]] = [
         {"kind": "here", "id": int(here["id"]), "code": str(here["code"] or ""), "name": str(here["name"] or ""),
@@ -171,7 +174,7 @@ def build_options(conn, narration: str) -> dict[str, Any] | None:
     chain_ids = {int(r["id"]) for r in chain}
     named: list[tuple[int, Any]] = []
     for other in conn.execute("SELECT id, code, name FROM locations ORDER BY id").fetchall():
-        if int(other["id"]) in chain_ids:
+        if int(other["id"]) in chain_ids or not _named(other["name"]):
             continue
         at = _last_named_at(ending, str(other["name"] or ""), str(other["code"] or ""))
         if at >= 0:
@@ -184,6 +187,11 @@ def build_options(conn, narration: str) -> dict[str, Any] | None:
     return {"here_id": here_id, "options": options}
 
 
+def _named(name: Any) -> bool:
+    text = str(name or "").strip()
+    return bool(text) and text.lower() not in {"none", "null", "n/a", "unknown"}
+
+
 def _plain(narration: str) -> str:
     return re.sub(r"\s*\[\[[^\]]*\]\]", "", str(narration or "")).strip()
 
@@ -194,9 +202,25 @@ def build_prompt(narration: str, options: list[dict[str, Any]]) -> tuple[str, st
     return SYSTEM, "\n".join(lines)
 
 
-def confirm_prompt(narration: str, option: dict[str, Any]) -> tuple[str, str]:
-    """The second check: the chosen answer put back as one yes/no question."""
-    return CONFIRM_SYSTEM, f"{_plain(narration)}\n\nAt the end of this text, is the player {option['label']}?"
+def confirm_prompt(narration: str, here: dict[str, Any]) -> tuple[str, str]:
+    """The second check, always about the place the player is in.
+
+    Measured live on Hermes 3 8B (docs/showcase/ask-live-eval-2026-10-24.md, round 2): putting the
+    chosen answer back ("is the player in <town>, outside <building>?") echoes the label (15 of 17
+    yes whatever the text, T11 moved out of the clinic 3/3) and gets no yes/no for "on the road".
+    "Are you still in <here>?" made no wrong move in 72: a move needs its "no", staying needs "yes".
+    """
+    return CONFIRM_SYSTEM, (
+        f'{_plain(narration)}\n\nIn this text, "you" is the player. '
+        f"At the end of it, are you still in {here['name']}? Answer yes or no."
+    )
+
+
+def confirms(choice: dict[str, Any], still_here: bool | None) -> bool | None:
+    """Whether the check agrees with the letter: a move needs "not still here", staying needs "still here"."""
+    if still_here is None:
+        return None
+    return still_here if choice.get("kind") == "here" else not still_here
 
 
 def parse_letter(reply: Any, options: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -259,8 +283,9 @@ def ask_where(conn, result: dict[str, Any], player_input: str, narration: str) -
     choice = parse_letter(record["reply"], built["options"])
     record["choice"] = choice
     if choice is not None:
-        record["confirm_reply"] = _one(*confirm_prompt(narration, choice), "confirm")[:80]
-        record["confirmed"] = parse_yes(record["confirm_reply"])
+        here = built["options"][0]
+        record["confirm_reply"] = _one(*confirm_prompt(narration, here), "confirm")[:80]
+        record["confirmed"] = confirms(choice, parse_yes(record["confirm_reply"]))
     turn_ledger.note("movement", "where_ended_asked", reply=record["reply"],
                      answer=(choice or {}).get("label") or "unclear", confirm=record.get("confirm_reply", ""),
                      confirmed=record["confirmed"],
