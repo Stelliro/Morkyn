@@ -4785,6 +4785,17 @@ def _apply_scene_cast(conn, cast: Any, narration: str = "") -> None:
                 cleaned.append(token)
         if bucket in cast:
             cast[bucket] = cleaned
+    # The dead are never present (app/interpreter.py, #154): not moved here,
+    # not kept in the scene from an earlier turn.
+    from app.interpreter import dead_codes as _dead_codes
+
+    dead = _dead_codes(conn)
+    if dead:
+        for bucket in ("present", "interacting"):
+            if bucket in cast:
+                cast[bucket] = [code for code in cast[bucket] if code not in dead]
+        present = [code for code in present if code not in dead]
+        interacting = [code for code in interacting if code not in dead]
     try:
         _move_cast_here(conn, cast, narration)
     except Exception:
@@ -6413,6 +6424,14 @@ def _save_snapshot(
         table = {"npc": "npcs", "location": "locations", "item": "inventory", "event": "events"}.get(entity_type)
         if table and code:
             _snapshot_row(conn, table, "code = ?", (code,), rows)
+
+    # The interpreter's events write died_turn / destroyed_turn after the
+    # snapshot (app/interpreter.py, #154): a rewind takes the death back.
+    for event in result.get("interpreted_events") or []:
+        subject = event.get("subject") if isinstance(event, dict) and isinstance(event.get("subject"), dict) else {}
+        code = norm_name(str(subject.get("code") or ""))
+        if code:
+            _snapshot_row(conn, "locations" if subject.get("type") == "place" else "npcs", "code = ?", (code,), rows)
 
     deterministic_combat = result.get("_deterministic_combat") or {}
     target_code = str((deterministic_combat.get("target") or {}).get("code") or "").strip()
@@ -13022,6 +13041,14 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             leads = leads_for_draft(c_leads, _current_turn_number() + 1)
         if leads:
             prompt_context["open_leads"] = leads
+    except Exception:
+        pass
+    # Who is dead and what destroyed (app/interpreter.py, #154): stated as
+    # facts_to_keep, and the dead taken off the people here and the keeper.
+    try:
+        from app.interpreter import hold_context
+
+        hold_context(state, prompt_context)
     except Exception:
         pass
     return prompt_context
@@ -24924,6 +24951,38 @@ def apply_turn(
             pass  # agenda triggers must never block turn application
         # --------------------------------------------------------------------
 
+        # The interpreter (app/interpreter.py, #154, #157): it reads the prose
+        # here, after this function's own edits to it and with the turn's new
+        # people on the roster, so a death is read from the scene the player
+        # reads. Its events are checked against the records, applied or
+        # refused, before the summary and the scene cast, so someone who died
+        # this turn is not left present.
+        pending = result.pop("_interpreter_pending", None)
+        if isinstance(pending, dict):
+            try:
+                from app.interpreter import load_records
+                from app.llm import _model_timeout, _run_interpreter
+
+                result = _run_interpreter(
+                    result,
+                    player_input if input_kind == "player" else "",
+                    usage=result.setdefault("_model_usage", []),
+                    trace=result.setdefault("_model_trace", []),
+                    timeout=_model_timeout(45, 120, "AI_RPG_INTERPRETER_TIMEOUT"),
+                    records=load_records(conn),
+                    config=pending.get("config") or None,
+                )
+                narration = _narration_text(result)
+            except Exception as exc:
+                turn_ledger.note("interpreter", "run_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        if result.get("interpreted_events"):
+            try:
+                from app.interpreter import apply_events, without_refused
+
+                result["interpreted_events"] = apply_events(conn, turn, result["interpreted_events"], result)
+                result["turn_summary"] = without_refused(result.get("turn_summary"), result["interpreted_events"])
+            except Exception as exc:
+                turn_ledger.note("interpreter", "apply_failed", error=f"{type(exc).__name__}: {exc}")
         _write_turn_summary(conn, turn, result, player_input)
         _write_model_usage(conn, turn, result)
         _write_verification_memory(conn, turn, result, prompt_context, used_fallback)

@@ -405,6 +405,9 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     # together, which is not where packet size goes.
     "world_time",
     "turn",
+    # Who the interpreter recorded dead and what destroyed (app/interpreter.py,
+    # #154): read by facts_to_keep; prompts.py does not show the key itself.
+    "the_dead",
     "current_location",
     "mechanics_context",
     "verification_policy",
@@ -1418,6 +1421,15 @@ def _salvage_narration_from_text(content: str) -> str:
     return "\n\n".join(cleaned).strip()[:5600]
 
 
+def _recovered_summary(narration: str) -> str:
+    try:
+        from app.interpreter import summary
+
+        return summary([], narration)[:700]
+    except Exception:
+        return ""
+
+
 def _narration_only_turn_from_text(content: str, context: dict[str, Any], reason: str) -> dict[str, Any]:
     narration = _salvage_narration_from_text(content)
     if not narration:
@@ -1470,7 +1482,9 @@ def _narration_only_turn_from_text(content: str, context: dict[str, Any], reason
             "reference_check": "not verified",
             "consistency_check": "not verified",
         },
-        "turn_summary": f"Recovered readable draft narration at {location}; no unparseable state changes were applied."[:700],
+        # A line from the recovered prose, never a note about the recovery: that
+        # note became the story T3 and T5 remembered (#157 a).
+        "turn_summary": _recovered_summary(narration),
         "journal": [],
         "scene_focus": "filler",
     }
@@ -17382,6 +17396,13 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 trace=trace,
                 timeout=_model_timeout(60, 180, "AI_RPG_QUEST_PARSER_TIMEOUT"),
             )
+            # What the final scene made happen, as events the engine checks
+            # (app/interpreter.py, #154, #157): world.apply_turn runs it after
+            # its own edits to the prose and with the turn's new people on the
+            # roster, so it reads the scene the player reads. The model config
+            # rides along so its asks use this turn's model.
+            if isinstance(result, dict):
+                result["_interpreter_pending"] = {"config": dict(config or {})}
         narr = ""
         if isinstance(result, dict):
             narr = str(result.get("narration") or "")
@@ -17403,6 +17424,105 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     except Exception as exc:
         progress_fail(str(exc)[:240])
         raise
+
+
+def _interpreter_enabled() -> bool:
+    """AI_RPG_INTERPRETER=0|off turns the interpreter's asks off (the summary is still built from the prose)."""
+    raw = str(os.environ.get("AI_RPG_INTERPRETER", "") or "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _run_interpreter(
+    turn: Any,
+    player_input: str,
+    *,
+    usage: list[dict[str, Any]] | None = None,
+    trace: list[dict[str, Any]] | None = None,
+    timeout: int = 60,
+    records: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
+) -> Any:
+    """
+    Read the deaths and destructions the final prose shows as events
+    (turn["interpreted_events"], applied by world.apply_turn), hold the prose
+    to the dead, and write the turn summary from those events and the prose
+    (#157 a). world.apply_turn calls it with its own records, after its edits.
+
+    Each ask goes through _chat_text with the turn's usage and trace, so its
+    prompt, raw reply and seconds are in the turn trace and model_usage;
+    ``config`` is the turn's model (generate_turn's theme routing).
+    Nothing here may break a turn: any failure is traced and the turn goes on.
+    """
+    if not isinstance(turn, dict):
+        return turn
+    from app import interpreter
+
+    started = time.time()
+    record: dict[str, Any] = {"phase": "interpreter", "event": "skipped", "enabled": _interpreter_enabled()}
+    narration = str(turn.get("narration") or "")
+    if not narration:
+        narration = "\n\n".join(
+            str(s.get("text") or "") for s in (turn.get("narration_segments") or []) if isinstance(s, dict)
+        )
+    try:
+        from app.narration_pipeline import player_quotes
+
+        quotes = player_quotes(player_input)
+    except Exception:
+        quotes = []
+    events: list[dict[str, Any]] = []
+    try:
+        if record["enabled"] and narration.strip():
+            if records is None:
+                with connect().closing() as conn:
+                    records = interpreter.load_records(conn)
+            records = {**records, "player_quotes": quotes}
+
+            def ask(phase: str, prompt: str, max_tokens: int) -> str:
+                call = lambda: _chat_text(  # noqa: E731
+                    interpreter.SYSTEM_PROMPT,
+                    prompt,
+                    timeout=timeout,
+                    usage=usage,
+                    phase=phase,
+                    max_tokens=max_tokens,
+                    trace=trace,
+                    temperature=0.0,
+                )
+                if config:
+                    with model_config_scope(config):
+                        return call()
+                return call()
+
+            out = interpreter.run(narration, records, ask)
+            events = out["events"]
+            record.update(out["report"])
+            record["event"] = "read"
+            if out["narration"] != narration:
+                narration = out["narration"]
+                turn["narration"] = narration
+                paragraphs = [p.strip() for p in re.split(r"\n\s*\n", narration) if p.strip()]
+                turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in (paragraphs or [narration])]
+                record["narration_repaired"] = True
+        if events:
+            turn["interpreted_events"] = events
+    except Exception as exc:
+        record["event"] = "error"
+        record["error"] = _trim_text(f"{exc.__class__.__name__}: {exc}", 400)
+    # The summary carries the events, then a line from the final prose; the
+    # model's own summary is kept in the trace only (it invented and
+    # contradicted the prose on the 8B, #157 a).
+    try:
+        record["model_summary"] = str(turn.get("turn_summary") or "")[:700]
+        built = interpreter.summary(events, narration, player_quotes=quotes)
+        if built:
+            turn["turn_summary"] = built
+            record["summary"] = built
+    except Exception as exc:
+        record["summary_error"] = _trim_text(f"{exc.__class__.__name__}: {exc}", 200)
+    record["seconds"] = round(time.time() - started, 3)
+    _append_trace(trace, record)
+    return turn
 
 
 def _quest_parser_mode() -> str:

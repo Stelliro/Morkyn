@@ -1236,7 +1236,8 @@ def relevant_facts_for_state(state: dict[str, Any], player_input: str) -> dict[s
         if not isinstance(location, dict) or str(location.get("code") or "") != code:
             continue
         for npc in location.get("npcs") or []:
-            if isinstance(npc, dict):
+            # The dead are not "here" (app/interpreter.py, #154).
+            if isinstance(npc, dict) and int(npc.get("died_turn") or 0) <= 0:
                 present.append({"name": npc.get("name") or "", "race": npc.get("race") or ""})
     player = state.get("player") if isinstance(state.get("player"), dict) else {}
     if player.get("race"):
