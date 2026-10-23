@@ -86,6 +86,29 @@ class ContextGateTests(unittest.TestCase):
         self.assertIsNone(mle._MODEL)
         self.assertEqual(mle.last_problem()["code"], "context_too_large")
 
+    def test_a_broken_engine_is_reported_as_the_engine_with_no_context_fallback(self):
+        # Linux .deb, 2026-10-23: a CUDA pack without libcudart was shown as
+        # "did not fit at 24,576, continue with 8,192", which could never load.
+        broken = mle.MleEngineMissing(
+            "MLE could not import llama_cpp to load model.gguf. Failed to load shared library "
+            "'libllama.so': CUDA error: libcudart.so.12: cannot open shared object file"
+        )
+        tries: list[int] = []
+
+        def open_broken(path, n_ctx):
+            tries.append(n_ctx)
+            raise broken
+
+        mle.allow_context_fallback(True)
+        with mock.patch.object(mle, "_open_model", side_effect=open_broken):
+            with self.assertRaises(mle.MleEngineMissing) as caught:
+                mle._ensure_loaded(mle.Path("model.gguf"))
+        problem = caught.exception.problem
+        self.assertEqual(problem["code"], "engine_missing")
+        self.assertIsNone(problem["fallback"])
+        self.assertEqual(tries, [32768], "a smaller context was tried for a missing engine")
+        self.assertEqual(mle.last_problem()["code"], "engine_missing")
+
     def test_accepting_the_fallback_loads_the_smaller_context(self):
         mle.allow_context_fallback(True)
         mle._ensure_loaded(mle.Path("model.gguf"))

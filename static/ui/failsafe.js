@@ -57,9 +57,9 @@
       ],
     },
     engine_missing: {
-      title: "The local engine is not installed",
-      summary: "Python could not import llama_cpp, so no GGUF can run in-process.",
-      tips: ["Run the launcher once with the install step, or run: pip install llama-cpp-python inside .venv.", "Or switch Provider in LLM settings to a llama.cpp server or a cloud API."],
+      title: "The local engine is missing or did not load",
+      summary: "llama_cpp would not import or load its library, so no GGUF can run in-process. A smaller context will not help.",
+      tips: ["In the packaged game: open Updates → Local engine, reinstall the pack for your graphics card, then restart Mørkyn.", "From the source folder: run the launcher once with the install step, or run: pip install llama-cpp-python inside .venv.", "Or switch Provider in LLM settings to a llama.cpp server or a cloud API."],
     },
     model_missing: {
       title: "No model file at that path",
