@@ -1796,6 +1796,18 @@ def facts_to_keep(context: Any, limit: int = 6) -> list[str]:
     if not isinstance(context, dict):
         return []
     facts: list[str] = []
+    # Where the player is, first (Stell, 2026-10-24: "the story should be told where the player is,
+    # fix the drift"). The player_is_in field in the place view was there and ignored: the combined
+    # live replay's T4 'i search the dead ghoul' in the subway tunnel was written in "the clinic's
+    # emergency lanterns" with the clinic's medic. A fact here is held like the hour.
+    here = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    here_name = str(here.get("name") or "").strip()
+    if here_name:
+        from app.prompts import _player_is_in
+
+        where = _player_is_in(context, here_name, str(here.get("code") or "").strip())
+        if where:
+            facts.append(f"You are in {where}")
     clock = context.get("world_time")
     if isinstance(clock, dict) and clock.get("hour") is not None:
         try:
