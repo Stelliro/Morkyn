@@ -95,3 +95,28 @@ Then the died ask ran over the rewritten text for the **living duplicate C** (na
 - **No reply was unparseable.** Every reply started with yes/no, a letter, a number or person/place. Long replies ("Yes, Beth is dead at the end ...") are cut off at 8 tokens, but the first word survives.
 
 Files: results.json (every case: prompt, raw reply, parsed answer, truth, seconds, the 2 repeats; the end-to-end runs with their calls), summary.json, out/*.json and out/*.log, and the scripts run_*.py.
+
+---
+
+# Round 2 of the measurement: the asks round 3 added (merged main 3f3471a)
+
+Same harness (the merged code's own builders, `app.llm._chat_text`, temperature 0, 3 shuffled passes per case, 0.05-0.21 s per ask). Raw replies: scratchpad live-eval-2/results.json.
+
+| ask | scored cases | accuracy | false-yes | false-no | verdict |
+|---|---|---|---|---|---|
+| interpreter_died_check ("Is <Name> alive at the end of it?") | 26 | 96% | 0/27 | 3/51 | KEEP (never blocked a true death) |
+| interpreter_destroyed_check ("Is any of <Name> still standing?") | 14 | 64% | 0/9 | 15/33 | KEEP only as the gate after a destroyed yes (T5 Thornford blocked 3/3) |
+| interpreter_hold ("Does <Name> say or do anything in it?") | 17 | 94% | 3/24 | 0/27 | KEEP (its false-yes is a player's own memory sentence, never cut) |
+| interpreter_returned_check | 16 | 94% | 3/30 | 0/18 | KEEP |
+| interpreter_hold_which (one sentence at a time) | 56 | 89% | 0/72 | 19/96 | KEEP (never a false cut; misses quiet acts: frowns, crosses her arms) |
+| where_ended letter (old wording) | 24 | 75% | - | - | changed to the "you" wording: 92% |
+| where_ended confirm (the answer put back) | 68 | 41% | 54/132 | 12/72 | **replaced**: it echoed the label (T11 walked out of the clinic 3/3) |
+| where_ended confirm, "are you still in <here>?" | 24 | 92% | 6/27 | 0/45 | merged: 0 wrong moves in 72 |
+| quote_speaker ("does a person say") | 14 | 86% | 6/21 | 0/21 | **replaced**: a written note and graffiti counted as speakers |
+| quote_speaker, "is \"...\" spoken by someone?" | 14 | 100% | 0/21 | 0/21 | merged |
+| place_going | 19 | 95% | 3/27 | 0/30 | KEEP ("I point to the clinic" still counts as going) |
+| agency voices / could_say / own_act | 18 / 18 / 14 | 83% / 94% / 93% | 0 / 3 / 3 | 9 / 0 / 0 | KEEP |
+
+Pairs as the engine uses them (a fact recorded only when the first ask says yes and the check agrees): died + died_check 81/81, destroyed + destroyed_check 42/42, returned + returned_check 48/48; where_ended letter + the new still-here check: 60 right actions, 0 wrong moves, 12 no-actions in 72 (the old pair made 15 wrong moves).
+
+Also found: a place row named "None" was offered as "A) still in None" (#163's placeholder ops; now never offered), and `interpreter.units` keeps a quote apart from a speech tag that opens on a capitalised name ('"Back so soon?"' / 'Beth asks ...').

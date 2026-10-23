@@ -44,7 +44,9 @@ KIND_PHASE = "entity_kind"
 KIND_MAX_TOKENS = 4
 # The yes/no asks.
 YES_NO_SYSTEM = "Answer yes or no."
-SPEAKER_QUESTION = 'In this text, does a person say "{quote}"?'
+# Measured live on Hermes 3 8B (round 2): "does a person say" took a written note and graffiti for a
+# speaker; "spoken by someone" scored 42/42 and kept unseen voices.
+SPEAKER_QUESTION = 'In this text, is "{quote}" spoken by someone?'
 SPEAKER_PHASE = "quote_speaker"
 GOING_QUESTION = "Is the player going to {place}?"
 GOING_PHASE = "place_going"
