@@ -1159,10 +1159,13 @@ def drop_speech_said_before(
 
 
 # A sentence of a spoken line said again in a later scene (#78, cc87dd29 T8/T9).
-# Compared sentence by sentence, on words in order, so a line stitched from
-# two earlier lines and a one-word reskin ('enemy' -> 'hostile') both count.
+# Compared sentence by sentence, so a line stitched from two earlier lines
+# counts. Only near-identical sentences: the same words, or for a sentence of
+# LINE_REPEAT_RESKIN_WORDS or more, all but one word in the same order (T9's
+# 'enemy' -> 'hostile'). A short stock line with one word changed ('I don't
+# know what you want.' after '... what you mean.') is a new line (round 2).
 LINE_REPEAT_MIN_WORDS = 4
-LINE_REPEAT_RATIO = 0.8
+LINE_REPEAT_RESKIN_WORDS = 8
 LINE_REPEAT_SHARE = 0.6
 
 
@@ -1177,9 +1180,12 @@ def _sentence_said_before(key: str, earlier: list[list[str]]) -> bool:
     if len(words) < LINE_REPEAT_MIN_WORDS:
         return False
     for prev in earlier:
-        if abs(len(prev) - len(words)) > max(3, len(words) // 2):
+        if prev == words:
+            return True
+        if len(words) < LINE_REPEAT_RESKIN_WORDS or abs(len(prev) - len(words)) > 1:
             continue
-        if prev == words or SequenceMatcher(None, prev, words, autojunk=False).ratio() >= LINE_REPEAT_RATIO:
+        matched = sum(block.size for block in SequenceMatcher(None, prev, words, autojunk=False).get_matching_blocks())
+        if max(len(prev), len(words)) - matched <= 1:
             return True
     return False
 
@@ -1233,7 +1239,13 @@ def drop_lines_from_earlier_scenes(
                 for p in said:
                     trimmed = re.sub(r"\s*" + re.escape(p.strip()), "", trimmed, count=1)
                 trimmed = re.sub(r'(["“])\s+', r"\1", trimmed)
-                if quoted_spans(trimmed) and _quote_marks(trimmed) % 2 == 0:
+                # Never a bare tag or an emptied quotation ('"," she says').
+                if (
+                    quoted_spans(trimmed)
+                    and _quote_marks(trimmed) % 2 == 0
+                    and len(quoted_spans(trimmed)) == len(spans)
+                    and all(re.search(r"\w", s) for s in quoted_spans(trimmed))
+                ):
                     dropped.extend(p.strip() for p in said)
                     kept_units.append(trimmed)
                 else:
@@ -1996,8 +2008,10 @@ def drop_invented_player_speech(
     enemy," you confirm'); yes makes it the player's line. ``voices(own,
     line)``: on a turn that asked to speak without the words, whether a line
     with no words of the request in it is what the player chose to say; it
-    takes the place of the length rule ('"I'm looking for work if you've got
-    something," you add' for "i say hi"). An unclear answer keeps the old rule.
+    is decided before the length rule ('"I'm looking for work if you've got
+    something," you add' for "i say hi"). A yes keeps the line; it is dropped
+    only when a second question also says no (AgencyAsks.voices). An unclear
+    answer keeps the old rule.
     """
     from app.player_agency import you_beside_quote
 

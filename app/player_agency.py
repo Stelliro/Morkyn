@@ -25,11 +25,23 @@ Chat = Callable[[str, str, str], str]
 
 _CODE_RE = re.compile(r"\s*\[\[[A-Za-z0-9]{1,4}\]\]")
 _YES_RE = re.compile(r"^\W*(yes|no)\b", re.I)
+# The player's own references, as typed (app/world.py expands them for the
+# narrator): "@Cbeth" is a pick by kind and name, "@B", "#L1", "!I1", "&E1",
+# "@Q1" are bare codes. The raw line reaches some asks ("i say hi to @Cbeth"
+# was shown to the model in the live eval, 2026-10-23).
+_NAMED_REF_RE = re.compile(r"(?<!\w)@[CILSAEQ]([a-z][a-z0-9_]+)\b")
+_BARE_REF_RE = re.compile(r"\s*(?<!\w)[@#!&][A-Z]{1,2}[0-9]{0,3}\b")
+
+
+def strip_refs(text: str) -> str:
+    """The player's @/#/!/& references as words: a named pick becomes its name, a bare code goes."""
+    out = _NAMED_REF_RE.sub(lambda m: m.group(1).replace("_", " ").title(), str(text or ""))
+    return _BARE_REF_RE.sub("", out)
 
 
 def plain(text: str, limit: int = 600) -> str:
-    """Engine codes out, spaces folded, cut at a word."""
-    out = " ".join(_CODE_RE.sub("", str(text or "")).split())
+    """Engine codes and the player's references out, spaces folded, cut at a word."""
+    out = " ".join(_CODE_RE.sub("", strip_refs(text)).split())
     if len(out) > limit:
         out = out[:limit].rsplit(" ", 1)[0] + " ..."
     return out
@@ -52,10 +64,22 @@ def speaks_question(sentence: str) -> str:
 
 
 def voices_question(chosen: str, line: str) -> str:
+    # Live on Hermes 3 8B (2026-10-23): 0 false yes in 39; a plain greeting or
+    # thanks ("Hello there, doc." for "say hi") can still get a no, so a no is
+    # checked by could_say_question before anything is dropped.
     return (
-        f"The player chose to: {plain(chosen, 300)}\n"
-        f'The story has the player say: "{plain(line, 300)}"\n'
-        "Is that what the player chose to say? Answer yes or no."
+        f"The player wanted to: {plain(chosen, 300)}\n"
+        f'The player says: "{plain(line, 300)}"\n'
+        "Does saying that do what the player wanted? Answer yes or no."
+    )
+
+
+def could_say_question(chosen: str, line: str) -> str:
+    # The second look at a "no" from voices_question (not yet measured live).
+    return (
+        f"The player wanted to: {plain(chosen, 300)}\n"
+        f'The player says: "{plain(line, 300)}"\n'
+        "Could someone say that to do what the player wanted? Answer yes or no."
     )
 
 
@@ -64,6 +88,16 @@ def choice_question(question: str, sentence: str) -> str:
         f"The story asks the player: {plain(question, 300)}\n"
         f"Then it says: {plain(sentence, 300)}\n"
         "Does that sentence make the choice for the player? Answer yes or no."
+    )
+
+
+def own_act_question(own: str, sentence: str) -> str:
+    # Shown the player's line: a choice the player made themselves is theirs to
+    # see told (the round-2 reverse case "i turn aside and head west").
+    return (
+        f"The player wanted to: {plain(own, 300)}\n"
+        f"The story says: {plain(sentence, 300)}\n"
+        "Does that do what the player wanted? Answer yes or no."
     )
 
 
@@ -76,10 +110,12 @@ def retell_question(earlier: str, later: str) -> str:
 
 
 def reply_question(act: str, after: str) -> str:
+    # Live on Hermes 3 8B (2026-10-23): 33/33; "The player did not do this:"
+    # had 15/21 false no.
     return (
-        f"The player did not do this: {plain(act, 300)}\n"
-        f"Next in the story: {plain(after, 400)}\n"
-        "Is the next part a reply to what the player did not do? Answer yes or no."
+        f"First: {plain(act, 300)}\n"
+        f"Then: {plain(after, 400)}\n"
+        'Is the "then" part an answer to the "first" part? Answer yes or no.'
     )
 
 
@@ -121,10 +157,23 @@ class AgencyAsks:
         return self.ask("speaks", speaks_question(sentence))
 
     def voices(self, chosen: str, line: str) -> bool | None:
-        return self.ask("voices", voices_question(chosen, line))
+        """Whether a line voices what the player asked to say.
+
+        A yes keeps it. A no is not acted on alone (a greeting in other words
+        drew a no live): a second question must also say no. Any unclear
+        answer is None and the old rule decides.
+        """
+        first = self.ask("voices", voices_question(chosen, line))
+        if first is not False:
+            return first
+        second = self.ask("could_say", could_say_question(chosen, line))
+        return None if second is None else bool(second)
 
     def makes_choice(self, question: str, sentence: str) -> bool | None:
         return self.ask("choice", choice_question(question, sentence))
+
+    def does_own_act(self, own: str, sentence: str) -> bool | None:
+        return self.ask("own_act", own_act_question(own, sentence))
 
     def retells(self, earlier: str, later: str) -> bool | None:
         return self.ask("retell", retell_question(earlier, later))
@@ -179,12 +228,18 @@ def _sentence_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def choice_taken_cut(text: str, asks: AgencyAsks, *, floor: int = 200, look_ahead: int = 3) -> dict[str, Any] | None:
+def choice_taken_cut(
+    text: str, asks: AgencyAsks, own: str = "", *, floor: int = 200, look_ahead: int = 3
+) -> dict[str, Any] | None:
     """Where the prose goes on to make a choice it put to the player.
 
     Candidate: a narrator question outside quotes with an "or" in it, then one
     of the next sentences with "you" in it outside quotes. The ask says
-    whether that sentence makes the choice; on yes the scene ends before it.
+    whether that sentence makes the choice. On yes, a second ask is shown the
+    player's own line (``own``): a sentence that does what the player wanted
+    is the player's choice told, and nothing is cut. Otherwise the scene ends
+    before the question, so it ends neither on a menu nor on the choice made
+    (before the sentence instead when the question sits under ``floor``).
     """
     spans = _sentence_spans(text)
     for index, (start, end) in enumerate(spans):
@@ -202,7 +257,11 @@ def choice_taken_cut(text: str, asks: AgencyAsks, *, floor: int = 200, look_ahea
             if later_start < floor:
                 break
             if asks.makes_choice(sentence, later):
-                return {"cut": later_start, "question": sentence, "sentence": later}
+                if own.strip() and asks.does_own_act(own, later) is not False:
+                    # The player's own choice, or unclear: the act stays.
+                    return None
+                cut = start if len(text[:start].strip()) >= floor else later_start
+                return {"cut": cut, "question": sentence, "sentence": later}
         # Only the first choice put to the player is judged.
         return None
     return None
@@ -251,11 +310,16 @@ def drop_retold_paragraphs(paragraphs: list[str], asks: AgencyAsks) -> tuple[lis
     """A paragraph that tells an earlier paragraph's events again (#29, cc87dd29 T2).
 
     Candidate: a later paragraph whose content words are much of an earlier
-    one's. The ask says whether it retells it; on yes the sentences of the
-    later paragraph that are mostly the earlier one's go, and any sentence with
-    something new stays. Returns (paragraphs, dropped) with the input's length.
+    one's. The ask says whether it retells it. On yes, each sentence of the
+    later paragraph that shares much of the earlier one's words is put to the
+    same question on its own, and only a sentence it confirms goes: shared
+    words alone do not tell a retold beat from a new act in the same room
+    (round 2: "Beth ... unholsters the pistol and sets it on the tray" shared
+    62%). A sentence with a quotation the earlier paragraph does not hold is
+    someone's new words and is never put to it. Returns (paragraphs, dropped)
+    with the input's length.
     """
-    from app.narration_pipeline import content_stems, speech_units
+    from app.narration_pipeline import content_stems, quoted_spans, speech_units
 
     out = [str(p or "") for p in paragraphs]
     stems = [content_stems(p) for p in out]
@@ -271,11 +335,18 @@ def drop_retold_paragraphs(paragraphs: list[str], asks: AgencyAsks) -> tuple[lis
                 continue
             if not asks.retells(out[i], out[j]):
                 continue
+            earlier_said = content_stems(" ".join(quoted_spans(out[i])))
             kept: list[str] = []
             gone: list[str] = []
             for unit in speech_units(out[j]):
                 unit_stems = content_stems(unit)
-                if unit_stems and len(unit_stems & earlier) >= RETELL_SENTENCE_SHARE * len(unit_stems):
+                said = content_stems(" ".join(quoted_spans(unit)))
+                if (
+                    unit_stems
+                    and len(unit_stems & earlier) >= RETELL_SENTENCE_SHARE * len(unit_stems)
+                    and not (said - earlier_said)
+                    and asks.retells(out[i], unit)
+                ):
                     gone.append(unit)
                 else:
                     kept.append(unit)
@@ -291,40 +362,80 @@ def drop_retold_paragraphs(paragraphs: list[str], asks: AgencyAsks) -> tuple[lis
 
 # --- An opening quote with no close in its paragraph (#29, cc87dd29 T14) -----
 
-def close_open_quotes(paragraph: str) -> tuple[str, int]:
-    """Give an unclosed straight quotation its closing mark.
+# Which way a straight quote mark faces, read from its neighbours (typography,
+# not meaning): an opener has a space or the paragraph start before it and a
+# character after it; a closer has a character before it and a space,
+# punctuation or the end after it.
+_OPENS_BEFORE = " \t\n([{—-"
+_CLOSES_AFTER = " \t\n.,;:!?)]}—-"
 
-    The marks are read in pairs from the start. Where a line stops and the
-    narration starts is read from the text: a ! ? or . inside a quotation with
-    a lower-case word after it ('"Hey! calls out a woman') is the end of the
-    line, and its tag starts there; a pair that swallows a tag that way is the
-    fault even when the paragraph's count is even. A last opener with no such
-    point closes at the paragraph's end. Only straight quotes.
+
+def _mark_roles(text: str) -> list[tuple[int, str]] | None:
+    """(index, "open"|"close") for every straight quote, or None when one cannot be read."""
+    roles: list[tuple[int, str]] = []
+    for m in re.finditer('"', text):
+        at = m.start()
+        before = text[at - 1] if at > 0 else " "
+        after = text[at + 1] if at + 1 < len(text) else " "
+        opens = before in _OPENS_BEFORE and not after.isspace()
+        closes = not before.isspace() and after in _CLOSES_AFTER
+        if opens == closes:
+            return None
+        roles.append((at, "open" if opens else "close"))
+    return roles
+
+
+def close_open_quotes(paragraph: str) -> tuple[str, int]:
+    """Give an unclosed straight quotation its closing mark (#29, cc87dd29 T14).
+
+    Only a paragraph whose marks do not pair up is touched: each mark is read
+    as an opener or a closer from the characters beside it, and a paragraph
+    where they alternate is left exactly as it is ('"Help! help me!" she
+    cries.' is balanced). Two shapes are repaired, nothing else:
+
+    - an opener followed by another opener ('"Hey! calls out a woman's ...
+      shout. "You're just ...'): the first line ended at the last ! ? or .
+      before the second opener that has a lower-case word after it (its tag
+      starts there), and its closer goes there; with no such point, nothing;
+    - a last opener with no closer: it closes at the paragraph's end (in the
+      real T14 the next paragraph opened with another person's quote, so a
+      next-paragraph opener is no sign of a line running on).
+
+    Curly quotes, a closer with no opener, and any mark that cannot be read
+    leave the paragraph alone. Returns (text, fixes).
     """
     text = str(paragraph or "")
+    if "“" in text or "”" in text:
+        return text, 0
     fixes = 0
     for _ in range(4):
-        marks = [m.start() for m in re.finditer('"', text)]
-        changed = False
-        for k in range(0, len(marks), 2):
-            opener = marks[k]
-            closer = marks[k + 1] if k + 1 < len(marks) else None
-            inside = text[opener + 1 : closer if closer is not None else len(text)]
-            stop = _LINE_STOP_RE.search(inside)
-            if stop:
-                at = opener + 1 + stop.end()
-                text = text[:at] + '"' + text[at:]
-                changed = True
-                break
-            if closer is None:
-                # A lone mark at the very end is a closer whose opener is lost;
-                # where the line began cannot be read, so it is left alone.
-                if inside.strip():
-                    text = text.rstrip() + '"'
-                    changed = True
-                break
-        if not changed:
+        roles = _mark_roles(text)
+        if not roles:
             break
+        expected = "open"
+        bad = None
+        for index, (at, role) in enumerate(roles):
+            if role != expected:
+                bad = index
+                break
+            expected = "close" if expected == "open" else "open"
+        if bad is None:
+            if expected == "close":
+                # The last line was opened and never closed.
+                opener = roles[-1][0]
+                if text[opener + 1 :].strip():
+                    text = text.rstrip() + '"'
+                    fixes += 1
+            break
+        at, role = roles[bad]
+        if role != "open":
+            break  # a closer with no opener: where the line began cannot be read
+        opener = roles[bad - 1][0]
+        stops = list(_LINE_STOP_RE.finditer(text, opener + 1, at))
+        if not stops:
+            break
+        cut = stops[-1].end()
+        text = text[:cut] + '"' + text[cut:]
         fixes += 1
     return text, fixes
 
