@@ -11,6 +11,8 @@ import re
 import shutil
 import sqlite3
 from collections.abc import Sequence
+from contextvars import ContextVar
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -4335,9 +4337,16 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         verification_memory = rows_to_dicts(
             conn.execute("SELECT * FROM verification_memory ORDER BY updated_at DESC, id DESC LIMIT 120").fetchall()
         ) if include_hidden else []
+        # Every kept record (playtest #158): a record of turn T holds the world
+        # before T, so it takes the game back to turn T - 1 (back_to_turn),
+        # which History offers as "Back to this turn".
         rewind_points = rows_to_dicts(
-            conn.execute("SELECT id, turn, created_at FROM turn_snapshots ORDER BY id DESC LIMIT 5").fetchall()
+            conn.execute(
+                "SELECT id, turn, created_at FROM turn_snapshots ORDER BY id DESC LIMIT ?", (REWIND_KEEP,)
+            ).fetchall()
         )
+        for point in rewind_points:
+            point["back_to_turn"] = max(0, int(point.get("turn") or 0) - 1)
         gm_notes = row_to_dict(conn.execute("SELECT * FROM gm_notes WHERE id = 1").fetchone()) if include_hidden else None
         gm_events = rows_to_dicts(
             conn.execute(
@@ -6419,7 +6428,178 @@ def _save_snapshot(
         "history_summaries": history_summary_path().read_text(encoding="utf-8") if history_summary_path().exists() else "",
     }
     conn.execute("INSERT INTO turn_snapshots (turn, snapshot) VALUES (?, ?)", (turn, json.dumps(snapshot, ensure_ascii=True)))
-    conn.execute("DELETE FROM turn_snapshots WHERE id NOT IN (SELECT id FROM turn_snapshots ORDER BY id DESC LIMIT 12)")
+    conn.execute(
+        "DELETE FROM turn_snapshots WHERE id NOT IN (SELECT id FROM turn_snapshots ORDER BY id DESC LIMIT ?)",
+        (REWIND_KEEP,),
+    )
+
+
+# How many turns back a rewind can go (playtest #158: History offers "Back to
+# this turn" on every turn that still has its record; 12 was less than one
+# phone session's worth of turns).
+REWIND_KEEP = 30
+
+# What a turn changes in place, that its rewind record must hold (playtest
+# #159: a rewind to turn 4 left the clock at turn 14's minute 594, because the
+# record held only pacing.turn and play_turn had moved the clock before
+# apply_turn took it; the weather, the fight record and the map marker stayed
+# too). One list, read when a turn entry point starts (_turn_start_record) and
+# written into the first snapshot that turn made, so every write the turn made
+# before or after apply_turn's snapshot goes back to its turn-start value:
+#   - whole: these small tables are stored from the turn's start every turn,
+#     so a rewind across several turns also takes back what the map steps
+#     between them moved (the clock, the pools);
+#   - world_maps: the overworld marker only (the tiles are not turn state);
+#   - settings: every key the turn changed, from its turn-start value (absent
+#     included), except _SETTINGS_NOT_REWOUND.
+TURN_START_WHOLE_TABLES = ("pacing", "player", "quest_clocks")
+TURN_START_MAP_COLUMNS = ("id", "player_x", "player_y")
+# Settings that are not the story: the player's own configuration, generated
+# media and what the engine learned about the model. Another request can write
+# them while a turn runs, and a rewind must never put them back.
+_SETTINGS_NOT_REWOUND = frozenset({
+    "model_config",
+    "model_limits",
+    "tts_config",
+    "image_config",
+    "player_portrait",
+    "player_fullbody",
+    "map_avatar",
+    "realtime_clock",
+    "titles_enabled",
+    "debug_godmode",
+    "regenerate_pending",
+    "setup_draft_world_map_id",
+})
+
+_TURN_START: ContextVar[dict[str, Any] | None] = ContextVar("morkyn_turn_start", default=None)
+
+
+def _read_turn_start_state(conn) -> dict[str, Any]:
+    """The rows of TURN_START_* as they stand now, keyed for a diff."""
+    state: dict[str, Any] = {}
+    for table in TURN_START_WHOLE_TABLES:
+        try:
+            state[table] = rows_to_dicts(conn.execute(f"SELECT * FROM {table}").fetchall())
+        except sqlite3.Error:
+            state[table] = None
+    try:
+        state["world_maps"] = rows_to_dicts(
+            conn.execute(f"SELECT {', '.join(TURN_START_MAP_COLUMNS)} FROM world_maps").fetchall()
+        )
+    except sqlite3.Error:
+        state["world_maps"] = None
+    try:
+        state["settings"] = {
+            str(row["key"]): row["value"] for row in conn.execute("SELECT key, value FROM settings").fetchall()
+        }
+    except sqlite3.Error:
+        state["settings"] = None
+    return state
+
+
+def _merge_turn_start(rows: dict[str, list[dict[str, Any]]], start: dict[str, Any], now: dict[str, Any]) -> list[str]:
+    """Put the turn-start values of what the turn changed into a snapshot's rows.
+
+    Returns the names of what was taken from the turn start, for the ledger.
+    """
+    taken: list[str] = []
+    for table in ("pacing", "player", "quest_clocks"):
+        before = start.get(table)
+        if before is None:
+            continue
+        rows[table] = [dict(row) for row in before]
+        if table == "pacing":
+            present = {str(row.get("key")) for row in before}
+            created = [
+                {"key": str(row.get("key"))}
+                for row in now.get("pacing") or []
+                if str(row.get("key")) not in present
+            ]
+            if created:
+                rows["__pacing_absent__"] = created
+        if before != now.get(table):
+            taken.append(table)
+    if start.get("world_maps") is not None:
+        rows["world_maps"] = [dict(row) for row in start["world_maps"]]
+        if start["world_maps"] != now.get("world_maps"):
+            taken.append("world_maps")
+    before_settings = start.get("settings")
+    now_settings = now.get("settings")
+    if isinstance(before_settings, dict) and isinstance(now_settings, dict):
+        changed = sorted(
+            key
+            for key in set(before_settings) | set(now_settings)
+            if key not in _SETTINGS_NOT_REWOUND and before_settings.get(key) != now_settings.get(key)
+        )
+        if changed:
+            drop = set(changed)
+            kept = [row for row in rows.get("settings", []) if str(row.get("key")) not in drop]
+            absent = [row for row in rows.get("__settings_absent__", []) if str((row or {}).get("key")) not in drop]
+            for key in changed:
+                if key in before_settings:
+                    kept.append({"key": key, "value": before_settings[key]})
+                else:
+                    absent.append({"key": key})
+            rows["settings"] = kept
+            rows["__settings_absent__"] = absent
+            taken.extend(f"settings.{key}" for key in changed)
+    return taken
+
+
+def _settle_turn_start(start: dict[str, Any]) -> None:
+    """Write the turn-start values into the first snapshot made since the turn began."""
+    with connect().closing() as conn:
+        row = conn.execute(
+            "SELECT id, snapshot FROM turn_snapshots WHERE id > ? ORDER BY id ASC LIMIT 1",
+            (int(start.get("floor") or 0),),
+        ).fetchone()
+        if row is None:
+            return
+        snapshot = json.loads(row["snapshot"])
+        if snapshot.get("format") != "ai-rpg-delta-v1":
+            return
+        rows = snapshot.setdefault("rows", {})
+        taken = _merge_turn_start(rows, start.get("state") or {}, _read_turn_start_state(conn))
+        conn.execute(
+            "UPDATE turn_snapshots SET snapshot = ? WHERE id = ?",
+            (json.dumps(snapshot, ensure_ascii=True), int(row["id"])),
+        )
+    if taken:
+        turn_ledger.note("rewind", "turn_start_kept", snapshot_id=int(row["id"]), changed=taken[:40])
+
+
+def _turn_start_record(fn):
+    """Around a turn entry point: its rewind record holds the turn-start state (TURN_START_*).
+
+    Nested entry points (a wait that plays a fight scene, a map step's event)
+    join the outer one, like turn_ledger.recorded. Not on regenerate, which
+    rewinds first: the play_turn it calls opens its own.
+    """
+
+    @wraps(fn)
+    def inner(*args, **kwargs):
+        if _TURN_START.get() is not None:
+            return fn(*args, **kwargs)
+        start: dict[str, Any] | None = None
+        try:
+            with connect().closing() as conn:
+                floor = conn.execute("SELECT COALESCE(MAX(id), 0) FROM turn_snapshots").fetchone()[0]
+                start = {"floor": int(floor or 0), "state": _read_turn_start_state(conn)}
+        except Exception as exc:
+            turn_ledger.note("rewind", "turn_start_unread", error=f"{type(exc).__name__}: {exc}"[:200])
+        token = _TURN_START.set(start or {})
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _TURN_START.reset(token)
+            if start:
+                try:
+                    _settle_turn_start(start)
+                except Exception as exc:
+                    turn_ledger.note("rewind", "turn_start_unsaved", error=f"{type(exc).__name__}: {exc}"[:200])
+
+    return inner
 
 
 def _tokens(text: str) -> set[str]:
@@ -12902,6 +13082,22 @@ def _restore_snapshot_rows(conn, rows: dict[str, list[dict[str, Any]]]) -> None:
         key = str((row or {}).get("key") or "")
         if key:
             conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+    for row in rows.get("__pacing_absent__", []):
+        key = str((row or {}).get("key") or "")
+        if key and key != "turn":
+            conn.execute("DELETE FROM pacing WHERE key = ?", (key,))
+    # The overworld marker from the turn's start (TURN_START_MAP_COLUMNS): an
+    # update of a map that still exists, never a new map row.
+    for row in rows.get("world_maps", []):
+        if not isinstance(row, dict) or row.get("id") in (None, ""):
+            continue
+        try:
+            conn.execute(
+                "UPDATE world_maps SET player_x = ?, player_y = ? WHERE id = ?",
+                (int(row.get("player_x") or 0), int(row.get("player_y") or 0), str(row["id"])),
+            )
+        except (sqlite3.Error, TypeError, ValueError):
+            pass
 
     delete_order = [
         "response_drafts",
@@ -13006,10 +13202,20 @@ def rewind_last_turn(snapshot_id: int | None = None) -> dict[str, Any]:
         rewound_turn = int(row["turn"] or 0)
         snapshot = json.loads(row["snapshot"])
         if snapshot.get("format") == "ai-rpg-delta-v1":
-            rows = snapshot.get("rows") or {}
-            rows["__max_ids__"] = [snapshot.get("max_ids") or {}]
+            # Back several turns at once (History's "Back to this turn",
+            # playtest #158): each record holds only what its own turn
+            # changed, so the newer ones are undone first, newest to oldest,
+            # the same as pressing Undo once per turn.
+            newer = conn.execute(
+                "SELECT snapshot FROM turn_snapshots WHERE id > ? ORDER BY id DESC", (int(row["id"]),)
+            ).fetchall()
             conn.execute("PRAGMA foreign_keys = OFF")
-            _restore_snapshot_rows(conn, rows)
+            for record in [json.loads(item["snapshot"]) for item in newer] + [snapshot]:
+                if record.get("format") != "ai-rpg-delta-v1":
+                    continue
+                rows = record.get("rows") or {}
+                rows["__max_ids__"] = [record.get("max_ids") or {}]
+                _restore_snapshot_rows(conn, rows)
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA foreign_key_check")
             history_summary_path().parent.mkdir(parents=True, exist_ok=True)
@@ -25839,6 +26045,7 @@ def _rate_persuasion_asks(
 
 
 @turn_ledger.recorded("turn")
+@_turn_start_record
 def play_turn(
     player_input: str,
     input_kind: str = "player",
@@ -27206,6 +27413,7 @@ def play_turn(
 
 
 @turn_ledger.recorded("opening")
+@_turn_start_record
 def play_opening_turn(allow_fallback: bool = True) -> dict[str, Any]:
     return play_turn(
         OPENING_SCENE_INPUT,
@@ -27440,6 +27648,7 @@ def _current_turn_number() -> int:
 
 
 @turn_ledger.recorded("continue")
+@_turn_start_record
 def play_continue_turn(allow_fallback: bool = True) -> dict[str, Any]:
     # Every branch carries the flag: the browser asked to be told about a
     # dead model before any turn is written, the opening and a forced beat
@@ -27719,6 +27928,7 @@ def resolve_world_event(event_id: int, *, status: str = "resolved") -> None:
 
 
 @turn_ledger.recorded("event")
+@_turn_start_record
 def play_world_event_turn(
     event_pack: dict[str, Any], *, input_kind: str = "event", allow_fallback: bool = True
 ) -> dict[str, Any]:
@@ -27801,6 +28011,7 @@ def play_world_event_turn(
 
 
 @turn_ledger.recorded("fight")
+@_turn_start_record
 def initiate_fight(npc_code: str) -> dict[str, Any]:
     """
     Player-initiated combat with a specific NPC by code (e.g. "A", "B").
@@ -28405,6 +28616,7 @@ def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any]
 
 
 @turn_ledger.recorded("wait")
+@_turn_start_record
 def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True) -> dict[str, Any]:
     """
     Spend in-world time at current location. RNG decides events before the LLM narrates.

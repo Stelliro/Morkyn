@@ -1311,6 +1311,7 @@ const ACTION_HELP_TARGETS = [
   ["#searchForm button[type='submit']", "Search indexed world memory for matching player, location, NPC, item, event, and journal facts."],
   [".useSuggestionButton", "Copy this suggestion into the player input box. It does not submit the turn until you press Send."],
   [".rewindPointButton", "Goes back to this turn. This cannot be undone."],
+  [".historyRewindButton", "Goes back to the end of this turn and undoes every turn after it. This cannot be undone."],
   [".invLinkBtn", "Puts this item in What will you do?. Close the sheet to edit or delete it."],
   [".insertRefButton", "Insert this entity reference token into the player input box."],
 
@@ -9556,7 +9557,7 @@ function saveHistoryOpenState(value) {
 
 const HISTORY_LINK_LINE = "Add to What will you do? It is optional. Close lets you edit or delete it.";
 const HISTORY_LINK_LABEL = "Link";
-const HISTORY_UNDO_LINE = "To undo the last turn, choose Menu, then Undo last turn. This cannot be put back.";
+const HISTORY_UNDO_LINE = "To undo the last turn, choose Menu, then Undo last turn. To go further back, open a turn and choose Back to this turn. This cannot be put back.";
 
 function historyRowSkipped(entry) {
   const kind = String(entry?.kind || "").toLowerCase();
@@ -9601,6 +9602,22 @@ function historyCheckLine(entry) {
 function isStorytellerStart(entry) {
   return String(entry?.kind || "").toLowerCase() === "system"
     && String(entry?.content || "").trim().startsWith("Initialization phase pending");
+}
+
+// A rewind record of turn T holds the world before T (state.rewind_points,
+// back_to_turn = T - 1), so "Back to this turn" on turn N uses the record
+// whose back_to_turn is N (playtest #158). The newest turn has none: the game
+// already stands there.
+function historyRewindPoint(turn) {
+  const number = Number(turn);
+  if (!Number.isFinite(number) || number < 1) return null;
+  return (state?.rewind_points || []).find((point) => Number(point?.back_to_turn) === number) || null;
+}
+
+function historyRewindButtonHtml(turn) {
+  const point = historyRewindPoint(turn);
+  if (!point) return "";
+  return `<div class="historyRewind"><button class="historyRewindButton secondaryButton" data-snapshot-id="${escapeHtml(point.id)}" data-back-to-turn="${escapeHtml(turn)}" type="button">Back to this turn</button></div>`;
 }
 
 function historyGroups() {
@@ -9714,6 +9731,7 @@ function renderHistory() {
               <details class="historyItem historyTurn" data-history-key="${escapeHtml(group.key)}" ${selected ? "open" : ""}>
                 <summary><strong>Turn ${escapeHtml(group.turn)}</strong><span>${escapeHtml(group.entries.length)} entries</span><p title="${escapeHtml(snippet)}"><span class="historySnippetText">${escapeHtml(snippet)}</span></p></summary>
                 <div class="historyEntries">${entries}</div>
+                ${historyRewindButtonHtml(group.turn)}
               </details>
             `;
           })
@@ -11700,7 +11718,8 @@ async function consolidateMemoryNow(statusEl) {
 }
 
 function renderRewindCard() {
-  const points = state.rewind_points || [];
+  // The newest five; History has "Back to this turn" on every kept turn.
+  const points = (state.rewind_points || []).slice(0, 5);
   const buttons = points.length
     ? points
         .map(
@@ -20847,7 +20866,7 @@ function writeRewindError(error) {
   }
 }
 
-async function rewindTurn(snapshotId = null) {
+async function rewindTurn(snapshotId = null, { backToTurn = null } = {}) {
   window.morkynSpeech?.stop("turn");
   const options = snapshotId
     ? {
@@ -20869,7 +20888,7 @@ async function rewindTurn(snapshotId = null) {
   restoreLastTurnPanels(resume);
   // The sheet covers the scene hint, so the same result has to sit on the sheet.
   const turn = payload.rewound_turn ? ` (turn ${payload.rewound_turn})` : "";
-  const undone = `Undid last turn${turn}`;
+  const undone = backToTurn !== null && backToTurn !== undefined ? `Back to turn ${backToTurn}` : `Undid last turn${turn}`;
   const sheet = document.querySelector("#characterSheetDrawer");
   const sheetOpen = !!(characterSheetOpen && sheet && !sheet.classList.contains("hidden"));
   const sheetNote = document.querySelector("#sheetSceneNote");
@@ -20882,7 +20901,7 @@ async function rewindTurn(snapshotId = null) {
     const prev = hint.textContent;
     hint.textContent = undone;
     window.setTimeout(() => {
-      if (hint.textContent.startsWith("Undid last turn")) {
+      if (hint.textContent === undone) {
         hint.textContent = prev || "Map is main while idle";
       }
     }, 2400);
@@ -22007,6 +22026,14 @@ document.addEventListener("click", (event) => {
     turnInput.focus();
     return;
   }
+  const backToTurn = event.target.closest(".historyRewindButton");
+  if (backToTurn) {
+    event.preventDefault();
+    const turn = backToTurn.dataset.backToTurn;
+    if (!window.confirm(`Go back to turn ${turn}? Every turn after it is undone. This cannot be undone.`)) return;
+    rewindTurn(backToTurn.dataset.snapshotId, { backToTurn: turn }).catch((error) => writeRewindError(error));
+    return;
+  }
   const rewindPoint = event.target.closest(".rewindPointButton");
   if (rewindPoint) {
     if (!window.confirm("Rewind to this turn? This cannot be undone.")) return;
@@ -22357,7 +22384,7 @@ function sceneTurnHtml(group) {
   return `
     <details class="sceneTurn" data-scene-turn="${escapeHtml(group.turn)}"${open}>
       <summary><span class="sceneTurnNo">Turn ${escapeHtml(group.turn)}</span><span class="sceneTurnInput">${escapeHtml(label)}</span></summary>
-      <div class="sceneTurnBody">${body || '<p class="empty">Nothing was written for this turn.</p>'}</div>
+      <div class="sceneTurnBody">${body || '<p class="empty">Nothing was written for this turn.</p>'}${historyRewindButtonHtml(group.turn)}</div>
     </details>`;
 }
 
