@@ -200,3 +200,32 @@ class TestTheRowKeepsDeadInStep(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnOldSnapshotRestores(unittest.TestCase):
+    """The reviewer: a snapshot taken before npcs.dead existed restored died_turn only, leaving dead=1."""
+
+    def setUp(self):
+        B._fresh_world()
+
+    def test_a_pre_upgrade_row_brings_dead_back_in_step_with_died_turn(self):
+        code = B._add_npc("Beth")
+        with db.connect().closing() as conn:
+            row = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone()
+            conn.execute("UPDATE npcs SET died_turn = 10, dead = 1 WHERE code = ?", (code,))
+            old = {key: row[key] for key in row.keys() if key != "dead"}  # no 'dead' key: a main-era snapshot
+            old["died_turn"] = 0
+            world._update_or_insert_row(conn, "npcs", old)
+            back = conn.execute("SELECT died_turn, dead FROM npcs WHERE code = ?", (code,)).fetchone()
+            conn.commit()
+        self.assertEqual((back["died_turn"], back["dead"]), (0, 0))
+
+    def test_a_row_that_carries_dead_is_restored_as_it_is(self):
+        code = B._add_npc("Beth")
+        with db.connect().closing() as conn:
+            row = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone()
+            snap = {key: row[key] for key in row.keys()}
+            snap.update(died_turn=4, dead=1)
+            world._update_or_insert_row(conn, "npcs", snap)
+            back = conn.execute("SELECT died_turn, dead FROM npcs WHERE code = ?", (code,)).fetchone()
+        self.assertEqual((back["died_turn"], back["dead"]), (4, 1))
