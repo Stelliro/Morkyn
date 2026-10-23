@@ -332,6 +332,7 @@ _MULTIWORD_LIMIT = {"ROLE": 4, "LOC": 6, "NAME": 4, "TO": 6}
 # read as one quoted argument. Only a bracket at a token edge counts, so
 # "[[L1]]" and arrows inside quoted text are left alone.
 _ANGLE_SPAN_RE = re.compile(r"(?<!\S)<\s*([^<>\n]*?)\s*>(?!\S)")
+_SINGLE_QUOTED_SPAN_RE = re.compile(r"(?<!\S)'([^'\n]+?)'(?=[\s,;]|$)")
 # Field words read as flags on any op line.
 _FLAG_KEYS = frozenset({
     "NAME", "ROLE", "LOC", "ATTITUDE", "RACE", "RANK", "QTY", "TYPE", "DESC", "RARITY", "VIS", "REASON",
@@ -362,6 +363,46 @@ def _op_fields_from_op_list(text: str) -> tuple[dict[str, frozenset[str]], froze
 # Carter ROLE doctor LOC clinic"). Only an op's own field words are labels, so
 # "Name: the doctor is Beth" on JOURNAL and "npc: the guard" on FOCUS stay text.
 _OP_FIELDS, _NAME_FIRST_OPS = _op_fields_from_op_list(DSL_SYSTEM_PROMPT)
+# Ops whose first part is a person ("the code of the person ..."): TALK, REL,
+# LEAD. Read from the op list like the table above.
+_PERSON_FIRST_OPS = frozenset(
+    m.group(1) for m in re.finditer(r"^([A-Z_]+): the code of the (?:one|person)\b", DSL_SYSTEM_PROMPT, re.M)
+    if m.group(1) in OPCODES
+)
+# #163 (Hermes 3 8B): the NAME label left at the front of a person's name in
+# a part that is not NAME's own ('LEAD: "NAME Yosef Rahman"', 'QUEST ...
+# "GIVER NAME Theo"'), and a name wrapped in single quotes inside the double
+# ones ('NPC_NEW: "NAME: \'Mohan Wong\'"'). Both are the op form, not the name.
+_NAME_LABEL_PREFIX_RE = re.compile(r"(?:(?i:name)\s*:\s*|NAME\s+)(?=\S)")
+_WRAPPED_SINGLE_RE = re.compile(r"'([^'\n]+)'")
+
+
+def _bare_value(text: str, *, name_label: bool = False) -> str:
+    """A part's text without the op form around it: wrapping single quotes and,
+    for a name or a person, a leading NAME label."""
+    value = str(text or "").strip()
+    if name_label:
+        label = _NAME_LABEL_PREFIX_RE.match(value)
+        if label:
+            value = value[label.end():].strip()
+    wrapped = _WRAPPED_SINGLE_RE.fullmatch(value)
+    return wrapped.group(1).strip() if wrapped else value
+
+
+# #163 (Hermes 3 8B, live/integ-r3 T1): every op on the list written, the ones
+# the scene did not need filled with a placeholder ("MOVE: None", "LOC_NEW:
+# None", "EVENT: None"), minted a place and an event called None. An op whose
+# only value is one of these is no op. GOLD, XP, HP and KARMA take "none" as a
+# band (the op list's amounts), which already changes nothing, so they keep it.
+_PLACEHOLDER_VALUES = frozenset({"", "none", "null", "n/a"})
+_BAND_OPS = frozenset({"GOLD", "XP", "HP", "KARMA"})
+
+
+def _is_placeholder_op(op: str, positionals: list[str], flags: dict[str, str]) -> bool:
+    if op in _BAND_OPS or flags:
+        return False
+    text = " ".join(str(p) for p in positionals).strip().strip("\"'.,;:").strip().lower()
+    return text in _PLACEHOLDER_VALUES
 
 
 def _labelled_parts(value: str, fields: frozenset[str] | set[str]) -> list[tuple[str, str]] | None:
@@ -427,6 +468,18 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
         return f" __STR{len(strings) - 1}__ "
 
     working = _ANGLE_SPAN_RE.sub(_pull_angle, working)
+
+    def _pull_single(match: re.Match[str]) -> str:
+        body = match.group(1).strip()
+        if not body or "__STR" in body:
+            return match.group(0)
+        strings.append(_decode_arg_escapes(body))
+        return f" __STR{len(strings) - 1}__ "
+
+    # #163 (Hermes 3 8B, cc87dd29): "QUEST: 'Seek medical treatment' GIVER B"
+    # filed a job called "'Seek". Single quotes around a whole part are quotes:
+    # only a quote at a part's edge counts, so "Beth's" is left alone.
+    working = _SINGLE_QUOTED_SPAN_RE.sub(_pull_single, working)
     # Playtest #74 (live): `NPC_NEW: "Fenella Goodwin", "woodward", "L1"` stored
     # the role ", woodward ,"; `TALK A, "..."` stored the code "A,". Commas and
     # semicolons between parts are list punctuation, never part of a value.
@@ -450,9 +503,29 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
     def _is_label(tok: str) -> bool:
         return (tok.endswith(":") and tok[:-1].upper() in own_fields) or tok in own_fields
 
+    if own_fields and not force_positional_remaining:
+        # #163 (Hermes 3 8B, live/integ-r3 opening): each field label quoted as
+        # its own part, 'NPC_NEW: "NAME" "Theo" "ROLE" "drifter" "LOC" "L1"',
+        # minted a person called "NAME Theo ROLE"; 'QUEST ... "giver": "Hiro
+        # Morgan", "STEP": "..."' filed the step "giver". A quoted part that is
+        # exactly one of this op's own field labels is that label.
+        relabelled: list[str] = []
+        for tok in parts[1:]:
+            if tok == ":" and relabelled and relabelled[-1].endswith(":"):
+                continue
+            quoted = re.fullmatch(r"__STR(\d+)__", tok)
+            label = strings[int(quoted.group(1))].strip().rstrip(":").strip().upper() if quoted else ""
+            relabelled.append(f"{label}:" if label in own_fields else tok)
+        parts = parts[:1] + relabelled
+
     i = 1
     while i < len(parts):
         token = parts[i]
+        # 'SKILL: name: "perception", DELTA: ...' (#163) filed a skill called
+        # "name:": the label of the name these ops open on, written bare.
+        if own_op in _NAME_FIRST_OPS and not positionals and token.lower() == "name:":
+            i += 1
+            continue
         # Playtest #28: "NAME: Beth ROLE: doctor", "REASON: starting conflict".
         # One of this op's own field words with a colon is that field, and its
         # unquoted value runs to the op's next field label. Any other word with
@@ -461,7 +534,7 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
             key_u = token[:-1].upper()
             i += 1
             if i < len(parts) and re.fullmatch(r"__STR(\d+)__", parts[i]):
-                flags.setdefault(key_u, strings[int(parts[i][5:-2])])
+                flags.setdefault(key_u, _bare_value(strings[int(parts[i][5:-2])], name_label=key_u == "GIVER"))
                 i += 1
                 continue
             words: list[str] = []
@@ -483,14 +556,28 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
             labelled = _labelled_parts(value, own_fields) if not force_positional_remaining else None
             if labelled:
                 for key_u, text in labelled:
-                    flags.setdefault(key_u, text)
+                    flags.setdefault(key_u, _bare_value(text, name_label=key_u == "GIVER"))
                 i += 1
                 continue
             # LOC_NEW "NAME: The Rusty Bar": the name these ops open on, labelled.
             if own_op in _NAME_FIRST_OPS and not positionals:
                 named = re.match(r"(?i)\s*name\s*:\s*(\S.*)$", value, re.S)
                 if named:
-                    value = named.group(1).strip()
+                    value = _bare_value(named.group(1))
+                # #163: 'GRANT: "Ripped Doctor Parts; QTY: 2; BAND: small"'
+                # stored all of it as the item's name. The name ends where one
+                # of the op's own labels starts.
+                tail = re.search(
+                    r"\s*[;,]\s*(?=(?i:%s)\s*:)" % "|".join(sorted(own_fields, key=len, reverse=True)), value
+                ) if own_fields else None
+                if tail and tail.start() > 0:
+                    for seg in re.split(r"\s*;\s*", value[tail.end():]):
+                        seg_label = re.match(r"(?i)\s*(\w+)\s*:\s*(\S.*)$", seg)
+                        if seg_label and seg_label.group(1).upper() in own_fields:
+                            flags.setdefault(seg_label.group(1).upper(), seg_label.group(2).strip())
+                    value = value[:tail.start()].strip()
+            elif own_op in _PERSON_FIRST_OPS and not positionals:
+                value = _bare_value(value, name_label=True)
             positionals.append(value)
             if force_positional_remaining:
                 force_positional_remaining -= 1
@@ -644,8 +731,13 @@ def parse_ops(ops_block: str) -> list[dict[str, Any]]:
     return parse_ops_detailed(ops_block)[0]
 
 
-def parse_ops_detailed(ops_block: str) -> tuple[list[dict[str, Any]], list[str]]:
-    """Ops plus the lines whose opcode is not on the list (they used to vanish untraced)."""
+def parse_ops_detailed(
+    ops_block: str, placeholders: list[str] | None = None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Ops plus the lines whose opcode is not on the list (they used to vanish untraced).
+
+    An op whose only value is a placeholder ("MOVE: None") is no op: it is left
+    out, and its line goes to ``placeholders`` when a list is given (#163)."""
     ops: list[dict[str, Any]] = []
     seen_lines = 0
     skipped: list[str] = []
@@ -656,15 +748,21 @@ def parse_ops_detailed(ops_block: str) -> tuple[list[dict[str, Any]], list[str]]
         opcode, positionals, flags = _tokenize_line(stripped)
         if not opcode:
             continue
-        seen_lines += 1
         canonical = normalize_opcode(opcode)
+        if positionals and positionals[0] == ":":
+            positionals = positionals[1:]
+        # An empty op counts only in the shape Hermes writes it ("EVENT: "); a
+        # bare op word with nothing after it stays a malformed line.
+        if canonical and (positionals or stripped.endswith(":")) and _is_placeholder_op(canonical, positionals, flags):
+            if placeholders is not None:
+                placeholders.append(stripped[:80])
+            continue
+        seen_lines += 1
         if not canonical:
             # Drop the bad line, keep the turn. Losing one op the model fumbled
             # beats losing the scene's whole state because of a typo.
             skipped.append(stripped[:80])
             continue
-        if positionals and positionals[0] == ":":
-            positionals = positionals[1:]
         ops.append({"op": canonical, "args": positionals, "flags": flags, "line": line_no, "raw": stripped})
     if seen_lines and not ops:
         # Nothing at all parsed: this is not a typo, it is the wrong format.
@@ -1106,6 +1204,10 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         # with empty content) and the journal row lost the memory.
         known_kinds = {"fact", "quest", "rumor", "event", "system"}
         head = str(args[0] if args else "").strip()
+        if head.lower() in known_kinds and len(args) == 1:
+            # 'JOURNAL: "fact"' (Hermes 3 8B, #163): the kind with no entry
+            # stored a journal line reading "fact".
+            raise TurnDslError(f"JOURNAL has a kind and no entry on line {entry['line']}")
         if head.lower() in known_kinds and len(args) > 1:
             kind = head.lower()[:40]
             content = " ".join(args[1:]).strip()
@@ -1531,10 +1633,16 @@ def parse_dsl_turn(text: str, player_input: str = "") -> dict[str, Any]:
     text = unglue_the(text, player_input)
     narration, ops_block = split_nar_ops(text)
     narration = double_single_quoted_speech(narration)
-    ops, skipped = parse_ops_detailed(ops_block)
+    placeholders: list[str] = []
+    ops, skipped = parse_ops_detailed(ops_block, placeholders)
     turn = ops_to_turn(narration, ops, player_input=player_input)
     if skipped:
         turn["_dsl"]["unknown_ops"] = skipped[:8]
+    if placeholders:
+        turn["_dsl"]["placeholder_ops"] = placeholders[:24]
+        from app import turn_ledger
+
+        turn_ledger.note("ops", "placeholder_op_dropped", lines=placeholders[:24])
     return turn
 
 

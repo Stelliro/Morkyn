@@ -18,6 +18,7 @@ from typing import Any
 
 from app import turn_ledger, venues
 from app.db import connect, row_to_dict, rows_to_dicts
+from app.narration_pipeline import _TITLE_ABBREVIATIONS
 from app.llm import (
     LlmError,
     ambient_llm_enabled,
@@ -14888,6 +14889,17 @@ def _near_name_matches(conn, name: str) -> list[Any]:
         ]
         if len(wearers) == 1:
             out.append(wearers[0])
+    if not out and len(words) == 1 and len(words[0]) >= 3:
+        # The other way round: a bare "Theo" beside the known "Dr. Theo"
+        # (Hermes 3 8B, live/integ-r3 T1). One known person who is that name
+        # with a title in front is that person.
+        titled = [
+            row for row in conn.execute("SELECT * FROM npcs").fetchall()
+            if _without_title(str(row["name"] or "")).lower() == words[0].lower()
+            and str(row["name"] or "").strip().lower() != words[0].lower()
+        ]
+        if len(titled) == 1:
+            out.append(titled[0])
     return out
 
 
@@ -14896,7 +14908,15 @@ _TITLE_WORDS = frozenset({
     "father", "mother", "brother", "sister", "sir", "lord", "lady", "dame", "goodman", "goodwife", "skipper", "bosun",
     "doctor", "mayor", "bailiff", "sheriff", "abbot", "abbess", "prior", "steward", "alderman", "magistrate", "widow",
     "old", "young", "uncle", "aunt", "madam", "mister", "mrs", "mr", "ms",
-})
+}) | {t.lower() for t in _TITLE_ABBREVIATIONS}  # "Dr. Theo" beside Theo (#163); the sentence splitter's own list
+
+
+def _without_title(name: str) -> str:
+    """A name with the titles in front of it taken off: "Dr. Theo" -> "Theo". A lone word is left alone."""
+    words = str(name or "").split()
+    while len(words) > 1 and words[0].lower().strip(".,") in _TITLE_WORDS:
+        words.pop(0)
+    return " ".join(words)
 
 
 _WALK_WORD_RE = re.compile(
@@ -20805,6 +20825,9 @@ def _introduced_person_first(
     plain = re.sub(r"\s*\[\[[^\]]*\]\]", "", venues.strip_speech(str(text or "")))
     blocked = {str(n).strip().lower() for n in not_people}
     known = {str(n or "").strip().lower() for n in known_names if str(n or "").strip()}
+    # "Dr. Theo [[B]], the keeper of this place" read "Theo" as a new keeper
+    # beside Dr. Theo (#163): a known name is known without its title too.
+    known |= {_without_title(k) for k in known} - {""}
     matches = sorted(
         list(_INTRODUCED_PERSON_RE.finditer(plain)) + list(_NAMED_JOB_PERSON_RE.finditer(plain))
         + list(_JOB_THEN_NAME_RE.finditer(plain)) + list(_NAME_TOLD_RE.finditer(plain))
@@ -22630,12 +22653,21 @@ def _void_unbought_spend(
     band_report: dict[str, Any] | None,
     player_input: str = "",
     narration: str = "",
+    loss_shown: bool | None = None,
 ) -> bool:
     """
     A GOLD loss paid for GRANTs. When every one of them was removed (the
     verifier patch, the grounding gate), nothing was bought, and the loss goes
     too (playtest #41: gold fell 12 to 1 for coal, cloth and oddities the player
     never received). Structural: a purchase with nothing purchased.
+
+    And any loss the scene does not show (#41 reopened, baseline replay: the
+    purse went 12 -> 2 -> 0 over "i shoot Marisol" and the rip-in-half line,
+    a draft GOLD -10 and -2 rolled as loss bands with no coin in the prose).
+    ``loss_shown`` is the interpreter's gold answer (interpreter.read_gold,
+    "out", confirmed by its second ask): False voids the loss here, the one
+    place a loss is voided; None (the interpreter off or the model down)
+    leaves the rules below to decide, as before.
 
     A loss on a turn that granted nothing (a toll, a bribe, a fine) is left alone.
     So is a sum the player's own line counts out: "I count six gold coins
@@ -22651,6 +22683,15 @@ def _void_unbought_spend(
         return False
     if gold >= 0:
         return False
+    if loss_shown is False:
+        player["gold_delta"] = 0
+        line = f"gold loss refused ({gold}): the scene shows no money leaving you"
+        if isinstance(band_report, dict):
+            band_report.setdefault("lines", []).append(line)
+            band_report["voided_spend"] = {"gold_delta": gold, "why": "loss_not_shown"}
+        turn_ledger.note("gold", "loss_not_shown", gold_delta=gold,
+                         why="the interpreter's confirmed gold ask found no money leaving the player")
+        return True
     # The player's own counted-out sum stands when the other side takes it; a
     # sum set down and refused ("You'll pay for it", the coins left on the
     # counter, 8B run 146 T16) is still the player's.
@@ -22702,6 +22743,95 @@ def _void_unbought_spend(
         band_report.setdefault("lines", []).append(line)
         band_report["voided_spend"] = {"gold_delta": gold, "items": bought[:8]}
     return True
+
+
+def _read_gold_evidence(conn, result: dict[str, Any]) -> dict[str, Any] | None:
+    """The interpreter's gold answers for this turn's prose (llm._read_gold), or None.
+
+    Asked only on a model turn (generate_turn left ``_interpreter_pending``)
+    with the economy on; the asks go into the turn's own trace and usage.
+    """
+    pending = result.get("_interpreter_pending") if isinstance(result, dict) else None
+    if not isinstance(pending, dict) or not _play_system_enabled(conn, "economy_enabled", True):
+        return None
+    try:
+        from app.llm import _model_timeout, _read_gold
+
+        return _read_gold(
+            _narration_text(result),
+            usage=result.setdefault("_model_usage", []),
+            trace=result.setdefault("_model_trace", []),
+            timeout=_model_timeout(45, 120, "AI_RPG_INTERPRETER_TIMEOUT"),
+            config=pending.get("config") or None,
+        )
+    except Exception as exc:
+        turn_ledger.note("interpreter", "gold_read_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        return None
+
+
+def _log_gold_shadow(
+    result: dict[str, Any],
+    gold_read: dict[str, Any] | None,
+    settled: int,
+    gold_note: dict[str, Any] | None,
+    narration: str,
+) -> None:
+    """
+    Shadow mode for the interpreter's gold (CLAUDE.md, "Narrator, interpreter,
+    engine": gold first, logged beside _settle_stated_gold before it decides
+    more). Records what the engine's rules settled (``settled``: the draft's
+    op through _settle_stated_gold and the band roll), what the prose readers
+    found (prose_state.stated_coin_amounts), what the interpreter's confirmed
+    asks said, and whether they agree, in a ledger note and a trace record
+    ("interpreter_gold"), with the turn's gold events. Writes nothing.
+    """
+    if not isinstance(gold_read, dict):
+        return
+    try:
+        from app import interpreter, prose_state
+        from app.llm import _append_trace
+
+        final = int(_float((result.get("player") or {}).get("gold_delta"), 0)) if isinstance(result.get("player"), dict) else 0
+        said = prose_state.stated_coin_amounts(narration)
+        shown_out, shown_in = gold_read.get("out"), gold_read.get("in")
+        engine_out, engine_in = settled < 0, settled > 0
+        agree = None if shown_out is None or shown_in is None else (engine_out == shown_out and engine_in == shown_in)
+        events: list[dict[str, Any]] = []
+        if shown_out:
+            events.append(interpreter.gold_event("out", -settled if settled < 0 else 0,
+                                                 "applied" if final < 0 else "proposed"))
+        elif settled < 0:
+            why = (
+                "the scene shows no money leaving the player" if shown_out is False and final == 0
+                else "refused by the engine's own rules" if final == 0
+                else "the interpreter could not be asked"
+            )
+            events.append(interpreter.gold_event("out", -settled, "refused" if final == 0 else "applied", reason=why))
+        if shown_in or settled > 0:
+            # A gain stays as the engine's own rules decide (shadow only).
+            events.append(interpreter.gold_event("in", settled if settled > 0 else 0, "applied" if final > 0 else "proposed",
+                                                 reason="" if shown_in else "the interpreter did not confirm it (shadow)"))
+        detail = {
+            "interpreter": {"out": shown_out, "in": shown_in, "answers": gold_read.get("answers") or {}},
+            "engine": {"settled": settled, "final": final, "source": (gold_note or {}).get("source")},
+            "readers": {"paid": said.get("paid") or [], "received": said.get("received") or [], "priced": said.get("priced") or []},
+            "agree": agree,
+        }
+        turn_ledger.note("interpreter", "gold_shadow", **detail)
+        report = gold_read.get("report") if isinstance(gold_read.get("report"), dict) else {}
+        _append_trace(result.setdefault("_model_trace", []), {
+            "phase": "interpreter_gold",
+            "event": "read",
+            **detail,
+            "events": events,
+            "asks": report.get("asks") or [],
+            "unconfirmed": report.get("unconfirmed") or [],
+            "seconds": report.get("seconds"),
+            **({"error": report["error"]} if report.get("error") else {}),
+        })
+        result["interpreted_gold"] = events
+    except Exception as exc:
+        turn_ledger.note("interpreter", "gold_shadow_failed", error=f"{type(exc).__name__}: {exc}"[:200])
 
 
 _DOING_INTENTS = {"inventory", "trade", "combat", "travel", "training"}
@@ -24053,6 +24183,9 @@ def _reconcile_prose_with_state(
         isinstance(gold_note, dict)
         and int(_float(gold_note.get("stated_delta"), 0)) < 0
         and int(_float(gold_note.get("gold_delta"), 0)) == 0
+        # The interpreter found no payment in the scene: there is no paying
+        # sentence to take out, and a missed one is left, not cut (#41).
+        and gold_note.get("changed_by") != "loss_not_shown"
     ):
         new_text, dropped = prose_state.drop_sentences(text, prose_state.shows_payment)
         if dropped:
@@ -24758,7 +24891,13 @@ def apply_turn(
                 inv_changes = _remove_shown_gives(conn, inv_changes, narration, player_input)
             except Exception:
                 pass
-        voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report, player_input, narration)
+        # Does the scene show money leaving or reaching the player (the
+        # interpreter's gold asks, #41)? A loss it does not show is voided
+        # below; both answers are logged beside _settle_stated_gold's.
+        gold_read = _read_gold_evidence(conn, result)
+        gold_settled = int(_float((result.get("player") or {}).get("gold_delta"), 0)) if isinstance(result.get("player"), dict) else 0
+        voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report, player_input, narration,
+                                      loss_shown=(gold_read or {}).get("out"))
         purse_note = None
         try:
             inv_changes, purse_note = _settle_purse(conn, result, inv_changes, band_report, inv_rejected,
@@ -24772,10 +24911,13 @@ def apply_turn(
             if final != int(_float(gold_note.get("gold_delta"), 0)):
                 gold_note["stated_delta"] = gold_note.get("gold_delta")
                 gold_note["gold_delta"] = final
+                not_shown = (band_report or {}).get("voided_spend", {}).get("why") == "loss_not_shown" if isinstance(band_report, dict) else False
                 gold_note["changed_by"] = (
-                    "voided" if voided else "refused_purchase" if (purse_note or {}).get("refused_purchase")
+                    "loss_not_shown" if voided and not_shown else "voided" if voided
+                    else "refused_purchase" if (purse_note or {}).get("refused_purchase")
                     else "clamped_to_purse" if (purse_note or {}).get("clamped") else "later_gate"
                 )
+        _log_gold_shadow(result, gold_read, gold_settled, gold_note if isinstance(gold_note, dict) else None, narration)
         # Decisions that write nothing go in the turn's engine ledger.
         for item in inv_rejected:
             turn_ledger.note("inventory", "refused", item=item)
@@ -26222,6 +26364,74 @@ def _ability_risk_tier(context: dict[str, Any], player_line: str) -> int:
     return 2 if _CONTEST_WORDS.search(player_line or "") else 1
 
 
+def _attack_ask_enabled() -> bool:
+    """AI_RPG_ATTACK_ASK=0|off turns the attack ask off (the trigger tables alone decide, as before)."""
+    raw = str(os.environ.get("AI_RPG_ATTACK_ASK", "") or "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _model_attack_ask(usage: list[dict[str, Any]], trace: list[dict[str, Any]]) -> Any:
+    """The turn's model for the attack ask, through _chat_text with the turn's usage and trace.
+
+    None when the turn is not written by the model: tests and harness stubs
+    replace generate_turn, and a stub turn has no model to ask (the rule
+    where_ended._model_ask keeps after the draft).
+    """
+    from app import llm
+    from app.interpreter import SYSTEM_PROMPT
+
+    if generate_turn is not llm.generate_turn:
+        return None
+
+    def ask(phase: str, prompt: str, max_tokens: int) -> str:
+        return llm._chat_text(
+            SYSTEM_PROMPT,
+            prompt,
+            timeout=llm._model_timeout(30, 90, "AI_RPG_ATTACK_ASK_TIMEOUT"),
+            usage=usage,
+            phase=phase,
+            max_tokens=max_tokens,
+            trace=trace,
+            temperature=0.0,
+        )
+
+    return ask
+
+
+def _attack_check_for_line(
+    model_input: str,
+    context: dict[str, Any],
+    inferred: dict[str, Any] | None,
+    usage: list[dict[str, Any]],
+    trace: list[dict[str, Any]],
+    ask: Any = None,
+) -> dict[str, Any] | None:
+    """The attack check for the player's line, if it attacks someone here (#85, #129; app/attack_intent.py).
+
+    Marks an inferred blow already aimed at a person as the attack on them.
+    Every ask and the outcome are noted in the turn ledger.
+    """
+    from app import attack_intent
+
+    if not _attack_ask_enabled():
+        return None
+    chosen = ask or attack_intent.ASK_OVERRIDE[0] or _model_attack_ask(usage, trace)
+    check, report = attack_intent.decide(model_input, context, inferred, chosen)
+    if report.get("asks") or report.get("target") or report.get("error"):
+        turn_ledger.note(
+            "check",
+            "attack_found" if report.get("target") else "attack_not_found",
+            target=report.get("target"),
+            source=report.get("from") or "ask",
+            skill=report.get("skill") or "",
+            asks=report.get("asks") or [],
+            unconfirmed=report.get("unconfirmed") or [],
+            error=report.get("error") or "",
+            seconds=report.get("seconds"),
+        )
+    return check
+
+
 def _rate_persuasion_asks(
     pending: list[Any], context: dict[str, Any], line: str, ask: Any = None
 ) -> dict[int, dict[str, Any]]:
@@ -26270,6 +26480,71 @@ def _rate_persuasion_asks(
                      attitude=rating.get("attitude") or "", person=str((person or {}).get("name") or ""),
                      why=str(rating.get("why") or "")[:200])
     return out
+
+
+def _dead_talk_outcome(
+    context: dict[str, Any],
+    model_input: str,
+    *,
+    usage: list[dict[str, Any]] | None = None,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """The engine's answer when the player's line talks to someone recorded dead (#164), or None.
+
+    Engine first, the way it owns a check's outcome: the line names a dead
+    person in the records (app/interpreter.dead_talked_to), the engine's own
+    check reading takes the line as talk (a social check), and one small ask
+    says the line is talking to that person. Then the draft is told the
+    outcome through act_outcome: they are dead and do not answer. A search of
+    the body, a burial or a shot at the corpse is no talk and stays free.
+    Each ask's prompt, reply and seconds go on ``usage`` and ``trace``.
+    """
+    own = re.split(r"\n\s*\n", _player_line(model_input), maxsplit=1)[0].strip()
+    if not own:
+        return None
+    from app import interpreter
+
+    with connect().closing() as conn:
+        records = interpreter.load_records(conn)
+        if not any(interpreter.is_dead(row) for row in records.get("people") or []):
+            return None
+        match = interpreter.Matcher(records.get("people"), records.get("places"))
+        named = match.named(own, [r for r in match.people if interpreter.is_dead(r)], records.get("player_names"))
+        if not named:
+            return None
+        here_row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        here_id = int((here_row["current_location_id"] if here_row else 0) or 0)
+        where = {
+            str(r["code"] or ""): int(r["location_id"] or 0)
+            for r in conn.execute("SELECT code, location_id FROM npcs WHERE died_turn > 0").fetchall()
+        }
+    try:
+        from app.skill_checks import infer_check_from_action
+
+        inferred = infer_check_from_action(model_input, context)
+    except Exception:
+        inferred = None
+    reads = [inferred, (inferred or {}).get("also_check") if isinstance(inferred, dict) else None]
+    if not any(isinstance(item, dict) and item.get("social") for item in reads):
+        turn_ledger.note("check", "dead_named_not_talk", codes=[str(r.get("code") or "") for r in named][:4])
+        return None
+
+    def ask(phase: str, prompt: str, max_tokens: int) -> str:
+        from app.llm import _chat_text
+
+        return _chat_text(interpreter.SYSTEM_PROMPT, prompt, timeout=45, usage=usage, phase=phase,
+                          max_tokens=max_tokens, trace=trace, temperature=0.0)
+
+    report: dict[str, Any] = {"asks": []}
+    row = interpreter.dead_talked_to(own, records, ask, report)
+    if row is None:
+        turn_ledger.note("check", "dead_not_talked_to", codes=[str(r.get("code") or "") for r in named][:4],
+                         asks=report["asks"])
+        return None
+    code = str(row.get("code") or "")
+    outcome = interpreter.dead_talk_outcome(row, own, here=bool(here_id) and where.get(code) == here_id)
+    turn_ledger.note("check", "dead_talked_to", code=code, means=outcome["means"], asks=report["asks"])
+    return outcome
 
 
 @turn_ledger.recorded("turn")
@@ -26645,8 +26920,25 @@ def play_turn(
     quest_match = _quest_step_match(player_input) if input_kind == "player" else None
     quest_dice_ran = False
 
+    # Talk to someone recorded dead (#164): the engine answers it, the way it
+    # answers a roll. Its asks are put on the turn's trace and usage below.
+    dead_talk: dict[str, Any] | None = None
+    pre_usage: list[dict[str, Any]] = []
+    pre_trace: list[dict[str, Any]] = []
+    if input_kind == "player" and not str(model_input).startswith("__"):
+        try:
+            dead_talk = _dead_talk_outcome(context, model_input, usage=pre_usage, trace=pre_trace)
+        except Exception as exc:
+            turn_ledger.note("check", "dead_talk_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+            dead_talk = None
+    dead_talk_code = str((dead_talk or {}).pop("dead", "") or "").upper()
+
     # Pre-resolve action checks so the LLM must honor social rolls / DCs.
     skill_check_results: list[dict[str, Any]] = []
+    # Model asks made before the draft (the attack ask): joined to the turn's
+    # model_usage and trace once the draft's lists exist.
+    pre_draft_usage: list[dict[str, Any]] = []
+    pre_draft_trace: list[dict[str, Any]] = []
     try:
         from app.skill_checks import (
             infer_check_from_action,
@@ -26675,7 +26967,15 @@ def play_turn(
                 # Work and talk in one line roll both (#85 review): the act's
                 # check and the social one it carries, each through its gate.
                 also = inferred.pop("also_check", None) if isinstance(inferred, dict) else None
-                for candidate in (inferred, also):
+                # An attack on someone here, in any words (#85, #129): one ask
+                # per person the engine has in the scene, a second to confirm
+                # (app/attack_intent.py). The roll decides it, not the line.
+                attack = None
+                if check_cfg.get("auto_check_on_risky_actions"):
+                    attack = _attack_check_for_line(model_input, context, inferred, pre_draft_usage, pre_draft_trace)
+                    if attack and attack.pop("replaces_inferred", False):
+                        inferred, attack = attack, None
+                for candidate in (attack, inferred, also):
                     if isinstance(candidate, dict) and (
                         candidate.get("social") or check_cfg.get("auto_check_on_risky_actions")
                     ):
@@ -26721,6 +27021,17 @@ def play_turn(
             # (Stell, 2026-10-21): a question anyone would answer is easier
             # than a favour against their interest. The engine found the check
             # and its person; one small ask rates the request (app/ask_weight).
+            # Talk the engine answered (#164) rolls nothing: no one alive is
+            # its other side, so its social roll is not made. A roll against
+            # someone else the line also talks to stands.
+            if dead_talk:
+                pending = [
+                    item for item in pending
+                    if not (
+                        isinstance(item, dict) and item.get("social") and not item.get("act")
+                        and str((item.get("npc_ref") or {}).get("code") or dead_talk_code).upper() == dead_talk_code
+                    )
+                ]
             ask_ratings = _rate_persuasion_asks(pending, context, _player_line(player_input))
             # The d20 is seeded like every other server roll: an unseeded
             # Random() made a rewind + regenerate of the same input roll a
@@ -26765,6 +27076,10 @@ def play_turn(
                 # The declared act this roll decides (playtest #85a): the draft
                 # is told its outcome, the next turn reads it back, and practice
                 # counts it.
+                # Who this roll attacks (#85, #129): the interpreter allows
+                # that person's death only on a success (interpreter.allow_event).
+                if isinstance(item.get("attack"), dict) and resolved.get("enabled") is not False:
+                    resolved["attack"] = dict(item["attack"])
                 if item.get("act") and resolved.get("enabled"):
                     resolved["act"] = str(item.get("act"))[:100]
                     resolved["act_family"] = str(item.get("act_family") or "")
@@ -26904,6 +27219,15 @@ def play_turn(
                 context["mechanics_context"] = mechanics_context
     except Exception:
         skill_check_results = []
+
+    if dead_talk:
+        mechanics_context = dict(context.get("mechanics_context") or {})
+        if mechanics_context.get("act_outcome"):
+            # The dice decided an act in the same line; that outcome stands.
+            turn_ledger.note("check", "dead_talk_beside_act", code=dead_talk_code)
+        else:
+            mechanics_context["act_outcome"] = dead_talk
+            context["mechanics_context"] = mechanics_context
 
     # Health is a fact the prose keeps (playtest #88). The run that found this
     # hit 0 health at turn 15 and played 44 more turns: the number was clamped
@@ -27174,7 +27498,17 @@ def play_turn(
         result["_model_trace"] = model_trace
         used_fallback = True
 
+    if pre_usage or pre_trace:
+        # The asks made before the draft (#164) lead the turn's own record.
+        result["_model_usage"] = pre_usage + list(result.get("_model_usage") or [])
+        result["_model_trace"] = pre_trace + list(result.get("_model_trace") or [])
+
     result["_deterministic_combat"] = mechanics_context.get("combat") or {}
+    # The asks made before the draft go first in the turn's usage and trace.
+    if pre_draft_usage:
+        result["_model_usage"] = [*pre_draft_usage, *(result.get("_model_usage") or [])]
+    if pre_draft_trace:
+        result["_model_trace"] = [*pre_draft_trace, *(result.get("_model_trace") or [])]
 
     # Attach the checks rolled before the draft to the turn output.
     try:
