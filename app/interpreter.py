@@ -218,12 +218,27 @@ def clean_name(value: Any) -> str:
 
 
 def is_dead(row: Any) -> bool:
-    """A person row (dict or sqlite row) the interpreter recorded dead."""
-    try:
-        value = row.get("died_turn") if isinstance(row, dict) else row["died_turn"]
-        return int(value or 0) > 0
-    except Exception:
-        return False
+    """A person row (dict or sqlite row) the interpreter recorded dead: npcs.dead = 1, or died_turn > 0."""
+    for key in ("dead", "died_turn"):
+        try:
+            value = row.get(key) if isinstance(row, dict) else (row[key] if key in row.keys() else 0)
+            if int(value or 0) > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def set_dead(conn, row: Any, turn: int) -> None:
+    """Record a death on the row: died_turn = the turn, and npcs.dead = 1 (#154) when the save has the column.
+
+    turn 0 records a return: died_turn = 0 and dead = 0.
+    """
+    keys = row.keys() if hasattr(row, "keys") else ()
+    if "dead" in keys:
+        conn.execute("UPDATE npcs SET died_turn = ?, dead = ? WHERE id = ?", (int(turn), 1 if int(turn) > 0 else 0, int(row["id"])))
+    else:
+        conn.execute("UPDATE npcs SET died_turn = ? WHERE id = ?", (int(turn), int(row["id"])))
 
 
 # ---------------------------------------------------------------------------
@@ -1277,7 +1292,7 @@ def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dic
         else:
             keep_for_rewind(conn, turn, table, int(row["id"]))
             if kind == KIND_DIED:
-                conn.execute("UPDATE npcs SET died_turn = ? WHERE id = ?", (int(turn), int(row["id"])))
+                set_dead(conn, row, int(turn))
                 # The body lies where the prose leaves it (place_bodies): a row the
                 # roster kept at another place than the player's moves here only
                 # when the scene has the body with the player.
@@ -1287,7 +1302,7 @@ def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dic
                     event["body_at"] = here_id
                     _note("body_placed", code=code, was=at, now=here_id)
             elif kind == KIND_RETURNED:
-                conn.execute("UPDATE npcs SET died_turn = 0 WHERE id = ?", (int(row["id"]),))
+                set_dead(conn, row, 0)
                 if "body" in row.keys():
                     conn.execute("UPDATE npcs SET body = '' WHERE id = ?", (int(row["id"]),))
             elif kind == KIND_BODY:
@@ -1344,11 +1359,11 @@ def dead_and_destroyed(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
     people: list[dict[str, Any]] = []
     for location in state.get("locations") or []:
         for npc in (location.get("npcs") or []) if isinstance(location, dict) else []:
-            if isinstance(npc, dict) and int(npc.get("died_turn") or 0) > 0:
+            if isinstance(npc, dict) and is_dead(npc):
                 at_id = int(npc.get("location_id") or location.get("id") or 0)
                 at_code = str(location.get("code") or "")
                 people.append({
-                    "code": str(npc.get("code") or ""), "name": clean_name(npc.get("name")), "turn": int(npc["died_turn"]),
+                    "code": str(npc.get("code") or ""), "name": clean_name(npc.get("name")), "turn": int(npc.get("died_turn") or 0),
                     "body": body_state(npc.get("body")), "location_id": at_id, "location_code": at_code,
                     "here": bool((here_id and at_id == here_id) or (not here_id and here_code and at_code == here_code)),
                 })
@@ -1416,16 +1431,52 @@ _BODY_FACTS = {
 }
 
 
+# Death is a 0/1 state the narrator is told only when it is 1 (CLAUDE.md,
+# Design decisions, 2026-10-24, #154): a dead person the narrator is shown
+# carries DEAD_FLAG ("Beth [[B]] dead=1"); the living carry nothing, as the
+# model already takes everyone for alive. DEAD_RULE, Stell's one line, goes
+# out only with a flag (turn_dsl.build_dsl_user_prompt, the expansion pass).
+DEAD_FLAG = "dead=1"
+DEAD_RULE = "dead=1 means the character is dead."
+
+
+def narrated_dead(context: Any) -> list[dict[str, Any]]:
+    """The dead the narrator is shown: those at the player's place, and those whose death was recorded last turn.
+
+    context["the_dead"] (hold_context) keeps every dead person for the
+    engine's own reads (attack candidates, the hold); this is only who the
+    narrator's text names. "Last turn" is the turn the context follows
+    (context["turn"], the last one played): the interpreter records a death
+    after the scene that shows it, so the next scene is the first to be told.
+    """
+    found = context.get("the_dead") if isinstance(context, dict) else None
+    if not isinstance(found, dict):
+        return []
+    try:
+        last = int(context.get("turn") or 0)
+    except (TypeError, ValueError):
+        last = 0
+    return [
+        p for p in found.get("people") or []
+        if isinstance(p, dict) and (p.get("here") or (last > 0 and int(p.get("turn") or 0) >= last))
+    ]
+
+
+def shows_dead(lines: Any) -> bool:
+    """Whether any of these narrator lines carries the dead flag (then DEAD_RULE goes with them)."""
+    return any(DEAD_FLAG in str(line) for line in lines or [])
+
+
 def facts(context: Any, limit: int = 6) -> list[str]:
-    """The dead and the destroyed as sentences for facts_to_keep; a body here is said after its death."""
+    """The narrated dead (flagged) and the destroyed as sentences for facts_to_keep; a body here is said after its flag."""
     found = context.get("the_dead") if isinstance(context, dict) else None
     if not isinstance(found, dict):
         return []
     out: list[str] = []
-    for person in found.get("people") or []:
+    for person in narrated_dead(context):
         label = f"{person.get('name')} [[{person.get('code')}]]" if person.get("code") else str(person.get("name") or "")
         if label.strip():
-            out.append(f"{label} died in turn {person.get('turn')} and is dead.")
+            out.append(f"{label} {DEAD_FLAG}")
             if person.get("here"):
                 out.append(_BODY_FACTS.get(str(person.get("body") or BODY_LIES), _BODY_FACTS[BODY_LIES]).format(label=label))
     for place in found.get("places") or []:

@@ -294,7 +294,7 @@ class TestTesterT10T11TheBodyIsThere(unittest.TestCase):
         bodies = (context.get("current_location") or {}).get("bodies") or []
         self.assertEqual([(b["code"], b["body"], b["died_turn"]) for b in bodies], [(self.code, "lies", died)])
         kept = facts_to_keep(context)
-        self.assertIn(f"Beth [[{self.code}]] died in turn {died} and is dead.", kept)
+        self.assertIn(f"Beth [[{self.code}]] dead=1", kept)
         self.assertIn(f"The body of Beth [[{self.code}]] lies here.", kept)
         for location in context.get("locations") or []:
             self.assertNotIn(self.code, [n.get("code") for n in location.get("npcs") or []])

@@ -13347,8 +13347,13 @@ def _retry_narration_prose(
     except Exception:
         kept_facts = []
     if kept_facts:
+        from app.interpreter import DEAD_FLAG, DEAD_RULE, shows_dead
+
+        # A flagged death (#154) reaches this pass too, so the same one line goes with it.
         outcome_lines.append(
-            "facts (true now; the light, sound and time words you add match them): " + " ".join(kept_facts)
+            "facts (true now; the light, sound and time words you add match them): "
+            + " ".join(f"{fact}." if fact.endswith(DEAD_FLAG) else fact for fact in kept_facts)
+            + (f" {DEAD_RULE}" if shows_dead(kept_facts) else "")
         )
     instruction = "\n".join(
         [
