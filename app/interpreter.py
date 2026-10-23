@@ -132,6 +132,7 @@ PHASE_BODY_BURIED = "interpreter_body_buried"
 PHASE_BODY_BURIED_CHECK = "interpreter_body_buried_check"
 PHASE_BODY_CARRIED = "interpreter_body_carried"
 PHASE_BODY_CARRIED_CHECK = "interpreter_body_carried_check"
+PHASE_WITH_PLAYER = "interpreter_with_player"
 
 KIND_DIED = "died"
 KIND_DESTROYED = "destroyed"
@@ -750,6 +751,46 @@ def hold_the_dead(text: str, records: dict[str, Any], ask: Ask, report: dict[str
     return text, events
 
 
+def with_player(
+    text: str, events: list[dict[str, Any]], records: dict[str, Any], ask: Ask, report: dict[str, Any],
+    matcher: Matcher | None = None,
+) -> list[str]:
+    """The codes of living people on record at another place than the player's whom the scene shows acting (#33).
+
+    The hold's measured ask about one name, "Does <Name> say or do anything
+    in it?" (Hermes 3 8B: no false no; its false yes was a memory sentence),
+    asked only of people the prose names outside quoted speech. The engine
+    decides what a yes moves (app/whereabouts.decide: not someone the prose
+    shows at another place, or left behind). Someone who died this turn is
+    the body asks' (place_bodies), not this one's.
+    """
+    from app.venues import strip_speech
+
+    match = matcher or Matcher(records.get("people"), records.get("places"))
+    here_id = int(records.get("here_id") or 0)
+    if not here_id:
+        return []
+    died_now = {str((e.get("subject") or {}).get("code") or "") for e in events if e.get("kind") == KIND_DIED}
+    dead_names = {_key(row) for row in match.people if is_dead(row)}
+    elsewhere = [
+        row for row in match.people
+        if not is_dead(row) and _key(row) not in dead_names and str(row.get("code") or "") not in died_now
+        and "location_id" in row and int(row.get("location_id") or 0) != here_id
+    ]
+    unspoken = strip_speech(text)
+    out: list[str] = []
+    for row in match.named(unspoken, elsewhere, records.get("player_names"))[:MAX_PEOPLE]:
+        name = str(row.get("name") or "").strip()
+        passage = passage_for(text, row, matcher=match)
+        if not name or not passage:
+            continue
+        acts = yes_no(_ask(ask, report, PHASE_WITH_PLAYER, ask_hold(name, passage)))
+        report.setdefault("with_player", []).append({"code": row.get("code"), "name": name, "acts": acts})
+        if acts is True:
+            out.append(str(row.get("code") or ""))
+    return out
+
+
 def place_bodies(
     text: str, events: list[dict[str, Any]], records: dict[str, Any], ask: Ask, report: dict[str, Any],
     matcher: Matcher | None = None,
@@ -1031,6 +1072,7 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
     started = time.time()
     report: dict[str, Any] = {"asks": [], "held": [], "events": [], "unconfirmed": []}
     events: list[dict[str, Any]] = []
+    shown: list[str] = []
     try:
         match = Matcher(records.get("people"), records.get("places"))
         # The facts first (they change the save), so the ask cap never starves them.
@@ -1059,11 +1101,13 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
         # What became of a body the player's line acts on (read from the held prose).
         back = {str((e.get("subject") or {}).get("code") or "") for e in returned}
         events.extend(read_bodies(text, records, ask, report, match, back))
+        # Who on record elsewhere the scene shows with the player (#33, app/whereabouts.py).
+        shown = with_player(text, events, records, ask, report, match)
     except Exception as exc:  # never break a turn
         report["error"] = f"{type(exc).__name__}: {exc}"[:300]
     report["events"] = [dict(e) for e in events]
     report["seconds"] = round(time.time() - started, 3)
-    return {"narration": text, "events": events, "report": report}
+    return {"narration": text, "events": events, "report": report, "with_player": shown}
 
 
 # ---------------------------------------------------------------------------

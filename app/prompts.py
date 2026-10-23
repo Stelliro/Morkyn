@@ -814,12 +814,34 @@ def _location_with_people(context: dict[str, Any]) -> dict[str, Any]:
     return current
 
 
+def _player_is_in(context: dict[str, Any], name: str, code: str) -> str:
+    """'Clinic [[L2]], inside Sanctuary [[L1]].': the player's place and the places it stands in, from the records."""
+    if not name:
+        return ""
+    current = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+
+    def label(place_name: str, place_code: str) -> str:
+        return f"{place_name} [[{place_code}]]" if place_code else place_name
+
+    parts = [label(name, code)]
+    for outer in current.get("stands_in") or []:  # world.get_state, nearest first
+        outer_name = str((outer or {}).get("name") or "").strip() if isinstance(outer, dict) else ""
+        if not outer_name:
+            break
+        parts.append("inside " + label(outer_name, str(outer.get("code") or "").strip()))
+    return ", ".join(parts) + "."
+
+
 def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
     current = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
     source = _location_with_people(context)
     place: dict[str, Any] = {}
     name = str(current.get("name") or source.get("name") or "").strip()
     code = str(current.get("code") or source.get("code") or "").strip()
+    # Where the player is, plainly, from the records (#33): first, so it heads the place.
+    where = _player_is_in(context, name, code)
+    if where:
+        place["player_is_in"] = where
     if name:
         place["name"] = name
     if code:
