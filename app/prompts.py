@@ -1664,7 +1664,11 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
         if followed:
             travel_view["following"] = followed
         world["movement_contract"] = travel_view
-    return world
+    # An unnamed figure is shown as what it is ("an unnamed ghoul [[C]]"), not
+    # by the number the save files it under (app/unnamed.py, 2026-10-24).
+    from app.unnamed import story_names, story_view
+
+    return story_view(world, story_names(context))
 
 
 def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool) -> str:

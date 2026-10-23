@@ -178,10 +178,16 @@ def load_records(conn) -> dict[str, Any]:
     player_names: list[str] = []
     here_id = 0
     try:
-        for row in conn.execute("SELECT code, name, died_turn, location_id, body FROM npcs").fetchall():
+        try:
+            found_rows = conn.execute("SELECT code, name, died_turn, location_id, body, kind, kind_number FROM npcs").fetchall()
+        except Exception:  # a save from before the unnamed figures' kind columns
+            found_rows = conn.execute("SELECT code, name, died_turn, location_id, body FROM npcs").fetchall()
+        for row in found_rows:
             people.append({
                 "code": str(row["code"] or ""), "name": clean_name(row["name"]), "died_turn": int(row["died_turn"] or 0),
                 "location_id": int(row["location_id"] or 0), "body": body_state(row["body"]),
+                "kind": str(row["kind"] or "") if "kind" in row.keys() else "",
+                "kind_number": int(row["kind_number"] or 0) if "kind_number" in row.keys() else 0,
             })
     except Exception:  # a save from before the body column
         try:
@@ -206,6 +212,38 @@ def load_records(conn) -> dict[str, Any]:
     except Exception:
         pass
     return {"people": people, "places": places, "player_names": [n for n in player_names if n.strip()], "here_id": here_id}
+
+
+def called(row: dict[str, Any], people: list[dict[str, Any]] | None = None, *, prose: bool = False) -> str:
+    """How an ask or an engine line names this person: the record's name, or what an unnamed figure is.
+
+    "Ghoul 1" is the engine's label (app/unnamed.py); the prose says "the
+    ghoul". In a line the engine writes into the prose (``prose``, the code
+    follows it) that is always "the ghoul"; in an ask about plain text it is
+    "the ghoul" when it is the only one of its kind at its place, else the
+    record's name (two ghouls read alike without their codes).
+    """
+    from app.unnamed import numbered_name, story_label
+
+    name = str(row.get("name") or "").strip()
+    numbered_as, kind = numbered_name(row)
+    if not numbered_as:
+        return name
+    if not prose:
+        place = int(row.get("location_id") or 0)
+        code = str(row.get("code") or "")
+        if any(
+            str(p.get("code") or "") != code and int(p.get("location_id") or 0) == place
+            and str(p.get("kind") or "").strip().lower() == kind.lower()
+            for p in people or []
+        ):
+            return name
+    return story_label(kind, definite=True)
+
+
+def _opening(name: str) -> str:
+    """A name opening a sentence: "the ghoul" -> "The ghoul" (a person's name is unchanged)."""
+    return name[:1].upper() + name[1:] if name else name
 
 
 def body_state(value: Any) -> str:
@@ -458,7 +496,7 @@ def ask_hold(name: str, passage: str) -> str:
 
 def ask_returned(name: str, turn: int, passage: str) -> str:
     return (
-        f"{name} died in turn {turn}. Read this.\n\n{passage}\n\n"
+        f"{_opening(name)} died in turn {turn}. Read this.\n\n{passage}\n\n"
         f"Does this text show {name} come back from death? Answer yes or no."
     )
 
@@ -641,14 +679,14 @@ def dead_talked_to(line: str, records: dict[str, Any], ask: Ask, report: dict[st
         name = str(row.get("name") or "").strip()
         if not name:
             continue
-        if yes_no(_ask(ask, report, PHASE_TALKED_TO, ask_talked_to(name, plain(text)), max_tokens=4)) is True:
+        if yes_no(_ask(ask, report, PHASE_TALKED_TO, ask_talked_to(called(row, match.people), plain(text)), max_tokens=4)) is True:
             return row
     return None
 
 
 def dead_talk_outcome(row: dict[str, Any], line: str, here: bool = False) -> dict[str, Any]:
     """The engine's outcome for talk to a dead person, in the act_outcome shape the draft already reads."""
-    name = str(row.get("name") or "").strip()
+    name = _opening(called(row, prose=True))
     code = str(row.get("code") or "").strip()
     label = f"{name} [[{code}]]" if code else name
     means = (
@@ -673,9 +711,13 @@ def dead_talk_outcome(row: dict[str, Any], line: str, here: bool = False) -> dic
 
 
 def _event(kind: str, kind_of: str, row: dict[str, Any], evidence: str) -> dict[str, Any]:
+    subject = {"type": kind_of, "code": str(row.get("code") or ""), "name": str(row.get("name") or "")}
+    if kind_of == "npc" and called(row, prose=True) != subject["name"]:
+        # What the turn summary calls an unnamed figure ("the ghoul [[A]] died"), not "Ghoul 1".
+        subject["story"] = called(row, prose=True)
     return {
         "kind": kind,
-        "subject": {"type": kind_of, "code": str(row.get("code") or ""), "name": str(row.get("name") or "")},
+        "subject": subject,
         "evidence": evidence[-400:],
         "status": "proposed",
         "reason": "",
@@ -719,8 +761,9 @@ def interpret(text: str, records: dict[str, Any], ask: Ask, report: dict[str, An
         passage = passage_for(text, row, matcher=match)
         if not name or not passage:
             continue
-        if yes_no(_ask(ask, report, PHASE_DIED, ask_died(name, passage))) is True and _confirmed(
-            ask, report, PHASE_DIED_CHECK, ask_died_check(name, passage), row, KIND_DIED
+        asked = called(row, match.people)
+        if yes_no(_ask(ask, report, PHASE_DIED, ask_died(asked, passage))) is True and _confirmed(
+            ask, report, PHASE_DIED_CHECK, ask_died_check(asked, passage), row, KIND_DIED
         ):
             events.append(_event(KIND_DIED, "npc", row, passage))
     standing = [row for row in match.places if int(row.get("destroyed_turn") or 0) == 0]
@@ -747,17 +790,18 @@ def hold_the_dead(text: str, records: dict[str, Any], ask: Ask, report: dict[str
         passage = passage_for(text, row, matcher=match)
         if not passage:
             continue
-        acts = yes_no(_ask(ask, report, PHASE_HOLD, ask_hold(name, passage)))
+        asked = called(row, match.people) or name
+        acts = yes_no(_ask(ask, report, PHASE_HOLD, ask_hold(asked, passage)))
         held: dict[str, Any] = {"code": row.get("code"), "name": name, "acts": acts}
         report["held"].append(held)
         if acts is not True:
             continue
-        back = yes_no(_ask(ask, report, PHASE_RETURNED, ask_returned(name, turn, passage)))
+        back = yes_no(_ask(ask, report, PHASE_RETURNED, ask_returned(asked, turn, passage)))
         held["returned"] = back
-        if back is True and _confirmed(ask, report, PHASE_RETURNED_CHECK, ask_returned_check(name, passage), row, KIND_RETURNED):
+        if back is True and _confirmed(ask, report, PHASE_RETURNED_CHECK, ask_returned_check(asked, passage), row, KIND_RETURNED):
             events.append(_event(KIND_RETURNED, "npc", row, passage))
             continue
-        text, held["repairs"] = _cut_acts(text, row, name, ask, report, records.get("player_quotes") or [], match)
+        text, held["repairs"] = _cut_acts(text, row, asked, ask, report, records.get("player_quotes") or [], match)
     return text, events
 
 
@@ -841,8 +885,9 @@ def place_bodies(
         passage = passage_for(text, row, matcher=match)
         if not name or not passage:
             continue
-        here = yes_no(_ask(ask, report, PHASE_BODY_HERE, ask_body_here(name, passage))) is True and _confirmed(
-            ask, report, PHASE_BODY_HERE_CHECK, ask_body_here_check(name, passage), row, "body_here"
+        asked = called(row, match.people)
+        here = yes_no(_ask(ask, report, PHASE_BODY_HERE, ask_body_here(asked, passage))) is True and _confirmed(
+            ask, report, PHASE_BODY_HERE_CHECK, ask_body_here_check(asked, passage), row, "body_here"
         )
         event["body_here"] = here
         report.setdefault("bodies", []).append({"code": row.get("code"), "name": name, "with_player": here})
@@ -877,15 +922,16 @@ def read_bodies(
             continue
         seen: dict[str, Any] = {"code": row.get("code"), "name": name, "was": state}
         report.setdefault("bodies", []).append(seen)
-        if yes_no(_ask(ask, report, PHASE_BODY_BURIED, ask_body_buried(name, passage))) is True and _confirmed(
-            ask, report, PHASE_BODY_BURIED_CHECK, ask_body_buried_check(name, passage), row, KIND_BODY
+        asked = called(row, match.people)
+        if yes_no(_ask(ask, report, PHASE_BODY_BURIED, ask_body_buried(asked, passage))) is True and _confirmed(
+            ask, report, PHASE_BODY_BURIED_CHECK, ask_body_buried_check(asked, passage), row, KIND_BODY
         ):
             seen["now"] = BODY_BURIED
             events.append({**_event(KIND_BODY, "npc", row, passage), "state": BODY_BURIED})
             continue
-        carried = yes_no(_ask(ask, report, PHASE_BODY_CARRIED, ask_body_carried(name, passage)))
+        carried = yes_no(_ask(ask, report, PHASE_BODY_CARRIED, ask_body_carried(asked, passage)))
         if carried is True and state != BODY_CARRIED and _confirmed(
-            ask, report, PHASE_BODY_CARRIED_CHECK, ask_body_carried_check(name, passage), row, KIND_BODY
+            ask, report, PHASE_BODY_CARRIED_CHECK, ask_body_carried_check(asked, passage), row, KIND_BODY
         ):
             seen["now"] = BODY_CARRIED
             events.append({**_event(KIND_BODY, "npc", row, passage), "state": BODY_CARRIED})
@@ -958,7 +1004,7 @@ def ask_shows_death(name: str, paragraph: str, sentence: str) -> str:
 
 def outcome_beat(row: dict[str, Any], check: dict[str, Any] | None) -> str:
     """The engine's line for a death the roll refused: the person lives, then the check's own outcome line."""
-    name = str(row.get("name") or "").strip()
+    name = _opening(called(row, prose=True))
     code = str(row.get("code") or "").strip()
     label = f"{name} [[{code}]]" if name and code else (name or f"[[{code}]]")
     check = check if isinstance(check, dict) else {}
@@ -996,7 +1042,7 @@ def reconcile_refused_death(
     row = next((r for r in match.people if str(r.get("code") or "") == code), None) or {
         "code": code, "name": str(subject.get("name") or ""),
     }
-    name = str(row.get("name") or code)
+    name = called(row, match.people) or code
     beat = outcome_beat(row, rolls[-1] if rolls else None)
     record: dict[str, Any] = {"code": code, "beat": beat, "sentences": []}
     report.setdefault("refused_deaths", []).append(record)
@@ -1076,7 +1122,7 @@ def show_unnamed_attacks(
         }
         if match.names(text, row):
             continue
-        name = str(row.get("name") or "").strip()
+        name = called(row, prose=True)
         beat = outcome_line(check, f"{name} [[{code}]]" if name else f"[[{code}]]")
         if not beat:
             continue
@@ -1144,22 +1190,23 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
 
 def event_line(event: dict[str, Any]) -> str:
     subject = event.get("subject") if isinstance(event.get("subject"), dict) else {}
-    name = str(subject.get("name") or "").strip()
+    name = str(subject.get("story") or subject.get("name") or "").strip()
     code = str(subject.get("code") or "").strip()
     label = f"{name} [[{code}]]" if name and code else (name or (f"[[{code}]]" if code else ""))
     if not label:
         return ""
+    opens = _opening(label) if subject.get("story") else label  # "the ghoul [[A]]" opening a sentence
     kind = event.get("kind")
     if kind == KIND_DIED:
-        return f"{label} died."
+        return f"{opens} died."
     if kind == KIND_DESTROYED:
-        return f"{label} was destroyed."
+        return f"{opens} was destroyed."
     if kind == KIND_RETURNED:
-        return f"{label} came back from death."
+        return f"{opens} came back from death."
     if kind == KIND_BODY:
         state = event.get("state")
         if state == BODY_BURIED:
-            return f"{label} was buried."
+            return f"{opens} was buried."
         if state == BODY_CARRIED:
             return f"You carry the body of {label}."
         if state == BODY_LIES:
@@ -1436,6 +1483,7 @@ def dead_and_destroyed(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
                 people.append({
                     "code": str(npc.get("code") or ""), "name": clean_name(npc.get("name")), "turn": int(npc.get("died_turn") or 0),
                     "body": body_state(npc.get("body")), "location_id": at_id, "location_code": at_code,
+                    "kind": str(npc.get("kind") or ""), "kind_number": int(npc.get("kind_number") or 0),
                     "here": bool((here_id and at_id == here_id) or (not here_id and here_code and at_code == here_code)),
                 })
     places = [
@@ -1451,7 +1499,9 @@ def dead_and_destroyed(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
 def body_entry(person: dict[str, Any]) -> dict[str, Any]:
     """A body as a place lists it: who, since when, and what it is doing."""
     return {"code": person.get("code") or "", "name": person.get("name") or "", "died_turn": int(person.get("turn") or 0),
-            "body": person.get("body") or BODY_LIES}
+            "body": person.get("body") or BODY_LIES,
+            # An unnamed figure stays recognisable as one, so the story sees "the ghoul", not "Ghoul 1".
+            "kind": person.get("kind") or "", "kind_number": int(person.get("kind_number") or 0)}
 
 
 def hold_context(state: dict[str, Any], context: dict[str, Any]) -> None:
@@ -1545,16 +1595,22 @@ def facts(context: Any, limit: int = 6) -> list[str]:
         return []
     out: list[str] = []
     for person in narrated_dead(context):
-        label = f"{person.get('name')} [[{person.get('code')}]]" if person.get("code") else str(person.get("name") or "")
+        # An unnamed figure is "the ghoul [[A]]" to the story, never its engine number (Ghoul 1).
+        name = called(person, prose=True)
+        label = f"{name} [[{person.get('code')}]]" if person.get("code") else str(name or "")
         if label.strip():
-            out.append(f"{label} {DEAD_FLAG}")
+            out.append(_sentence_start(f"{label} {DEAD_FLAG}"))
             if person.get("here"):
-                out.append(_BODY_FACTS.get(str(person.get("body") or BODY_LIES), _BODY_FACTS[BODY_LIES]).format(label=label))
+                out.append(_sentence_start(_BODY_FACTS.get(str(person.get("body") or BODY_LIES), _BODY_FACTS[BODY_LIES]).format(label=label)))
     for place in found.get("places") or []:
         label = f"{place.get('name')} [[{place.get('code')}]]" if place.get("code") else str(place.get("name") or "")
         if label.strip():
             out.append(f"{label} was destroyed in turn {place.get('turn')}.")
     return out[:limit]
+
+
+def _sentence_start(text: str) -> str:
+    return text[:1].upper() + text[1:] if text else text
 
 
 def dead_codes(conn) -> set[str]:
