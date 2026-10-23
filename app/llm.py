@@ -17812,7 +17812,8 @@ def _run_interpreter(
                         return call()
                 return call()
 
-            out = interpreter.run(narration, records, ask)
+            # The turn's rolls ride along: a death the attack roll did not allow is refused (#85, #129).
+            out = interpreter.run(narration, records, ask, turn)
             events = out["events"]
             record.update(out["report"])
             record["event"] = "read"
