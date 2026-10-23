@@ -47,8 +47,30 @@ the record (facts_to_keep next turn) carries the death.
 The event shape is the one later kinds (gold, items, moves) will use:
     {"kind": str, "subject": {"type": "npc"|"place", "code": str, "name": str},
      "evidence": str, "status": "proposed"|"applied"|"refused", "reason": str}
-A gold event would add "amount" and an "object" of the same shape;
 allow_event is the seat where the dice round refuses what a roll did not allow.
+A gold event would add "amount" and an "object" of the same shape.
+
+The outcome follows the roll (#85, #129): allow_event refuses the death of
+someone the player attacked this turn unless an attack roll on them succeeded
+(app/attack_intent.py marks which roll attacked whom). The refused person
+stays alive, and reconcile_refused_death puts the prose back in line: the
+sentences that show the death (asked one at a time) give way to the engine's
+outcome beat ("Beth [[B]] is hurt, but still alive." and the check's own
+outcome line), with the same floor and the same never-cut rules as the hold.
+
+Gold (#41, read_gold): whether money leaves or reaches the player, asked over
+the whole scene, each a positive question about one thing, and one check that
+must answer "no" before either counts:
+
+    out    "Does the player give, pay or lose money in this text?"   yes, then
+    in     "Does the player receive money in this text?"             yes, then
+    check  "Does any money change hands in this text?"                 must be yes
+
+The amount is never the model's: it is the engine's (the sum the prose names,
+read by prose_state, else the band roll). A gold event adds "direction"
+("out" / "in") and "amount" to the shape above, with the player as subject.
+world.apply_turn refuses a loss the scene does not show (out confirmed) and
+logs both answers beside _settle_stated_gold in shadow mode.
 
 Every ask goes through the model call path the caller gives (app/llm.py passes
 _chat_text with the turn's usage and trace, so each prompt, raw reply and its
@@ -75,10 +97,18 @@ PHASE_HOLD = "interpreter_hold"
 PHASE_RETURNED = "interpreter_returned"
 PHASE_RETURNED_CHECK = "interpreter_returned_check"
 PHASE_WHICH = "interpreter_hold_which"
+PHASE_GOLD_OUT = "interpreter_gold_out"
+PHASE_GOLD_IN = "interpreter_gold_in"
+PHASE_GOLD_CHECK = "interpreter_gold_check"
+PHASE_REFUSED_DEATH = "interpreter_refused_death"
 
 KIND_DIED = "died"
 KIND_DESTROYED = "destroyed"
 KIND_RETURNED = "returned"
+KIND_GOLD = "gold"
+
+# The gold asks read the whole scene (a payment can sit in any paragraph).
+GOLD_PASSAGE_CHARS = 4000
 
 # How many candidates one turn may ask about, and how many asks in all.
 MAX_PEOPLE = 4
@@ -370,6 +400,161 @@ def ask_which(name: str, paragraph: str, sentence: str) -> str:
     )
 
 
+def ask_gold_out(passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nDoes the player give, pay or lose money in this text? Answer yes or no."
+
+
+def ask_gold_in(passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nDoes the player receive money in this text? Answer yes or no."
+
+
+def ask_gold_check(passage: str) -> str:
+    # Measured live on Hermes 3 8B (docs/showcase/ask-live-eval-2026-10-24.md, round 3): "the same
+    # money at the end as at the start?" said no on 4 of 5 real scenes with no money and blocked a
+    # real tip; "does any money change hands?" (yes required) made no false yes in 33.
+    return f"Read this.\n\n{passage}\n\nDoes any money change hands in this text? Answer yes or no."
+
+
+# ---------------------------------------------------------------------------
+# Gold (#41): does money leave or reach the player in this scene
+# ---------------------------------------------------------------------------
+
+
+def gold_passage(text: str, limit: int = GOLD_PASSAGE_CHARS) -> str:
+    """The whole scene without codes; when too long, its last whole paragraphs."""
+    out: list[str] = []
+    size = 0
+    for para in reversed(_paragraphs(text)):
+        para_plain = plain(para)
+        if out and size + len(para_plain) > limit:
+            break
+        out.insert(0, para_plain[-limit:] if not out and len(para_plain) > limit else para_plain)
+        size += len(para_plain)
+    return "\n\n".join(out)
+
+
+def read_gold(text: str, ask: Ask) -> dict[str, Any]:
+    """Whether the scene shows money leaving ("out") and reaching ("in") the player.
+
+    Each side is True only when its ask says yes and the shared check ("does
+    any money change hands in this text?") says yes; False when either did
+    not (a no, an unread reply, a yes the check refutes); None when the asks
+    could not be put at all (the model down: nothing is known, and the caller
+    keeps what its own rules decided). The check is asked once, only after a yes.
+    """
+    report: dict[str, Any] = {"asks": [], "held": [], "events": [], "unconfirmed": []}
+    out: dict[str, Any] = {"out": None, "in": None, "answers": {}, "report": report}
+    passage = gold_passage(text)
+    if not passage:
+        return out
+    started = time.time()
+    check: dict[str, Any] = {}
+
+    def failed() -> bool:
+        return bool(report["asks"] and report["asks"][-1].get("error"))
+
+    def side(phase: str, prompt: str, direction: str) -> bool | None:
+        raw = _ask(ask, report, phase, prompt)
+        if raw is None and failed():
+            return None
+        answer = yes_no(raw)
+        out["answers"][direction] = answer
+        if answer is not True:
+            return False
+        if "answer" not in check:
+            raw_check = _ask(ask, report, PHASE_GOLD_CHECK, ask_gold_check(passage))
+            check["failed"] = raw_check is None and failed()
+            check["answer"] = yes_no(raw_check)
+            out["answers"]["check"] = check["answer"]
+        if check["failed"]:
+            return None
+        if check["answer"] is True:
+            return True
+        report["unconfirmed"].append({"kind": KIND_GOLD, "direction": direction, "check": check["answer"]})
+        return False
+
+    try:
+        out["out"] = side(PHASE_GOLD_OUT, ask_gold_out(passage), "out")
+        out["in"] = side(PHASE_GOLD_IN, ask_gold_in(passage), "in")
+    except Exception as exc:  # never break a turn
+        report["error"] = f"{type(exc).__name__}: {exc}"[:300]
+    report["seconds"] = round(time.time() - started, 3)
+    return out
+
+
+def gold_event(direction: str, amount: int, status: str, reason: str = "", evidence: str = "") -> dict[str, Any]:
+    """A gold event: the player pays ("out") or receives ("in") ``amount``, the engine's number."""
+    return {
+        "kind": KIND_GOLD,
+        "subject": {"type": "player", "code": "", "name": "player"},
+        "direction": direction,
+        "amount": abs(int(amount)),
+        "evidence": str(evidence or "")[-400:],
+        "status": status,
+        "reason": reason,
+    }
+
+
+def ask_talked_to(name: str, line: str) -> str:
+    return f"Read this.\n\nThe player: {line}\n\nIs the player talking to {name}? Answer yes or no."
+
+
+# ---------------------------------------------------------------------------
+# An act aimed at the dead (#164): the engine answers it before the prose
+# ---------------------------------------------------------------------------
+
+PHASE_TALKED_TO = "interpreter_dead_talked_to"
+MAX_TALKED_TO = 2
+
+
+def dead_talked_to(line: str, records: dict[str, Any], ask: Ask, report: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """The dead person the player's own line talks to, or None.
+
+    'i say hi to Dr. Theo' a turn after his death (live replay, #164): nothing
+    told the narrator what that greeting comes to, and the 8B wrote another
+    scene. Candidates are the records' dead that the line names, by code or by
+    a full name only that row has (the Matcher, as for the prose); a name a
+    living row shares names nobody. One positive ask per candidate, about the
+    line alone. The caller asks only when the engine already reads the line as
+    talk (its social check), so the two agree before the engine answers.
+    """
+    report = report if report is not None else {"asks": []}
+    report.setdefault("asks", [])
+    text = str(line or "").strip()
+    if not text:
+        return None
+    match = Matcher(records.get("people"), records.get("places"))
+    dead = [row for row in match.people if is_dead(row)]
+    for row in match.named(text, dead, records.get("player_names"))[:MAX_TALKED_TO]:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        if yes_no(_ask(ask, report, PHASE_TALKED_TO, ask_talked_to(name, plain(text)), max_tokens=4)) is True:
+            return row
+    return None
+
+
+def dead_talk_outcome(row: dict[str, Any], line: str, here: bool = False) -> dict[str, Any]:
+    """The engine's outcome for talk to a dead person, in the act_outcome shape the draft already reads."""
+    name = str(row.get("name") or "").strip()
+    code = str(row.get("code") or "").strip()
+    label = f"{name} [[{code}]]" if code else name
+    means = (
+        f"{label} is dead; the body lies where it fell. {name} does not answer."
+        if here
+        else f"{label} is dead and does not answer."
+    )
+    return {
+        "act": str(line or "").strip()[:100],
+        "skill": "",
+        "proficiency": "",
+        "outcome": "no answer",
+        "degree": "no roll",
+        "means": means,
+        "dead": code,
+    }
+
+
 # ---------------------------------------------------------------------------
 # The pass
 # ---------------------------------------------------------------------------
@@ -516,8 +701,98 @@ def _cut(text: str, start: int, end: int) -> str:
     return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
-def run(text: str, records: dict[str, Any], ask: Ask) -> dict[str, Any]:
-    """Read the prose's new events, then hold it to the dead. Returns {narration, events, report}."""
+def ask_shows_death(name: str, paragraph: str, sentence: str) -> str:
+    return (
+        f"Read this.\n\n{paragraph}\n\n"
+        # Measured live (round 3): "In the sentence ..., is X dead?" answered about the whole
+        # paragraph (12/51 false yes); asking what the sentence says: 1/51.
+        f"Does the sentence \"{sentence}\" say that {name} is dead? Answer yes or no."
+    )
+
+
+def outcome_beat(row: dict[str, Any], check: dict[str, Any] | None) -> str:
+    """The engine's line for a death the roll refused: the person lives, then the check's own outcome line."""
+    name = str(row.get("name") or "").strip()
+    code = str(row.get("code") or "").strip()
+    label = f"{name} [[{code}]]" if name and code else (name or f"[[{code}]]")
+    check = check if isinstance(check, dict) else {}
+    first = f"{label} is hurt, but still alive." if check.get("outcome") == "partial" else f"{label} is still alive."
+    flavor = " ".join(str(check.get("flavor") or "").split())
+    return f"{first} {flavor}".strip()
+
+
+def _append_beat(text: str, beat: str) -> str:
+    body = str(text or "").rstrip()
+    return f"{body} {beat}".strip() if body else beat
+
+
+def reconcile_refused_death(
+    text: str,
+    event: dict[str, Any],
+    rolls: list[dict[str, Any]],
+    ask: Ask,
+    report: dict[str, Any],
+    match: Matcher,
+    keep: list[str] | None = None,
+) -> str:
+    """The prose put back in line with the roll after a refused death (#129).
+
+    Each sentence of the paragraphs that name the person is asked about on
+    its own ("In the sentence "...", is Beth dead?"); the first one picked is
+    replaced by the engine's outcome beat and the others are cut. Never cut:
+    the scene's first sentence the player is the subject of (the act as
+    narrated) and a sentence holding the player's quoted words. Never below
+    the floor: then, and when nothing is picked, the prose is kept and the
+    beat is added at its end, so the scene still says what the dice decided.
+    """
+    subject = event.get("subject") if isinstance(event.get("subject"), dict) else {}
+    code = str(subject.get("code") or "")
+    row = next((r for r in match.people if str(r.get("code") or "") == code), None) or {
+        "code": code, "name": str(subject.get("name") or ""),
+    }
+    name = str(row.get("name") or code)
+    beat = outcome_beat(row, rolls[-1] if rolls else None)
+    record: dict[str, Any] = {"code": code, "beat": beat, "sentences": []}
+    report.setdefault("refused_deaths", []).append(record)
+    every = units(text)
+    act = next((u for u in every if players_own(u[2], []) and not _hook(u[2])), None)
+    quotes = [q for q in keep or [] if q]
+    picked: list[tuple[int, int, str]] = []
+    for start, end, sentence in [u for u in every if match.names(_paragraph_of(text, u[0]), row)][-MAX_UNITS:]:
+        if act is not None and start == act[0]:
+            continue
+        if any(q.lower() in plain(sentence).lower() for q in quotes):
+            continue
+        paragraph = plain(_paragraph_of(text, start))
+        if yes_no(_ask(ask, report, PHASE_REFUSED_DEATH, ask_shows_death(name, paragraph, plain(sentence)))) is True:
+            picked.append((start, end, sentence))
+    record["sentences"] = [s for _a, _b, s in picked]
+    if not picked:
+        record["action"] = "beat_added"
+        return _append_beat(text, beat)
+    cut = text
+    for start, end, _sentence in sorted(picked, reverse=True):
+        cut = _cut(cut, start, end)
+    before = len(plain(text))
+    after = len(plain(cut))
+    if after < FLOOR_CHARS or after < before * FLOOR_SHARE:
+        record["action"] = "kept_floor_beat_added"
+        _note("refused_death_floor", code=code, chars=before, chars_left=after)
+        return _append_beat(text, beat)
+    out = text
+    first = min(picked)
+    for start, end, _sentence in sorted(picked, reverse=True):  # back to front, so offsets hold
+        out = (out[:start] + beat + out[end:]) if (start, end) == first[:2] else _cut(out, start, end)
+    record["action"] = "replaced"
+    return out
+
+
+def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Read the prose's new events, refuse what the dice did not allow, then hold it to the dead.
+
+    ``turn_result`` is the turn as apply_turn has it (its "skill_checks" are
+    the rolls made before the draft). Returns {narration, events, report}.
+    """
     started = time.time()
     report: dict[str, Any] = {"asks": [], "held": [], "events": [], "unconfirmed": []}
     events: list[dict[str, Any]] = []
@@ -525,6 +800,20 @@ def run(text: str, records: dict[str, Any], ask: Ask) -> dict[str, Any]:
         match = Matcher(records.get("people"), records.get("places"))
         # The facts first (they change the save), so the ask cap never starves them.
         events.extend(interpret(text, records, ask, report, match))
+        # The outcome follows the roll (#85, #129): a death the attack roll
+        # did not allow is refused, the person stays alive, and the prose is
+        # put back in line with the dice.
+        for event in events:
+            reason = allow_event(event, turn_result)
+            if not reason:
+                continue
+            subject = event.get("subject") if isinstance(event.get("subject"), dict) else {}
+            event["status"] = "refused"
+            event["reason"] = reason
+            _note("event_refused", kind=str(event.get("kind") or ""), code=str(subject.get("code") or ""), reason=reason)
+            text = reconcile_refused_death(
+                text, event, attack_rolls(event, turn_result), ask, report, match, records.get("player_quotes") or []
+            )
         text, returned = hold_the_dead(text, records, ask, report, match)
         events.extend(returned)
     except Exception as exc:  # never break a turn
@@ -614,15 +903,40 @@ def without_refused(summary_text: str, events: list[dict[str, Any]]) -> str:
     return " ".join(text.split())
 
 
+# The outcomes of an attack roll that may kill the one attacked. A partial is
+# "something, but not everything": hurt, not dead (skill_checks.DEGREE_FLAVOR).
+DEATH_ALLOWED_OUTCOMES = frozenset({"success", "critical_success"})
+
+
+def attack_rolls(event: dict[str, Any], turn_result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The turn's rolled checks that attacked the event's person (their "attack" code, app/attack_intent.py)."""
+    subject = event.get("subject") if isinstance(event.get("subject"), dict) else {}
+    code = str(subject.get("code") or "").strip().upper()
+    checks = (turn_result or {}).get("skill_checks") if isinstance(turn_result, dict) else None
+    if not code or not isinstance(checks, list):
+        return []
+    from app.attack_intent import attack_target
+
+    return [
+        check for check in checks
+        if isinstance(check, dict) and check.get("natural") is not None and attack_target(check) == code
+    ]
+
+
 def allow_event(event: dict[str, Any], turn_result: dict[str, Any] | None = None) -> str:
     """"" when the event may stand, else why not.
 
-    The seat for the dice/outcome check (#85, #129, a later round): a death the
-    roll did not allow is refused here, from the turn's resolved checks, and
-    the summary and records then agree with the refusal.
+    The dice/outcome check (#85, #129): the death of someone the player
+    attacked this turn stands only when an attack roll on them succeeded. A
+    death with no attack roll behind it (dice off, someone else's doing, no
+    attack found) is not the dice's to refuse.
     """
-    del event, turn_result
-    return ""
+    if not isinstance(event, dict) or event.get("kind") != KIND_DIED:
+        return ""
+    rolls = attack_rolls(event, turn_result)
+    if not rolls or any(str(c.get("outcome") or "") in DEATH_ALLOWED_OUTCOMES for c in rolls):
+        return ""
+    return f"attack roll {rolls[-1].get('outcome') or 'failure'}"
 
 
 def keep_for_rewind(conn, turn: int, table: str, row_id: int) -> None:
@@ -657,6 +971,9 @@ def apply_events(conn, turn: int, events: list[dict[str, Any]], turn_result: dic
         if not isinstance(raw, dict):
             continue
         event = dict(raw)
+        if event.get("status") == "refused":  # refused (and noted) in run(): it writes nothing
+            out.append(event)
+            continue
         subject = event.get("subject") if isinstance(event.get("subject"), dict) else {}
         code = str(subject.get("code") or "").strip()
         kind = str(event.get("kind") or "")
