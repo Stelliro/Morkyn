@@ -60,22 +60,24 @@ What you can actually do in a game today. Items marked *in progress* exist but a
 
 ## Download
 
-This drop is **[`v0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12)**. One file, empty folder, run it. The launcher clones the repo, builds a private `.venv`, installs dependencies, and starts the game.
+The current build is **[`v0.11.1`](https://github.com/Stelliro/Morkyn/releases/tag/v0.11.1)**, a packaged game: no Git, no Python.
 
-| OS | File | Download |
+| OS | File | Run |
 | --- | --- | --- |
-| **Windows** | `start.bat` | **[Download start.bat](https://github.com/Stelliro/Morkyn/releases/download/v0.9.12/start.bat)** — double-click |
-| **Linux** | `start.sh` | **[Download start.sh](https://github.com/Stelliro/Morkyn/releases/download/v0.9.12/start.sh)** — `bash start.sh` |
-| **macOS** | `start.sh` | **[Download start.sh](https://github.com/Stelliro/Morkyn/releases/download/v0.9.12/start.sh)** — same script as Linux |
+| **Windows** | `Morkyn-0.11.1-windows-x64.zip` | unzip, run `Morkyn.exe` |
+| **Linux** | `morkyn_0.11.1_amd64.deb`, `morkyn-0.11.1-1.x86_64.rpm`, `Morkyn-0.11.1-x86_64.AppImage` or the `.tar.gz` | install the package (Mørkyn appears in the menu and opens in a terminal; close it to quit) or run the AppImage |
+| **macOS** | `Morkyn-0.11.1-macos.zip` | unzip, open `Morkyn.app` (Gatekeeper asks to allow it the first time) |
 
-Release page (notes + both files): [**Mørkyn 0.9.12**](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12)
+The build is about 60 MB. On first start, **Settings → Updates → Local engine** installs the model runtime for your graphics card (CUDA, Metal or CPU) as a separate pack, and **LLM details → Local models** downloads a model with one click (Hermes 3, Llama 3.1 8B Instruct or Qwen3 8B). Later versions are a picker: the game lists the releases and you choose which to run; saves and packs are shared by every version (docs/Packaging.md). The builds are not code-signed yet.
+
+The `start.bat` / `start.sh` launcher of the `0.9.x` and `0.10.0-dev` drops still works and installs the current source build instead ([**Mørkyn 0.9.12**](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12)):
 
 ```text
 Windows        double-click start.bat
 Linux / macOS  bash start.sh
 ```
 
-Later runs check GitHub and **ask before updating** — answer no and it starts the copy you already have. Offline, it skips the check. It never touches a checkout with uncommitted local changes.
+Later runs of the launcher check GitHub and **ask before updating** — answer no and it starts the copy you already have. Offline, it skips the check. It never touches a checkout with uncommitted local changes.
 
 | Flag | Effect |
 | --- | --- |
