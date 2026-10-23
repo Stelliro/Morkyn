@@ -83,7 +83,9 @@ HOSTILE_QUESTION = 'In this text, does "{phrase}" attack or threaten the player?
 # T3; not the ghoul in 'A ghoul lunges at you. "Get down!" she shouts').
 # Not yet measured live on Hermes 3 8B.
 SPEAKS_PHASE = "figure_speaks"
-SPEAKS_QUESTION = 'In this text, does the {noun} say "{quote}"? Answer yes or no.'
+# Measured live on Hermes 3 8B (live-eval-6): "does the ghoul say ..." said yes 3/3 to the very case
+# it is for (a bystander shouting while a ghoul lunges); "are the words ... spoken by": 89.5%, false yes 12 -> 6, false no 3 -> 0.
+SPEAKS_QUESTION = 'In this text, are the words "{quote}" spoken by the {noun}? Answer yes or no.'
 SPEAKS_QUOTE_CHARS = 120
 MAX_SPEAK_ASKS = 1
 YES_NO_SYSTEM = "Answer yes or no."

@@ -90,7 +90,7 @@ class _Asker:
 
     def __init__(self, figures=(), hostile=(), entity_kind="person", checked=None, speaks=None):
         self.figures = {f.lower() for f in figures}
-        # figure_speaks is not measured live yet: a plain "Yes." / "No." here.
+        # figure_speaks (live-eval-6): Hermes answers this wording with a plain "Yes" / "No.".
         self.speaks = self.figures if speaks is None else {s.lower() for s in speaks}
         self.checked = self.figures if checked is None else {c.lower() for c in checked}
         self.hostile = {h.lower() for h in hostile}
@@ -104,7 +104,7 @@ class _Asker:
         if phase == "figure_kind_check":
             return "Yes, you could" if any(f"talk to the {f}?" in user for f in self.checked) else "No."
         if phase == "figure_speaks":
-            return "Yes." if any(f"does the {s} say" in user for s in self.speaks) else "No."
+            return "Yes." if any(f"spoken by the {s}?" in user for s in self.speaks) else "No."
         if phase == "figure_hostile":
             return 'Yes, "a' if any(h in user.lower() for h in self.hostile) else 'No, "a'
         if phase == "entity_kind":
@@ -792,7 +792,7 @@ class ThePronounInASpeechTag(unittest.TestCase):
         self.assertNotEqual(speakers[0]["attitude"], "hostile")
         self.assertEqual(asker.asked("figure_speaks"),
                          ['Text: A ghoul lunges at you from the doorway. "Get down!" she shouts from behind the counter.\n'
-                          'In this text, does the ghoul say "Get down!"? Answer yes or no.'])
+                          'In this text, are the words "Get down!" spoken by the ghoul? Answer yes or no.'])
 
     def test_offline_the_face_stays_the_speaker(self):
         from app import entity_kinds, world
