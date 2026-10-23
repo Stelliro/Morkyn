@@ -1851,6 +1851,41 @@ def facts_to_keep(context: Any, limit: int = 6) -> list[str]:
     return facts
 
 
+def drop_fact_echo_opening(narration: str, facts: list[str]) -> tuple[str, list[str]]:
+    """The prose without the opening sentences that copy a facts_to_keep entry word for word.
+
+    A narrow repair of one shape (drift eval: 'You are in Radiation Fenced Sanctuary [[L1]]. It is
+    morning, 08:12. ...' opened a narration): the packet's own fact read back as prose. Only the
+    leading sentences, only an exact copy (with or without its [[code]]), and never the whole scene.
+    Returns (text, dropped sentences).
+    """
+    from app.narration_pipeline import _sentence_key, split_sentences
+
+    text = str(narration or "")
+
+    def key(sentence: str) -> str:
+        return _sentence_key(re.sub(r"\s*\[\[[^\]]*\]\]", "", str(sentence or "")))
+
+    wanted = {key(f) for f in facts or [] if key(f)}
+    if not wanted or not text.strip():
+        return text, []
+    first_para, sep, rest = text.lstrip().partition("\n\n")
+    dropped: list[str] = []
+    for sentence in split_sentences(first_para):
+        if key(sentence) not in wanted:
+            break
+        dropped.append(sentence)
+    if not dropped:
+        return text, []
+    head = first_para
+    for sentence in dropped:
+        head = head[head.find(sentence) + len(sentence):] if sentence in head else head
+    remaining = (head.strip() + ("\n\n" + rest if sep else "")).strip()
+    if not remaining:
+        return text, []
+    return remaining, dropped
+
+
 def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     """Slim prompt: reuse world packet but demand NAR+OPS output."""
     from app.prompts import build_user_prompt
