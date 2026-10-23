@@ -10978,6 +10978,15 @@ button.miniItemMore {
   border-color: color-mix(in srgb, var(--neon-2) 65%, var(--line));
 }
 
+/* A body (the dead leave a body, 2026-10-24): still listed, quieted, never removed. */
+.castCard.isBody {
+  color: var(--muted);
+}
+
+.castCard.isBody .castMark {
+  opacity: 0.45;
+}
+
 .castMark {
   width: 22px;
   height: 22px;

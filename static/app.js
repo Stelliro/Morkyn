@@ -12455,7 +12455,9 @@ function renderNpcs() {
     ? npcs
         .map((npc) => {
           const combat = npcCombatLine(npc);
+          const body = npcBodyLabel(npc);
           const meta = [
+            body ? escapeHtml(`dead since turn ${npc.died_turn} · ${body}`) : "",
             `${escapeHtml(npc.race || "human")} · ${escapeHtml(npc.role)} · rank ${escapeHtml(npc.rank || "F")} · ${escapeHtml(npc.attitude)} · trust ${escapeHtml(npc.trust ?? 0)} · ${escapeHtml(npc.place)}`,
             combat ? escapeHtml(combat) : "",
           ].filter(Boolean).join(" · ");
@@ -28520,6 +28522,16 @@ window.morkynSpeech = Object.assign(window.morkynSpeech || {}, {
 bindTtsPlayBar();
 bindSpeechModal();
 
+// The dead leave a body (app/interpreter.py, 2026-10-24): a dead person stays
+// in the place's people, marked as a body, never removed.
+function npcBodyLabel(npc) {
+  if (!(Number(npc?.died_turn) > 0)) return "";
+  const body = String(npc.body || "");
+  if (body === "buried") return "buried";
+  if (body === "carried") return "body, carried";
+  return "body";
+}
+
 function localNpcsFromState() {
   if (!state) return [];
   const loc = state.current_location || {};
@@ -28831,10 +28843,11 @@ function paintPlayDock() {
           .map((npc) => {
             const code = String(npc.code || "");
             const token = code ? refToken("npc", code) : "";
-            const talkingNow = talking.has(code.toUpperCase());
+            const body = npcBodyLabel(npc);
+            const talkingNow = !body && talking.has(code.toUpperCase());
             const name = npc.name || code || "Someone";
-            const shownName = `${name}${talkingNow ? " · talking" : ""}`;
-            return `<div class="castCard${talkingNow ? " isTalking" : ""}"><span class="castMark" aria-hidden="true">${escapeHtml(String(name).slice(0, 1))}</span><span class="castCardName" ${dockChipAttrs(shownName)}>${escapeHtml(shownName)}</span>${dockLinkButtons("npc", code, token, name)}</div>`;
+            const shownName = `${name}${body ? ` · ${body}` : talkingNow ? " · talking" : ""}`;
+            return `<div class="castCard${talkingNow ? " isTalking" : ""}${body ? " isBody" : ""}"><span class="castMark" aria-hidden="true">${escapeHtml(String(name).slice(0, 1))}</span><span class="castCardName" ${dockChipAttrs(shownName)}>${escapeHtml(shownName)}</span>${dockLinkButtons("npc", code, token, name)}</div>`;
           })
           .join("")
       : `<p class="empty">No one in focus.</p>`;
@@ -28886,7 +28899,10 @@ function refreshNpcStage() {
     return;
   }
   select.innerHTML = npcs
-    .map((n) => `<option value="${escapeHtml(n.code || n.name)}">${escapeHtml(n.name || n.code)}</option>`)
+    .map((n) => {
+      const body = npcBodyLabel(n);
+      return `<option value="${escapeHtml(n.code || n.name)}">${escapeHtml(`${n.name || n.code}${body ? ` (${body})` : ""}`)}</option>`;
+    })
     .join("");
   const match = npcs.find((n) => (n.code || n.name) === prev) || npcs[0];
   focusedNpcCode = match.code || match.name || "";
