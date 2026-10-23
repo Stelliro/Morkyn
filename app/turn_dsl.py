@@ -332,6 +332,58 @@ _MULTIWORD_LIMIT = {"ROLE": 4, "LOC": 6, "NAME": 4, "TO": 6}
 # read as one quoted argument. Only a bracket at a token edge counts, so
 # "[[L1]]" and arrows inside quoted text are left alone.
 _ANGLE_SPAN_RE = re.compile(r"(?<!\S)<\s*([^<>\n]*?)\s*>(?!\S)")
+# Field words read as flags on any op line.
+_FLAG_KEYS = frozenset({
+    "NAME", "ROLE", "LOC", "ATTITUDE", "RACE", "RANK", "QTY", "TYPE", "DESC", "RARITY", "VIS", "REASON",
+    "NPC", "SUMMARY", "DELTA", "NOTES", "VERDICT", "SKILL",
+})
+
+
+def _op_fields_from_op_list(text: str) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
+    """Each op's own field words, read from the op list the model is given
+    (DSL_SYSTEM_PROMPT), so the table cannot drift from it; and the ops whose
+    first part is a name in quotes (GRANT, TAKE, LOC_NEW, SKILL)."""
+    fields: dict[str, frozenset[str]] = {}
+    name_first: set[str] = set()
+    known = set(_FLAG_KEYS) | {k for keys in _OPCODE_FLAG_KEYS.values() for k in keys}
+    for m in re.finditer(r"^([A-Z_]+): (.+)$", text, re.M):
+        op, body = m.group(1), m.group(2)
+        if op not in OPCODES:
+            continue
+        words = set(re.findall(r"\b[A-Z]{2,}\b", body)) & known
+        if words:
+            fields[op] = frozenset(words)
+        if "NAME" not in words and re.match(r"(?:the [\w' ]+?'s|[^:]*: its) name in quotes", body):
+            name_first.add(op)
+    return fields, frozenset(name_first)
+
+
+# Playtest #28: an op's field label inside a value ("NAME: Beth", "NAME Marisol
+# Carter ROLE doctor LOC clinic"). Only an op's own field words are labels, so
+# "Name: the doctor is Beth" on JOURNAL and "npc: the guard" on FOCUS stay text.
+_OP_FIELDS, _NAME_FIRST_OPS = _op_fields_from_op_list(DSL_SYSTEM_PROMPT)
+
+
+def _labelled_parts(value: str, fields: frozenset[str] | set[str]) -> list[tuple[str, str]] | None:
+    """A quoted value that opens on one of the op's own field labels, split at
+    each of them: "NAME: Beth, ROLE: doctor" -> [(NAME, Beth), (ROLE, doctor)].
+    A label is the field word with a colon (any case), or the word in capitals
+    alone ("NAME Jonah Park"). None when the value does not open on a label."""
+    if not fields:
+        return None
+    words = "|".join(sorted(fields, key=len, reverse=True))
+    label_re = re.compile(rf"(?:^|(?<=[\s,;]))(?:(?i:({words}))\s*:|({words})(?=\s))")
+    marks = [m for m in label_re.finditer(value)]
+    if not marks or marks[0].start() != len(value) - len(value.lstrip()):
+        return None
+    parts: list[tuple[str, str]] = []
+    for at, m in enumerate(marks):
+        end = marks[at + 1].start() if at + 1 < len(marks) else len(value)
+        text = value[m.end():end].strip().strip(",;").strip()
+        if not text:
+            return None
+        parts.append(((m.group(1) or m.group(2)).upper(), text))
+    return parts
 
 
 def _ends_multiword(token: str, flag_keys: set[str]) -> bool:
@@ -387,37 +439,59 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
     opcode = parts[0].upper()
     positionals: list[str] = []
     flags: dict[str, str] = {}
-    flag_keys = {
-        "NAME",
-        "ROLE",
-        "LOC",
-        "ATTITUDE",
-        "RACE",
-        "RANK",
-        "QTY",
-        "TYPE",
-        "DESC",
-        "RARITY",
-        "VIS",
-        "REASON",
-        "NPC",
-        "SUMMARY",
-        "DELTA",
-        "NOTES",
-        "VERDICT",
-        "SKILL",
-    }
+    flag_keys = set(_FLAG_KEYS)
     # Flag words that only mean something on one op. "AT" and "STEP" are
     # ordinary words elsewhere, so they are flags on QUEST lines alone.
     flag_keys = flag_keys | _OPCODE_FLAG_KEYS.get(normalize_opcode(opcode), set())
     force_positional_remaining = _LEADING_POSITIONALS.get(opcode, 0)
+    own_op = normalize_opcode(opcode)
+    own_fields = _OP_FIELDS.get(own_op, frozenset())
+
+    def _is_label(tok: str) -> bool:
+        return (tok.endswith(":") and tok[:-1].upper() in own_fields) or tok in own_fields
+
     i = 1
     while i < len(parts):
         token = parts[i]
+        # Playtest #28: "NAME: Beth ROLE: doctor", "REASON: starting conflict".
+        # One of this op's own field words with a colon is that field, and its
+        # unquoted value runs to the op's next field label. Any other word with
+        # a colon is text ("JOURNAL: fact, Name: the doctor is Beth").
+        if token.endswith(":") and token[:-1].upper() in own_fields and not force_positional_remaining:
+            key_u = token[:-1].upper()
+            i += 1
+            if i < len(parts) and re.fullmatch(r"__STR(\d+)__", parts[i]):
+                flags.setdefault(key_u, strings[int(parts[i][5:-2])])
+                i += 1
+                continue
+            words: list[str] = []
+            while i < len(parts) and not _is_label(parts[i]) and not re.fullmatch(r"__STR\d+__", parts[i]):
+                words.append(_decode_arg_escapes(parts[i]))
+                i += 1
+            if words:
+                flags.setdefault(key_u, " ".join(words))
+            continue
         upper = token.upper()
         str_match = re.fullmatch(r"__STR(\d+)__", token)
         if str_match:
-            positionals.append(strings[int(str_match.group(1))])
+            value = strings[int(str_match.group(1))]
+            # Playtest #28 (Hermes 3 8B, cc87dd29 T10): NPC_NEW: "NAME: Beth"
+            # minted a second person called "NAME: Beth" beside Beth [[B]], and
+            # QUEST "AT: New Vegas" lost its place (T2). The op's own field
+            # labels opening a quoted part label it; they are not its text
+            # ("NAME Marisol Carter ROLE doctor LOC clinic", T14).
+            labelled = _labelled_parts(value, own_fields) if not force_positional_remaining else None
+            if labelled:
+                for key_u, text in labelled:
+                    flags.setdefault(key_u, text)
+                i += 1
+                continue
+            # LOC_NEW "NAME: The Rusty Bar": the name these ops open on, labelled.
+            if own_op in _NAME_FIRST_OPS and not positionals:
+                named = re.match(r"(?i)\s*name\s*:\s*(\S.*)$", value, re.S)
+                if named:
+                    value = named.group(1).strip()
+            positionals.append(value)
             if force_positional_remaining:
                 force_positional_remaining -= 1
             i += 1

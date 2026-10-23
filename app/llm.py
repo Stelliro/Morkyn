@@ -11353,10 +11353,33 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
     # A known name followed by a code nothing holds carries the wrong tag:
     # "Hereward Treloar [[H1]]" for the man coded A (7B run 17, T0).
     known_codes = {str(c).upper() for c in code_to_name}
+
+    def _code_kind(c: str) -> str:
+        c = c.upper()
+        return "person" if re.fullmatch(r"[A-Z]{1,3}", c) else c[:1]
+
+    def _retag(m: re.Match[str], _code: str) -> str:
+        tag = m.group(2).upper()
+        # A code of another kind on a known name is the wrong tag too: a person
+        # linked with a place code, "Jonah [[L1]]" (Hermes 3 8B, cc87dd29 T14),
+        # or a place with a person's code. The name keeps its own code.
+        if tag in known_codes and _code_kind(tag) == _code_kind(_code):
+            return m.group(0)
+        # The tag's own name ends here ("The Mira [[L2]]", a boat named for Mira):
+        # the tag is right.
+        own = str(code_to_name.get(tag) or code_to_name.get(tag.lower()) or "").strip()
+        if own and re.search(rf"{re.escape(own)}\s*$", m.string[: m.end(1)], re.IGNORECASE):
+            return m.group(0)
+        if tag in known_codes and tag != _code.upper():
+            from app import turn_ledger
+
+            turn_ledger.note("prose", "wrong_kind_code", name=m.group(1), code=tag, now=_code)
+        return f"{m.group(1)} [[{_code}]]"
+
     for name_l, code in ordered_names:
         out = re.sub(
             rf"(?<!\[\[)\b({re.escape(name_l)})\s*\[\[([A-Z]{{1,3}}\d{{0,3}})\]\]",
-            lambda m, _code=code: m.group(0) if m.group(2).upper() in known_codes else f"{m.group(1)} [[{_code}]]",
+            lambda m, _code=code: _retag(m, _code),
             out,
             flags=re.IGNORECASE,
         )

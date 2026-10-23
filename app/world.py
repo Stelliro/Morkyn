@@ -9993,8 +9993,17 @@ def _place_only_pointed_at(text: str, needle: str) -> bool:
     return True
 
 
-def _movement_destination_from_input(rows: list[Any], player_input: str, current_name: str) -> Any:
-    """Match a known place named in the player's own words. Exact word-boundary only — no fuzzy guessing."""
+def _movement_destination_from_input(
+    rows: list[Any], player_input: str, current_name: str, bound: Any = None, *, names_only: bool = False
+) -> Any:
+    """Match a known place named in the player's own words. Exact word-boundary only — no fuzzy guessing.
+
+    A place the line names outright wins. Next comes ``bound``, the place the
+    line goes to by reference (#152: a typed #L code or the code the chat
+    showed, checked by entity_kinds.settle_place_reference), and only then a
+    common noun that sits in one known place's name. ``names_only`` stops
+    after the names.
+    """
     lowered = f" {_destination_text(player_input).lower()} "
     found: list[tuple[int, int, Any]] = []
     exact_spans: list[tuple[int, int]] = []
@@ -10041,6 +10050,10 @@ def _movement_destination_from_input(rows: list[Any], player_input: str, current
             if m is not None and not _code_is_origin(lowered, m.start(), m.end()):
                 partial.append((m.start(), len(name), row))
     found += [p for p in partial if not any(s <= p[0] < e for s, e in exact_spans)]
+    if not found and names_only:
+        return None
+    if not found and bound is not None:
+        return bound
     if not found:
         # A known place under its common noun, reached: "When we reach the wreck
         # I set the anchor" left the player at the harbour while the prose worked
@@ -10781,6 +10794,11 @@ def resolve_movement(
 
     rows = conn.execute("SELECT id, code, name, parent_id, kind FROM locations ORDER BY id").fetchall()
     known_codes = {str(row["code"] or "").upper() for row in rows if row["code"]}
+    # The place the line goes to by reference (#152), settled before the turn
+    # by a typed code or the chat's code and one ask (app/entity_kinds.py).
+    from app import entity_kinds
+
+    bound = entity_kinds.place_by_reference(result, rows, current_name)
 
     unasked = _unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration,
                                     current_name=current_name)
@@ -10791,7 +10809,7 @@ def resolve_movement(
         # The prose may still have walked the player into a building here
         # (playtest #33: "You step off the platform and into the med-bay").
         shown = None
-        if not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name):
+        if not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name, bound):
             shown = _venue_shown_in_prose(conn, result, narration, player_input=player_input)
         if shown:
             player_patch["move_to_location"] = shown["name"][:120]
@@ -10812,7 +10830,7 @@ def resolve_movement(
     explicit_name = str(player_patch.get("move_to_location") or "").strip()
     # The player's own words come first (7B run 5 #127): a known place their
     # line goes to, and the places it says they are not going.
-    asked = _movement_destination_from_input(rows, player_input, current_name)
+    asked = _movement_destination_from_input(rows, player_input, current_name, bound)
     # A place asked for only in speech is a request, not a walk: '"Row me out
     # to the wreck now."' moved the player to the wreck while the prose kept
     # them on the dock talking (8B run 147, T26), and '"Row us back to the
@@ -11195,7 +11213,7 @@ def resolve_movement(
     silent_turn = str(player_input or "").lstrip().startswith(
         ("__wait_request__", "__opening_scene_request__", "__continue_scene_request__", "__event_request__")
     )
-    if not silent_turn and not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name):
+    if not silent_turn and not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name, bound):
         shown = _venue_shown_in_prose(conn, result, narration, player_input=player_input)
     if shown:
         player_patch["move_to_location"] = shown["name"][:120]
@@ -11251,7 +11269,7 @@ def resolve_movement(
         player_patch["move_to_location"] = name[:120]
         return {"status": "repaired", "rule": "new_location", "from": current_code, "destination": name}
 
-    named = _movement_destination_from_input(rows, player_input, current_name)
+    named = _movement_destination_from_input(rows, player_input, current_name, bound)
     if named is not None:
         player_patch["move_to_location_code"] = str(named["code"])
         return {
@@ -11928,10 +11946,11 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
 
 
 def _entry_belongs_elsewhere(
-    rows: list[Any], result: dict[str, Any], player_input: str, narration: str, current_name: str
+    rows: list[Any], result: dict[str, Any], player_input: str, narration: str, current_name: str,
+    bound: Any = None,
 ) -> bool:
     """True when this turn travels to another place, so a building the prose enters is not one here."""
-    if _movement_destination_from_input(rows, player_input, current_name) is not None:
+    if _movement_destination_from_input(rows, player_input, current_name, bound) is not None:
         return True
     new_places = []
     for location in result.get("locations") or []:
@@ -20837,6 +20856,11 @@ def _ensure_npcs_from_narration(
         places = {str(r[0] or "") for r in conn.execute("SELECT name FROM locations").fetchall()}
     except Exception:
         places = set()
+    # A name the kind ask settled as a place is not a person: "set off to New
+    # Vegas" filed the city as NPC A (#155).
+    from app import entity_kinds
+
+    places |= entity_kinds.not_people(result)
     # The player is never a person to store: "You are Isk Tarrow, the
     # flat-runner" minted Isk as an NPC (7B run 16, T0).
     try:
@@ -20958,7 +20982,14 @@ def _ensure_npcs_from_narration(
     # Dialogue without a listed speaker still implies at least one face, but
     # only dialogue nobody known speaks (playtest #73: '"Understood," Juliana
     # says' minted Bertram at the street the player had just walked out to).
-    has_dialogue = bool(re.search(r'[“"][^”"]{8,}[”"]', _unattributed_dialogue(conn, text, result)))
+    unattributed = _unattributed_dialogue(conn, text, result)
+    # A quoted line the speaker ask said no person says ('A new message blinks
+    # into existence: "New target detected."', cc87dd29 T2) seeds no stranger.
+    for quote in entity_kinds.quote_not_spoken(result):
+        if quote in unattributed:
+            unattributed = unattributed.replace(quote, " ")
+            turn_ledger.note("npc", "quote_seeds_no_one", quote=quote[:80])
+    has_dialogue = bool(re.search(r'[“"][^”"]{8,}[”"]', unattributed))
     # Lines with a speaker the engine cannot place are not a stranger's when
     # the prose names someone known, wherever their record sits, or gives the
     # line to a name (Saltmarrow #73): Tam's lines on the roof seeded
@@ -24495,6 +24526,14 @@ def apply_turn(
                 continue
             if location.get("_venue_consumed"):
                 continue  # already opened as the venue the player went into (playtest #50)
+            # A person is not a place (#155, the reverse): a new place under a
+            # roster person's name that the kind ask settled as that person.
+            if _match_location_by_name(conn, loc_name) is None:
+                from app import entity_kinds
+
+                if entity_kinds.settled_person(result, loc_name):
+                    turn_ledger.note("place", "person_not_place", name=loc_name)
+                    continue
             # A new place neither the prose nor the player names, and the turn
             # does not travel to, is not stored (8B run 146, T51: LOC_NEW "The
             # Bridge at the Hollow" while the prose walked a muddy trail and the
@@ -24592,6 +24631,14 @@ def apply_turn(
             pass
         try:
             collected_npcs = _roles_stated_in_prose(conn, collected_npcs, narration)
+        except Exception:
+            pass
+        # A place is not a person (#155): a new one named as a place the save
+        # holds or this turn names is not filed.
+        try:
+            from app import entity_kinds
+
+            collected_npcs = entity_kinds.drop_places_from_people(conn, collected_npcs, result)
         except Exception:
             pass
         result["npcs"] = collected_npcs
@@ -24833,7 +24880,22 @@ def apply_turn(
             )
             if seeded and keeperless:
                 bind_venue_keeper(conn, int(loc_id_seed), seed_companions)
-            if seeded:
+            # A person filed this turn whose name the prose tagged with a place
+            # or item code ("Jonah [[L1]]", cc87dd29 T14) gets the repair too,
+            # now that they have their own code (#155).
+            try:
+                filed_now = rows_to_dicts(conn.execute(
+                    "SELECT code, name, role FROM npcs WHERE id > ? ORDER BY id", (int(max_npc_before or 0),)
+                ).fetchall())
+            except Exception:
+                filed_now = []
+            mis_tagged = [
+                p for p in filed_now
+                if str(p.get("name") or "").strip() and re.search(
+                    rf"(?<!\w){re.escape(str(p['name']).strip())}\s*\[\[(?:L|I|E)\d+\]\]", narration
+                )
+            ]
+            if seeded or mis_tagged:
                 # Re-run name repair so prose can pick up new codes/names if needed
                 try:
                     from app.llm import _repair_entity_names_in_turn
@@ -24844,6 +24906,7 @@ def apply_turn(
                             (loc_id_seed,),
                         ).fetchall()
                     ) if loc_id_seed else []
+                    cast2 += [p for p in mis_tagged if all(p.get("code") != c.get("code") for c in cast2)]
                     mini_ctx2 = {
                         "locations": [{"code": "L1", "name": "", "npcs": cast2}],
                         "npcs": cast2,
@@ -24865,6 +24928,15 @@ def apply_turn(
                             mini_ctx2["locations"] = [
                                 {"code": lrow["code"], "name": lrow["name"], "npcs": cast2}
                             ]
+                    if mis_tagged:
+                        # The place codes the prose carries, so a tag of the
+                        # wrong kind on a person's name is known as one.
+                        shown_codes = sorted({c.upper() for c in re.findall(r"\[\[(L\d+)\]\]", narration)})
+                        held = {str(loc.get("code") or "").upper() for loc in mini_ctx2["locations"]}
+                        for code in shown_codes:
+                            prow3 = conn.execute("SELECT code, name FROM locations WHERE code = ?", (code,)).fetchone()
+                            if prow3 is not None and code not in held:
+                                mini_ctx2["locations"].append({"code": prow3["code"], "name": prow3["name"], "npcs": []})
                     repaired2 = _repair_entity_names_in_turn(dict(result), mini_ctx2)
                     if isinstance(repaired2, dict):
                         result = repaired2
@@ -27191,6 +27263,17 @@ def play_turn(
     if isinstance(direction_resolved, dict) and isinstance(result, dict):
         result["_direction_hint"] = direction_resolved
     actual_player_input = journal_input if journal_input is not None else player_input
+    # Person or place (#155), who says an unclaimed line, and the place the
+    # line goes to by reference (#152) are settled now, outside apply_turn's
+    # write block, by one small ask each (app/entity_kinds.py). The line is
+    # the one apply_turn and resolve_movement read.
+    if isinstance(result, dict):
+        try:
+            from app import entity_kinds
+
+            entity_kinds.settle_kinds(result, actual_player_input, ask=not used_fallback)
+        except Exception as exc:
+            turn_ledger.note("npc", "kind_settle_failed", error=f"{type(exc).__name__}: {exc}"[:200])
     try:
         with connect().closing() as _conn_max:
             npc_max_before = int(_conn_max.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
