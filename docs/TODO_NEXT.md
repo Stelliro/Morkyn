@@ -282,6 +282,34 @@ One id per send keeps diffs reviewable.
 | m2 | Bartering (after m1) | Trading goods for goods. Stell: wanted, "likely going to be more difficult". Needs item values in the same base units as m1. |
 | c1 | Combat tab in place of the map | While a fight is on, the map's slot in the play panel becomes a "Combat" tab, instead of the combat scene that appears and closes. Shows who the player is fighting (named and numbered unnamed rows: Ghoul 1, Ghoul 2), each one's health, more detail on each, and a target the player selects (sent with the turn as that person's code, like @A). Reads the engine's encounter and npc rows, not the prose. Follows docs/UI_RULEBOOK.md. |
 
+## General list (Claude's suggestions, Stell 2026-10-24: "add all of them to the todo in order")
+
+Go top-down after c1. Each row is one job; the order is the recommended one.
+
+| Id | Item | Notes |
+|----|------|--------|
+| g1 | Trademark grep before the next release | The test setup used power armor, New Vegas, Deathclaws and bottle caps. A player typing them into their own game is fine; a shipped preset, example pool, screenshot or doc carrying them is not. Grep presets, pools and Media/ before the next tag; also decides #153 (the "is this a Fallout copy" question). |
+| g2 | The 14 permanent test failures | Standing since 2026-10-18; a test that always fails is no signal, and every suite run is diffed against a list. Fix each or delete it. Also the dice-audit flake. |
+| g3 | "Report this turn" button | One button in the game writes a zip of the turn's trace, the save and the last few turns to a folder the player can send. The player's side of "log everything a bug needs". The tester had to relay issues by hand. |
+| g4 | Chips next to the input (selection instead of reading) | Places, people and items in reach appear as chips; tapping one puts its code in the line (#L3, @A), Stell's "tie it into the chat with a hidden id". A move is a move only when the line carries a place code or the engine's travel read is unambiguous; otherwise, when the scene ended elsewhere, the game asks "Go to <place>?" (#46/#76). The combat tab's target picker is the first chip. Replaces the "did the line ask to go" read that failed three engine rounds and two live asks (F184). |
+| g5 | Narrator prompt cut-only pass | The draft prompt measured 31,800 chars (~8,000 tokens) in a 14,336-token window on the 8B (merge1 T2 trace). Act on docs/showcase/prompt-review-2026-10-14.md: remove lines and shorten what stays, add nothing, check the result live on Hermes. |
+| g6 | Hermes 3 baseline run | 100+ turns on Hermes 3 8B logging faults by class (CLAUDE.md run rules). There is no Hermes baseline yet; everything measured long-form was Qwen3. Do it after the attack line lands. |
+| g7 | Evidence into the repo | The ask measurements, replays and reviewers' scripts cited by the docs live in the session's /tmp scratchpad. Copy the small scripts and results to docs/showcase/evidence/ so the numbers can be re-run. |
+| g8 | Recorded turns as tests | Turn the reviewers' replay scripts (recorded Hermes turns through apply_turn, no model) into suite fixtures, so place filing, counts and the attack line are checked on real turns every run. |
+| g9 | Model indicator in the game | A chip showing which model file loaded (from /api/model-status), amber on fallback. Stell had to ask "check that it hasn't gone back to fallback". |
+| g10 | Llama licence line | Hermes 3 is under the Llama 3.1 Community Licence, which asks for "Built with Llama" on distributed materials. Check the exact wording; put the line in the model panel and README. |
+| g11 | Speech without GPL | Piper (and espeak-ng) is GPL-3.0 so the speech pack is not uploaded. Either a non-GPL voice engine, or speech as a separate optional download the player installs themselves, clearly apart from the game. |
+| g12 | .gitattributes and one normalisation commit | Mixed CRLF/LF has bitten four times this week. One deliberate commit normalising line endings, on a clean tree, with .gitattributes keeping them; then the "check with file before editing" rule can go. |
+| g13 | Save backup before a schema migration | Copy world.db to world.db.bak-<version> before any schema change (npcs.dead rewrote old saves in place; the rewind bug showed how that goes wrong). |
+| g14 | LAN pairing code | Port 8000 is open to the whole network with no login for phone play; anyone on a shared network can play, rewind or edit the save. A pairing code shown in the terminal on first connection from a new device. |
+| g15 | Old-save money | With m1: what an existing save's gold becomes. Suggested: 1 old gold = 1 gold (10,000 base units) so a "30 gold" job keeps its meaning. |
+| g16 | Item values in base units | The transaction parser records a value on every item it moves, in m1's base units; bartering (m2) then becomes a comparison the engine already can do. |
+| g17 | Bodies as containers | A body (the dead leave one) holds items; "I search the dead ghoul" is a transaction the parser already knows how to apply. |
+| g18 | Reading options | Dyslexia-friendlier font, wider line spacing, larger-text toggle, within docs/UI_RULEBOOK.md; the speech module is the other half once it ships. |
+| g19 | Tell players the codes exist | One line under the input about @A / #L1 until g4's chips make them visible. |
+| g20 | Hardware expectations on first run | Before the 5 GB model download: the download size, 10-40 s turns on a 4070 Ti, minutes on CPU. |
+| g21 | Ledger noise: secrets.bin | Every turn swallows the same missing-file error 26 times (user_store._read_secrets). One exists() check; keeps the swallowed list readable for real failures. |
+
 ## Planned (Stell, 2026-10-24, future change)
 
 "for a future change, i want to add the unaccessable locations to the areas the pleyer can go and add more in depth theft"
