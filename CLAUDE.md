@@ -62,6 +62,10 @@ belong to, with the date).
   `0.11.1`, `0.11.2` and on. On a push: rename the section with date and a `>` summary, set
   `APP_VERSION` in app/main.py, the two README version spots and the changelogs/ "Latest"
   line, tag `v0.11.N`, push main and the tag. The number only goes up.
+  Stell (2026-10-23) asked to get "0.10.2" ready and, asked which, chose 0.11.0 as recorded
+  here: a 0.10.x number now would sort below the 0.11.0 builds already made. The 0.11.0
+  section, README, `changelogs/0.11.md` and CHANGELOGS.md are written; the tag and push wait
+  for the ask, and the `qt-window` pack needs the packs workflow run (`packs: true`).
 - **Playtests: log only.** While Stell is playtesting, log each reported issue in
   docs/PLAYTEST_ISSUES.md (where, what, evidence, first guess at cause) and acknowledge. No fixes
   until Stell says testing is done (2026-10-05).
