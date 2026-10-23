@@ -6,7 +6,7 @@ dead ghoul" in the tunnel was then written "In the dim glow of the clinic's emer
 clinic's medic watching. Three fixes, each tested here with the recorded lines and prose:
 
 1. a part of a place reached after leaving the place stood in is not filed inside it;
-2. a scene where_ended checks as ending elsewhere, on a line that asked to go nowhere, is re-drafted once
+2. a scene where_ended checks as ending elsewhere, on a line that is clearly a staying act, is re-drafted once
    with one correction riding on the re-draft only (app/scene_drift.py); the better draft is kept;
 3. an opening sentence that copies a facts_to_keep entry word for word is dropped.
 
@@ -293,7 +293,13 @@ class APartIsFiledWhereTheCheckedAnswerAndTheLineAgree(unittest.TestCase):
 
 
 class ALineThatMovesIsNeverRedrafted(unittest.TestCase):
-    """The reviewer's corpus (vdr-scripts/asks.py): a line whose act is going somewhere asks to go."""
+    """Only a line that is clearly a staying act is re-drafted (world.line_stays_here).
+
+    The reviewers' corpora (vdr-scripts/asks.py, v2/asks2.py): a list of motion verbs missed "I make for the
+    docks", "I limp back to camp" and more, and each was re-drafted back in place. The default is now the other
+    way: a line is left alone unless its intent and the verb leading each act are combat, trade, talk or a
+    look/search, with no movement read at all.
+    """
 
     MOVES = (
         "I creep into the ruined subway tunnel where a pack of ghouls is feeding on a carcass",
@@ -302,12 +308,29 @@ class ALineThatMovesIsNeverRedrafted(unittest.TestCase):
         "I explore the tunnel further", "I continue down the tunnel", "I take the stairs down", "I crawl through the vent",
         "I get out of here", "I push on", "I ask Mara to take me to the clinic", "I head back to the clinic",
         "I flee", "I go upstairs", "I climb out of the tunnel",
+        # Round-2 review: the verbs the motion list missed.
+        "I make for the docks", "I scramble up the rocks to the ridge", "I hop on the cart to Dunmere",
+        "I squeeze through the crack in the wall", "I backtrack to the crossroads", "I limp back to camp",
+        "I take the road to Saltmarrow", "I hurry across the square to the well", "I wade across the stream",
+    )
+    # Twenty fresh ways of going, none of them in either corpus.
+    FRESH_MOVES = (
+        "I trudge up the hill to the watchtower", "I amble down to the river", "I bolt for the door",
+        "I steal away into the night", "I shoulder my pack and strike out for the coast",
+        "I paddle the canoe across the lake", "I shuffle over to the corner booth",
+        "I trek through the wastes toward the old dam", "I clamber over the rubble into the next street",
+        "I tag along with the caravan to Dunmere", "I dart across the road", "I slink off into the alley",
+        "I hitch a ride to the next town", "I drift back toward the market stalls", "I stumble out into the daylight",
+        "I make tracks for the border", "I lead the horse down to the stables", "I hurry home",
+        "I take off running toward the trees", "I duck under the rope and into the back room",
     )
     STAYS = (
         "i search the dead ghoul", "i shoot the closest ghoul", "i shoot Dr. Vasilis",
         "i buy some bandages from Dr. Vasilis for 2 gold", "i say hi to Dr. Vasilis", "I look around",
-        "I talk to the medic", "I wait for dawn", "I rest here for the night", "a group of 4 ghouls BRUTALLY attack me",
+        "I talk to the medic", "I stab the raider with my knife", "I sell my old rifle to the trader",
     )
+    # Not clearly staying either: rest, an unread act, someone else's act. Left alone (a missed re-draft).
+    UNCLEAR = ("I wait for dawn", "I rest here for the night", "a group of 4 ghouls BRUTALLY attack me", "hi")
 
     def test_the_corpus(self):
         from app import world
@@ -315,10 +338,30 @@ class ALineThatMovesIsNeverRedrafted(unittest.TestCase):
 
         _tunnel_world()
         with connect().closing() as conn:
-            for line in self.MOVES:
-                self.assertTrue(world.line_asks_to_go(conn, line), line)
+            for line in self.MOVES + self.FRESH_MOVES + self.UNCLEAR:
+                self.assertFalse(world.line_stays_here(conn, line), line)
             for line in self.STAYS:
-                self.assertFalse(world.line_asks_to_go(conn, line), line)
+                self.assertTrue(world.line_stays_here(conn, line), line)
+
+    def test_a_fresh_move_under_a_checked_elsewhere_is_not_redrafted(self):
+        from app import scene_drift, where_ended
+
+        _tunnel_world()
+        previous = where_ended.set_ask(lambda s, u: "B)" if s == where_ended.SYSTEM else "No.")
+        try:
+            for line in self.FRESH_MOVES:
+                calls: list = []
+                first = {"narration": T4_PROSE, "player": {}}
+                kept = scene_drift.check(first, line, lambda note: calls.append(note) or {"narration": "x", "player": {}})
+                self.assertEqual(calls, [], line)
+                self.assertIs(kept, first, line)
+            # The same answers on the staying line do re-draft it.
+            calls = []
+            scene_drift.check({"narration": T4_PROSE, "player": {}}, T4_LINE,
+                              lambda note: calls.append(note) or {"narration": "x", "player": {}})
+            self.assertEqual(len(calls), 1)
+        finally:
+            where_ended.set_ask(previous)
 
     def test_unnamed2_t2_under_a_checked_elsewhere_is_not_redrafted(self):
         # Recorded unnamed2 T2 from the sanctuary; a B/No. answer re-drafted it on 5cbf444.
