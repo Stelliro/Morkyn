@@ -13,10 +13,12 @@ in the town, so at T3 "i shoot Nate" the attack ask found nobody at the
 player's place. And integ-r4 T1 (turn-6b5a9245-000002): Dr. Vasilis seeded in
 the clinic the player walked into.
 
-The model is mocked. The one ask this path uses is the interpreter's measured
-hold ask, "Does <Name> say or do anything in it?" (Hermes 3 8B: 94%, no false
-no; docs/showcase/ask-live-eval-2026-10-24.md); its mocked reply is the right
-answer for the passage.
+The model is mocked. The one ask this path uses is the interpreter's presence
+pair, shaped like the measured body pair: "Is <Name> with the player at the end
+of it?" then "Has the player walked away from <Name> at the end of it?", which
+must answer no (not yet measured live). Its mocked reply is the right answer
+for the passage. The reverse cases are the reviewer's probes of e91cea9
+(scratchpad verifyP-place-scratch/probe.py, A-G).
 
 Run:  cd tests && python -m unittest test_people_where_the_player_is_33
 """
@@ -72,26 +74,26 @@ R4_T1 = (
     '"What brings you here, traveler?" he asks.'
 )
 
-ACTS = "say or do anything in it"
-
-
 class Model:
     """Replies to the interpreter's asks by what they ask ("No" unless given)."""
 
-    def __init__(self, acts: dict[str, str] | None = None):
-        self.acts = dict(acts or {})  # name -> reply to "Does <name> say or do anything in it?"
+    def __init__(self, present: dict[str, str] | None = None, walked: dict[str, str] | None = None):
+        self.present = dict(present or {})  # name -> reply to "Is <name> with the player at the end of it?"
+        self.walked = dict(walked or {})  # name -> reply to "Has the player walked away from <name> ...?"
         self.calls: list[str] = []
 
     def __call__(self, system: str, user: str, **kwargs) -> str:
         self.calls.append(user)
-        if ACTS in user:
-            for name, reply in self.acts.items():
-                if f"Does {name} say or do anything" in user:
-                    return reply
+        for name, reply in self.present.items():
+            if f"Is {name} with the player at the end of it?" in user:
+                return reply
+        for name, reply in self.walked.items():
+            if f"Has the player walked away from {name} at the end of it?" in user:
+                return reply
         return "No"
 
     def asked_about(self, name: str) -> bool:
-        return any(f"Does {name} say or do anything" in c for c in self.calls)
+        return any(f"Is {name} with the player at the end of it?" in c for c in self.calls)
 
 
 def _fresh_world() -> int:
@@ -188,14 +190,20 @@ class FinalReplayNateIsWhereThePlayerMetHim(unittest.TestCase):
         self.t1 = FINAL_T1.replace("[[A]]", f"[[{self.nate}]]")
 
     def test_t1_nate_at_his_workbench_is_filed_in_the_clinic(self):
-        model = Model({"Nate": "Yes, Nate says something"})
+        model = Model({"Nate": "Yes, Nate is with the player"})
         _play(_turn(self.t1, move_to=CLINIC), FINAL_T1_LINE, model)
         self.assertEqual(_here_id(), self.clinic)
         self.assertTrue(model.asked_about("Nate"))
+        self.assertTrue(any("Has the player walked away from Nate at the end of it?" in c for c in model.calls))
         self.assertEqual(_place_of(self.nate), self.clinic)
 
+    def test_a_yes_the_check_does_not_confirm_moves_nobody(self):
+        """Reverse: "walked away from Nate" answered yes; the first yes alone moves nobody."""
+        _play(_turn(self.t1, move_to=CLINIC), FINAL_T1_LINE, Model({"Nate": "Yes"}, {"Nate": "Yes"}))
+        self.assertEqual(_place_of(self.nate), self.town)
+
     def test_t3_the_attack_ask_finds_nate_here(self):
-        _play(_turn(self.t1, move_to=CLINIC), FINAL_T1_LINE, Model({"Nate": "Yes, Nate says something"}))
+        _play(_turn(self.t1, move_to=CLINIC), FINAL_T1_LINE, Model({"Nate": "Yes"}))
         check, report = _attack_people(FINAL_T3_LINE)
         self.assertIn(self.nate, report.get("people") or [])
         self.assertEqual(attack_intent.attack_target(check), self.nate)
@@ -296,7 +304,7 @@ class SomeoneNamedAsElsewhereStaysElsewhere(unittest.TestCase):
     def test_the_mayor_walking_in_is_here(self):
         """The other way round: shown with the player, he is here."""
         prose = f"The door bangs open. Aldric Vane strides in and nods at Kim [[{self.kim}]]. \"Busy morning,\" he says."
-        _play(_turn(prose), "I wait.", Model({"Aldric Vane": "Yes, he says something"}))
+        _play(_turn(prose), "I wait.", Model({"Aldric Vane": "Yes, he is"}))
         self.assertEqual(_place_of(self.mayor), self.clinic)
 
     def test_someone_left_behind_when_the_player_leaves(self):
@@ -330,8 +338,20 @@ class TheDecisionIsOneHelper(unittest.TestCase):
     def test_shown_in_the_clinic_is_here(self):
         self.assertEqual(self._decide(FINAL_T1.replace("[[A]]", f"[[{self.nate}]]"), self.town), (self.clinic, "filed_here"))
 
-    def test_the_town_around_the_clinic_is_not_elsewhere(self):
-        text = f"Nate [[{self.nate}]], the best tech in {TOWN} [[L{self.town}]], looks up from his bench."
+    def test_the_town_and_the_clinic_in_one_sentence_is_here(self):
+        text = f"Nate [[{self.nate}]], the best tech in {TOWN} [[L{self.town}]], looks up from his bench in the clinic."
+        self.assertEqual(self._decide(text), (self.clinic, "filed_here"))
+
+    def test_the_town_seen_through_the_clinic_window_is_elsewhere(self):
+        """Regression 3 (probe B): the parent place named, the player's place not: he stays in the town."""
+        text = f"Through the grimy window you see Nate [[{self.nate}]] hauling crates across {TOWN} [[L{self.town}]]."
+        self.assertEqual(self._decide(text), (self.town, "shown_elsewhere"))
+
+    def test_the_last_sentence_that_places_him_decides(self):
+        text = (
+            f"Through the window you see Nate [[{self.nate}]] crossing {TOWN} [[L{self.town}]]. "
+            "A moment later Nate pushes open the door and steps into the clinic."
+        )
         self.assertEqual(self._decide(text), (self.clinic, "filed_here"))
 
     def test_the_town_the_player_just_left_is_elsewhere(self):
@@ -346,6 +366,104 @@ class TheDecisionIsOneHelper(unittest.TestCase):
             conn.execute("UPDATE npcs SET died_turn = 1 WHERE code = ?", (self.nate,))
             conn.commit()
         self.assertEqual(self._decide(FINAL_T1.replace("[[A]]", f"[[{self.nate}]]"))[1], "dead")
+
+
+class TheReviewersProbes(unittest.TestCase):
+    """The reverse cases e91cea9 got wrong (verify:place, probes A-G); base kept each one where it was."""
+
+    def setUp(self):
+        self.town = _fresh_world()
+        self.clinic, self.clinic_code = _add_place(CLINIC, parent_id=self.town, kind="clinic")
+
+    def _inside_clinic(self):
+        with db.connect().closing() as conn:
+            conn.execute("UPDATE player SET current_location_id = ?", (self.clinic,))
+            conn.commit()
+
+    def test_a_new_doctor_waving_from_the_clinic_doorway_is_in_the_clinic(self):
+        """A: the player in the square; "the clinic" with no code names the one clinic here."""
+        prose = "Across the dusty square, a woman named Dr. Ames waves at you from the doorway of the clinic."
+        _play(_turn(prose, npcs=[{"name": "Dr. Ames", "role": "doctor", "location": CLINIC}]), "I look around.")
+        self.assertEqual(_here_id(), self.town)
+        self.assertEqual(_place_of_name("Dr. Ames"), self.clinic)
+
+    def test_b_a_porter_crossing_the_town_seen_through_the_window_stays_in_the_town(self):
+        self._inside_clinic()
+        prose = f"Through the grimy window you see a porter, Bram Okafor, hauling crates across {TOWN} [[L{self.town}]]."
+        _play(_turn(prose, npcs=[{"name": "Bram Okafor", "role": "porter", "location": TOWN}]), "I look out the window.")
+        self.assertEqual(_place_of_name("Bram Okafor"), self.town)
+
+    def test_c_the_mayor_told_at_the_town_hall_by_its_short_name_stays_there(self):
+        hall, _code = _add_place(f"{TOWN} Town Hall", parent_id=self.town)
+        self._inside_clinic()
+        kim = _add_npc("Kim", self.clinic, role="cleaner")
+        prose = f"Kim [[{kim}]] leans on her mop and tells you that the mayor, Aldric Vane, spends his days at the town hall."
+        npcs = [{"name": "Aldric Vane", "role": "mayor", "location": f"{TOWN} Town Hall"}]
+        _play(_turn(prose, npcs=npcs), "where is the mayor?")
+        self.assertEqual(_place_of_name("Aldric Vane"), hall)
+
+    def test_out_in_the_street_names_the_one_street_here(self):
+        street, _code = _add_place("Low Street", parent_id=self.town)
+        self._inside_clinic()
+        prose = "Out in the street, a boy named Pip Harlan chalks a hopscotch grid on the cracked asphalt."
+        _play(_turn(prose, npcs=[{"name": "Pip Harlan", "role": "urchin", "location": "Low Street"}]), "I look out.")
+        self.assertEqual(_place_of_name("Pip Harlan"), street)
+
+    def test_e_a_keeper_calling_from_inside_their_shop_stays_in_it_even_on_a_yes(self):
+        """E: the player in the square. The sentence puts him in the clinic, so even a confirmed yes keeps him there."""
+        ames = _add_npc("Dr. Ames", self.clinic, role="doctor")
+        prose = "From inside the clinic, Dr. Ames calls out to you through the open door: \"Come in if you're hurt!\""
+        _play(_turn(prose), "I stand in the square.", Model({"Dr. Ames": "Yes"}))
+        self.assertEqual(_place_of(ames), self.clinic)
+
+    def test_f_someone_calling_after_the_player_who_left_stays_on_a_no(self):
+        """F: the pair as the passage reads (not with the player; the player walked away) moves nobody."""
+        street, _code = _add_place("Low Street", parent_id=self.town)
+        self._inside_clinic()
+        nate = _add_npc("Nate", self.clinic, role="field tech")
+        prose = "You push open the door and step out of the clinic onto Low Street. Behind you, Nate calls, \"Mind the fences!\""
+        model = Model({"Nate": "No"}, {"Nate": "Yes"})
+        _play(_turn(prose, move_to="Low Street"), "I leave the clinic and walk to Low Street.", model)
+        self.assertEqual(_here_id(), street)
+        self.assertTrue(model.asked_about("Nate"))
+        self.assertEqual(_place_of(nate), self.clinic)
+
+    def test_g_the_mayor_talked_about_in_narration_stays_on_a_no(self):
+        hall, _code = _add_place("Town Hall", parent_id=self.town)
+        self._inside_clinic()
+        kim = _add_npc("Kim", self.clinic, role="cleaner")
+        mayor = _add_npc("Aldric Vane", hall, role="mayor")
+        prose = f"Kim [[{kim}]] tells you Aldric Vane signed the clinic's papers yesterday and complained about the cost."
+        model = Model({"Aldric Vane": "No"})
+        _play(_turn(prose), "who runs this town?", model)
+        self.assertTrue(model.asked_about("Aldric Vane"))
+        self.assertEqual(_place_of(mayor), hall)
+
+
+class PlacesNamedUseTheEnginesPlaceMatching(unittest.TestCase):
+    def setUp(self):
+        self.town = _fresh_world()
+        self.clinic, self.clinic_code = _add_place(CLINIC, parent_id=self.town, kind="clinic")
+        self.hall, self.hall_code = _add_place(f"{TOWN} Town Hall", parent_id=self.town)
+
+    def _named(self, sentence: str, here: int = 0) -> set[int]:
+        with db.connect().closing() as conn:
+            match = whereabouts._matcher(conn)
+        return whereabouts.places_named(sentence, match, whereabouts.near(match, here or self.clinic))
+
+    def test_by_code_full_name_two_words_and_kind(self):
+        self.assertEqual(self._named(f"He waits at [[{self.hall_code}]]."), {self.hall})
+        self.assertEqual(self._named(f"He waits in {TOWN} Town Hall."), {self.hall})
+        self.assertEqual(self._named("He waits at the town hall."), {self.hall})
+        self.assertEqual(self._named("He waits by the clinic's door."), {self.clinic})
+        self.assertEqual(self._named(f"He walks across {TOWN}."), {self.town})
+
+    def test_a_kind_two_places_here_share_names_neither(self):
+        _add_place("Eastside Clinic", parent_id=self.town, kind="clinic")
+        self.assertEqual(self._named("He waits at the clinic."), set())
+
+    def test_inside_speech_is_not_named(self):
+        self.assertEqual(self._named('"Meet me at the town hall," he says.'), set())
 
 
 class TheInterpreterAsksOnlyAboutPeopleElsewhere(unittest.TestCase):
@@ -370,11 +488,41 @@ class TheInterpreterAsksOnlyAboutPeopleElsewhere(unittest.TestCase):
         report = {"asks": [], "held": [], "events": [], "unconfirmed": []}
         return I.with_player(text, events or [], self._records(), ask, report), asked
 
-    def test_someone_elsewhere_shown_acting_is_asked_about(self):
-        codes, asked = self._run(FINAL_T1)
+    def _run_replies(self, text: str, first: str, check: str) -> list[str]:
+        def ask(phase: str, prompt: str, max_tokens: int) -> str:
+            return first if phase == I.PHASE_WITH_PLAYER else check
+
+        report = {"asks": [], "held": [], "events": [], "unconfirmed": []}
+        return I.with_player(text, [], self._records(), ask, report)
+
+    def test_someone_elsewhere_named_is_asked_the_presence_pair(self):
+        def ask(phase: str, prompt: str, max_tokens: int) -> str:
+            asked.append((phase, prompt))
+            return "Yes" if phase == I.PHASE_WITH_PLAYER else "No"
+
+        asked: list[tuple[str, str]] = []
+        report = {"asks": [], "held": [], "events": [], "unconfirmed": []}
+        codes = I.with_player(FINAL_T1, [], self._records(), ask, report)
         self.assertEqual(codes, ["A"])
-        self.assertEqual(len(asked), 1)
-        self.assertIn("Does Nate say or do anything in it?", asked[0])
+        self.assertEqual([p for p, _ in asked], [I.PHASE_WITH_PLAYER, I.PHASE_WITH_PLAYER_CHECK])
+        self.assertTrue(asked[0][1].endswith("\n\nIs Nate with the player at the end of it? Answer yes or no."))
+        self.assertTrue(asked[1][1].endswith("\n\nHas the player walked away from Nate at the end of it? Answer yes or no."))
+        self.assertTrue(asked[0][1].startswith("Read this.\n\n"))
+        self.assertNotIn("say or do anything", asked[0][1])
+
+    def test_only_a_confirmed_yes_counts(self):
+        self.assertEqual(self._run_replies(FINAL_T1, "Yes", "Yes"), [])  # walked away: not confirmed
+        self.assertEqual(self._run_replies(FINAL_T1, "No", "No"), [])
+        self.assertEqual(self._run_replies(FINAL_T1, "Yes", "maybe"), [])  # unread check: no action
+
+    def test_at_most_four_people_a_turn(self):
+        people = [{"code": c, "name": n, "died_turn": 0, "location_id": 1}
+                  for c, n in zip("ABCDEF", ("Nate", "Kim", "Beth", "Omar", "Rhea", "Tobias"))]
+        records = {"people": people, "places": [{"code": "L1", "name": TOWN}, {"code": "L2", "name": CLINIC}], "here_id": 2}
+        text = " ".join(f"{p['name']} [[{p['code']}]] nods." for p in people)
+        report = {"asks": [], "held": [], "events": [], "unconfirmed": []}
+        codes = I.with_player(text, [], records, lambda phase, p, m: "Yes" if phase == I.PHASE_WITH_PLAYER else "No", report)
+        self.assertEqual(len(codes), I.MAX_PEOPLE)
 
     def test_nobody_here_or_dead_or_only_spoken_of_is_asked_about(self):
         text = f'Kim [[B]] sweeps. Beth [[C]] lies still. "Nate went to the {TOWN}," Kim says.'

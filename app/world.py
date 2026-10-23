@@ -10688,11 +10688,19 @@ def _line_names_place(line: str, words: list[str]) -> bool:
         # The whole word, plural or possessive: "dock" is not named by "the old
         # dockyard", which walked the player to The Dock (8B run 154, T7).
         return bool(re.search(rf"\b{re.escape(words[0])}(?:s|es|['’]s|s['’])?\b", line))
+    return place_pair_span(line, words) is not None
+
+
+def place_pair_span(line: str, words: list[str]) -> tuple[int, int] | None:
+    """Where a lower-cased line names a place by its last two words side by side (_line_names_place)."""
+    if len(words) < 2:
+        return None
     # Filler words between them still name it: "the drowned lower district"
     # for "Drowned Lower District", whose words skip "lower" (8B run 17, T1).
     filler = "|".join(sorted(_PLACE_FILLER_WORDS, key=len, reverse=True))
     pair = rf"\b{re.escape(words[-2])}(?:['’]s)?[\s-]+(?:(?:{filler})[\s-]+){{0,2}}{re.escape(words[-1])}"
-    return bool(re.search(pair, line))
+    found = re.search(pair, line)
+    return found.span() if found else None
 
 
 _REACH_WORDS_RE = re.compile(r"\b(?:into|inside|in\s+through|up\s+to|out\s+to|reach\w*|arriv\w*)\b", re.IGNORECASE)

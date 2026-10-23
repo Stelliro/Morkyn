@@ -133,6 +133,7 @@ PHASE_BODY_BURIED_CHECK = "interpreter_body_buried_check"
 PHASE_BODY_CARRIED = "interpreter_body_carried"
 PHASE_BODY_CARRIED_CHECK = "interpreter_body_carried_check"
 PHASE_WITH_PLAYER = "interpreter_with_player"
+PHASE_WITH_PLAYER_CHECK = "interpreter_with_player_check"
 
 KIND_DIED = "died"
 KIND_DESTROYED = "destroyed"
@@ -476,6 +477,15 @@ def ask_body_here_check(name: str, passage: str) -> str:
     return f"Read this.\n\n{passage}\n\nHas the player walked away from {name}'s body at the end of it? Answer yes or no."
 
 
+def ask_with_player(name: str, passage: str) -> str:
+    # The body pair's shape for a living person (#33): presence, not acting. Not yet measured live.
+    return f"Read this.\n\n{passage}\n\nIs {name} with the player at the end of it? Answer yes or no."
+
+
+def ask_with_player_check(name: str, passage: str) -> str:
+    return f"Read this.\n\n{passage}\n\nHas the player walked away from {name} at the end of it? Answer yes or no."
+
+
 def ask_body_buried(name: str, passage: str) -> str:
     # Measured (live-eval-4): "buried" took Beth's flesh dissolved in an acid pit for a burial; "in a grave": 97%.
     return f"Read this.\n\n{passage}\n\nIs {name}'s body in a grave at the end of it? Answer yes or no."
@@ -755,14 +765,18 @@ def with_player(
     text: str, events: list[dict[str, Any]], records: dict[str, Any], ask: Ask, report: dict[str, Any],
     matcher: Matcher | None = None,
 ) -> list[str]:
-    """The codes of living people on record at another place than the player's whom the scene shows acting (#33).
+    """The codes of living people on record at another place than the player's whom the scene shows with the player (#33).
 
-    The hold's measured ask about one name, "Does <Name> say or do anything
-    in it?" (Hermes 3 8B: no false no; its false yes was a memory sentence),
-    asked only of people the prose names outside quoted speech. The engine
-    decides what a yes moves (app/whereabouts.decide: not someone the prose
-    shows at another place, or left behind). Someone who died this turn is
-    the body asks' (place_bodies), not this one's.
+    A presence pair in the shape of the measured body pair (live-eval-4: "Is
+    <Name>'s body with the player at the end of it?" 92%, its check "Has the
+    player walked away from <Name>'s body ...?" 27/27): "Is <Name> with the
+    player at the end of it?", then "Has the player walked away from <Name>
+    at the end of it?", which must answer no. Presence, not acting: a keeper
+    calling from inside their shop to the player outside acts but is not with
+    the player. Asked only of people the prose names outside quoted speech, at
+    most MAX_PEOPLE a turn. The engine decides what a confirmed yes moves
+    (app/whereabouts.decide: not someone a sentence puts at another place, or
+    left behind). Someone who died this turn is the body asks' (place_bodies).
     """
     from app.venues import strip_speech
 
@@ -784,9 +798,12 @@ def with_player(
         passage = passage_for(text, row, matcher=match)
         if not name or not passage:
             continue
-        acts = yes_no(_ask(ask, report, PHASE_WITH_PLAYER, ask_hold(name, passage)))
-        report.setdefault("with_player", []).append({"code": row.get("code"), "name": name, "acts": acts})
-        if acts is True:
+        first = yes_no(_ask(ask, report, PHASE_WITH_PLAYER, ask_with_player(name, passage)))
+        present = first is True and _confirmed(
+            ask, report, PHASE_WITH_PLAYER_CHECK, ask_with_player_check(name, passage), row, "with_player"
+        )
+        report.setdefault("with_player", []).append({"code": row.get("code"), "name": name, "asked": first, "with_player": present})
+        if present:
             out.append(str(row.get("code") or ""))
     return out
 
