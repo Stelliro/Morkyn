@@ -370,6 +370,66 @@ def ask_which(name: str, paragraph: str, sentence: str) -> str:
     )
 
 
+def ask_talked_to(name: str, line: str) -> str:
+    return f"Read this.\n\nThe player: {line}\n\nIs the player talking to {name}? Answer yes or no."
+
+
+# ---------------------------------------------------------------------------
+# An act aimed at the dead (#164): the engine answers it before the prose
+# ---------------------------------------------------------------------------
+
+PHASE_TALKED_TO = "interpreter_dead_talked_to"
+MAX_TALKED_TO = 2
+
+
+def dead_talked_to(line: str, records: dict[str, Any], ask: Ask, report: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """The dead person the player's own line talks to, or None.
+
+    'i say hi to Dr. Theo' a turn after his death (live replay, #164): nothing
+    told the narrator what that greeting comes to, and the 8B wrote another
+    scene. Candidates are the records' dead that the line names, by code or by
+    a full name only that row has (the Matcher, as for the prose); a name a
+    living row shares names nobody. One positive ask per candidate, about the
+    line alone. The caller asks only when the engine already reads the line as
+    talk (its social check), so the two agree before the engine answers.
+    """
+    report = report if report is not None else {"asks": []}
+    report.setdefault("asks", [])
+    text = str(line or "").strip()
+    if not text:
+        return None
+    match = Matcher(records.get("people"), records.get("places"))
+    dead = [row for row in match.people if is_dead(row)]
+    for row in match.named(text, dead, records.get("player_names"))[:MAX_TALKED_TO]:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        if yes_no(_ask(ask, report, PHASE_TALKED_TO, ask_talked_to(name, plain(text)), max_tokens=4)) is True:
+            return row
+    return None
+
+
+def dead_talk_outcome(row: dict[str, Any], line: str, here: bool = False) -> dict[str, Any]:
+    """The engine's outcome for talk to a dead person, in the act_outcome shape the draft already reads."""
+    name = str(row.get("name") or "").strip()
+    code = str(row.get("code") or "").strip()
+    label = f"{name} [[{code}]]" if code else name
+    means = (
+        f"{label} is dead; the body lies where it fell. {name} does not answer."
+        if here
+        else f"{label} is dead and does not answer."
+    )
+    return {
+        "act": str(line or "").strip()[:100],
+        "skill": "",
+        "proficiency": "",
+        "outcome": "no answer",
+        "degree": "no roll",
+        "means": means,
+        "dead": code,
+    }
+
+
 # ---------------------------------------------------------------------------
 # The pass
 # ---------------------------------------------------------------------------

@@ -2207,7 +2207,9 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
             "power": target.get("attack_max") or target.get("power"),
         }
     else:
-        pool = _npc_pool_from_context(ctx)
+        # The dead are nobody's other side (#164: "i say hi to Dr. Theo" rolled
+        # persuasion against him a turn after his death and wrote his attitude).
+        pool = [n for n in _npc_pool_from_context(ctx) if not int(n.get("died_turn") or 0) > 0]
         # The engine's own record of who is in the scene this turn
         # (conversation.resolve: "present" is the scene's members here, plus
         # whoever the line addresses). Someone the engine does not place here
