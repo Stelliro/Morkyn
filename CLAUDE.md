@@ -170,7 +170,10 @@ belong to, with the date).
   grows into a transaction parser: what the player and the people here hold before the act, what
   the scene shows changing, applied by the engine. For attacks: "the llm should roll before they
   decide on how the player or an npc attacks and should be determined by the roll" (how the roll
-  reaches the prose was left open; see the plan in the session of 2026-10-24).
+  reaches the prose: Stell chose, the same day, "Engine writes the outcome line": the roll comes
+  first, the engine writes the attack's result line itself from the roll and the weapon, the
+  narrator writes the scene around it, and when the draft leaves the line out or contradicts it
+  the engine puts its own line in; no model rewrite, no extra model call).
 - **#157's cross-reference is a system, not a fix** (2026-10-24): "this will be a big undertaking,
   as to do this we will need to ensure we build a cross referencing system between npc's and the
   llm, as well as what the player says and what the llm what the llm wants to say". Design it as
