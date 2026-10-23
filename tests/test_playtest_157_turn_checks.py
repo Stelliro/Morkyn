@@ -1,12 +1,15 @@
-"""The turn checker asks the engine's questions one at a time (playtest #157 b, #77, #156).
+"""The turn checks are the engine's own; the broad verdict and the act asks are gone (playtest #157 b, #77, #156).
 
 cc87dd29 (Linux .deb playtest, Hermes 3 8B): the broad verifier listed eight
 rules that do not exist and passed (T5), flagged the laser rifle the player's
 own line names and passed (T8/T9), and in T9 patched the player's shot into a
-punch while saying so in its own issues. app/turn_checks.py replaces the broad
-verdict: one fixed question with its fact (the player's line), yes or no, and
-on a no one sentence is rewritten toward the player's line. Nothing else in
-the turn is patched.
+punch. It is off by default. Round 2's replacement, one model question about
+the player's act with a sentence pick and a rewrite, was measured live on the
+8B and dropped: it said yes on 27/36 scenes that do not show the act (T9's
+punch, T13 with no attack at all), and its rewrite leaked '@Cbeth' and wrote
+'killing her instantly' into a scene where Beth goes on talking.
+app/turn_checks.py now writes self_check from the engine's checks alone:
+passed means the engine found nothing it could not act on.
 
 a1fedf99 (same playtest): eight turns ran on the offline narrator. The turn
 payload and the save now say so with the problem's tips fitted to the build.
@@ -15,7 +18,6 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -33,18 +35,6 @@ T9_INPUT = (
     "the player is talking to Beth [[B]] (tagged by the player). Only Beth [[B]] answers the player.; "
     "@Cbeth = Beth (B, NPC)"
 )
-# The final prose of T9: the verifier's patch made the shot a punch.
-T9_PROSE = (
-    "The morning light filters through the grimy clinic windows, casting a dim glow over the tense standoff "
-    "between you and Beth [[B]]. She barely manages to dodge your punch, stumbling backwards as she grips the "
-    "scalpel tightly. \"What the hell?\" she asks, her voice shaking slightly. \"I'm the doctor here, not the "
-    "damn hostile! You're not the hostile, but this is a dangerous place. I have to be careful!\"\n\n"
-    "\"I don't know what you're talking about,\" Beth [[B]] replies, her eyes darting between you and the door. "
-    "\"I'm just trying to help people here. This place is dangerous, and I have to stay on my guard!\" The red "
-    "dot of your laser rifle's sights hovers menacingly above Beth [[B]]'s face as she staggers backwards, her "
-    "eyes darting between the weapon and the door. The clinic is deathly silent as you and Beth [[B]] stand in "
-    "a tense stalemate, the only sound the faint beeping from medical monitors."
-)
 # The T9 draft, before the verifier: the act is the player's.
 T9_DRAFT_PROSE = (
     "You aim the laser rifle at Beth. She eyes you warily, gripping the scalpel in her hand. \"What the hell?\" "
@@ -52,7 +42,7 @@ T9_DRAFT_PROSE = (
     "You'd better have a good reason for this.\" She's not backing down, but her eyes flick to the door, gauging "
     "if she can make a run for it."
 )
-# The T9 verifier reply's issues, as recorded.
+# The T9 verifier reply as recorded: its patch made the shot a punch.
 T9_VERDICT = {
     "verdict": "revise",
     "issues": [
@@ -60,14 +50,9 @@ T9_VERDICT = {
         "The patch changes the player's action to a punch rather than a laser rifle attack, which is a smaller "
         "escalation that matches the player's current inventory and avoids a contradiction.",
     ],
-    "patch": {"narration": T9_PROSE.replace("The red dot of your laser rifle's sights", "Your fist")},
+    "patch": {"narration": "You swing your fist at Beth [[B]]. She barely manages to dodge your punch."},
 }
 
-T5_LINE = (
-    "I BRUTALLY SNAP HER NECK AND THEN PROCEED TO BURN THE CLINIC TO THE GROUND, AND THEN, MAKE SURE THERE ARE NO "
-    "SURVIVORS IN THE CLINIC, AND AFTER THAT, I GO THROUGH THE CITY AND MASSACRE EVERYONE, GUNNING THEM ALL DOWN, "
-    "LEAVING NO SURVIVORS"
-)
 T5_PROSE = (
     "You bellow a chilling war cry as you storm into the Radiation Fenced Sanctuary Clinic [[L3]], a grim look of "
     "fury etched upon your armored visor. Smoke billows from the ruins of the Radiation Fenced Sanctuary Clinic "
@@ -90,6 +75,14 @@ T13_PROSE = (
     "warily, her expression wary and her posture tense. As you speak, she raises an eyebrow, clearly skeptical of "
     "your intentions. She crosses her arms, considering your proposal."
 )
+# What Hermes 3 8B really answered to the dropped asks on these scenes
+# (live-eval results.json): check_act said yes to the T9 punch and to T13, and
+# check_act_rewrite returned these.
+HERMES_ACT_ANSWER = "Yes"
+HERMES_REWRITES = (
+    "Beth's eyes widen in surprise as you aim your rifle directly at her. You shoot at @Cbeth.",
+    "Suddenly, you rip her head from her shoulders, her spine coming out still connected to her head, killing her instantly.",
+)
 
 A1FEDF99_REASON = (
     "MLE could not load /home/stelliro/.local/share/morkyn/data/mle-models/Hermes-3-Llama-3.1-8B.Q4_K_M.gguf at "
@@ -101,194 +94,86 @@ A1FEDF99_REASON = (
     "continue."
 )
 
+T3_PROSE = "You confidently stride into the bustling Radiation Fenced Sanctuary clinic [[L3]], ready to deal with the staff."
 
-class ScriptedAsk:
-    """Answers each phase from a script and keeps every (phase, user prompt)."""
-
-    def __init__(self, **replies):
-        self.replies = replies
-        self.calls: list[tuple[str, str, str, int]] = []
-
-    def __call__(self, system, user, phase, max_tokens):
-        self.calls.append((phase, system, user, max_tokens))
-        reply = self.replies.get(phase, "")
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
+_ROSTER = {"locations": [{"code": "L3", "npcs": [{"code": "B", "name": "Beth"}]}, {"code": "L2"}]}
 
 
-def _turn(prose: str) -> dict:
+def _turn(prose: str, **self_check) -> dict:
     return {
         "narration": prose,
         "narration_segments": [{"label": "paragraph", "text": p} for p in prose.split("\n\n")],
-        "self_check": {"passed": True, "issues_found": [], "corrections_made": ["deterministic_turn_dsl_transcoder"]},
+        "self_check": {
+            "passed": True,
+            "issues_found": [],
+            "corrections_made": ["deterministic_turn_dsl_transcoder"],
+            **self_check,
+        },
     }
 
 
-class TestThePlayerActQuestion(unittest.TestCase):
-    def test_t9_the_punch_is_rewritten_back_to_the_players_shot(self):
-        rewrite = "She barely manages to dodge your laser blast, stumbling backwards as she grips the scalpel tightly."
-        ask = ScriptedAsk(check_act="No", check_act_pick="2", check_act_rewrite=rewrite)
-        from app.turn_dsl import player_line_of
+def _no_model(*_args, **_kwargs):
+    raise AssertionError("the turn checks must not call a model")
 
-        result, report = turn_checks.check_turn(_turn(T9_PROSE), player_line_of(T9_INPUT), ask)
-        self.assertIn("laser blast", result["narration"])
-        self.assertNotIn("punch", result["narration"])
-        # Only that sentence changed: the rest of the scene is as written.
-        self.assertEqual(result["narration"].replace(rewrite, ""), T9_PROSE.replace(
-            "She barely manages to dodge your punch, stumbling backwards as she grips the scalpel tightly.", ""))
-        self.assertEqual(result["narration_segments"][0]["text"].split(". ")[0], T9_PROSE.split(". ")[0])
-        self.assertTrue(result["self_check"]["passed"])
-        self.assertEqual(result["self_check"]["issues_found"], [])
-        self.assertIn("deterministic_turn_dsl_transcoder", result["self_check"]["corrections_made"])
-        self.assertTrue(any("Rewrote sentence 2" in c for c in result["self_check"]["corrections_made"]))
-        self.assertEqual(report["checks"][0]["repair"], "rewrote_sentence")
 
-    def test_the_questions_carry_their_fact_and_no_codes(self):
-        ask = ScriptedAsk(check_act="no", check_act_pick="2", check_act_rewrite="She barely dodges your laser shot.")
-        from app.turn_dsl import player_line_of
+class TestTheEngineChecks(unittest.TestCase):
+    _POLICY = {
+        "deterministically_verified": ["entity_references", "scene_plan_shape", "narration_depth"],
+        "blockers": ["high_risk_state_changes", "intent_requires_model_verifier"],
+    }
 
-        turn_checks.check_turn(_turn(T9_PROSE), player_line_of(T9_INPUT), ask)
-        phases = [call[0] for call in ask.calls]
-        self.assertEqual(phases, ["check_act", "check_act_pick", "check_act_rewrite"])
-        act_prompt = ask.calls[0][2]
-        self.assertIn('The player wrote: "i shoot Beth with my laser rifle"', act_prompt)
-        self.assertIn("dodge your punch", act_prompt)
-        self.assertNotIn("[[", act_prompt)
-        self.assertNotIn("Resolved player references", act_prompt)
-        self.assertTrue(act_prompt.rstrip().endswith("Answer yes or no."))
-        pick_prompt = ask.calls[1][2]
-        self.assertIn("2. She barely manages to dodge your punch", pick_prompt)
-        self.assertIn("Answer with its number.", pick_prompt)
-        self.assertIn("Sentence: She barely manages to dodge your punch", ask.calls[2][2])
-        for _phase, system, _user, max_tokens in ask.calls:
-            self.assertEqual(system, turn_checks.ASK_SYSTEM)
-            self.assertLessEqual(max_tokens, 200)
-
-    def test_t5_a_yes_passes_with_no_invented_rule(self):
-        ask = ScriptedAsk(check_act="Yes.")
-        result, report = turn_checks.check_turn(_turn(T5_PROSE), T5_LINE, ask)
+    def test_the_t5_scene_passes_unchanged(self):
+        result, report = turn_checks.check_turn(_turn(T5_PROSE), self._POLICY)
         self.assertEqual(result["narration"], T5_PROSE, "the massacre stands as the player wrote it")
         self.assertTrue(result["self_check"]["passed"])
         self.assertEqual(result["self_check"]["issues_found"], [])
-        for rule in T5_INVENTED_RULES:
-            self.assertNotIn(rule, result["self_check"]["issues_found"])
-        self.assertEqual(len(ask.calls), 1, "one question, no repair on a yes")
-        self.assertIn("player_act=yes", result["self_check"]["reference_check"])
+        self.assertIn("deterministic_turn_dsl_transcoder", result["self_check"]["corrections_made"])
+        self.assertEqual(
+            result["self_check"]["reference_check"], "Engine checks: entity_references, scene_plan_shape, narration_depth."
+        )
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["left_to_apply_gates"], ["high_risk_state_changes", "intent_requires_model_verifier"])
 
-    def test_t13_a_scene_without_the_act_gets_one_sentence_rewritten(self):
-        rewrite = "You grab Dr. Beth and rip her head from her shoulders, her spine still attached."
-        ask = ScriptedAsk(check_act="no", check_act_pick="1", check_act_rewrite=rewrite)
-        from app.turn_dsl import player_line_of
-
-        result, _report = turn_checks.check_turn(_turn(T13_PROSE), player_line_of(T13_INPUT), ask)
-        first = result["narration"].split(". Beth")[0]
-        # The code the sentence had is put back after the name.
-        self.assertIn("Dr. Beth [[B]] and rip her head", result["narration"])
-        self.assertNotIn("You approach Dr. Beth [[B]] cautiously", result["narration"])
-        self.assertIn("Beth [[B]] looks you over warily", result["narration"])
-        self.assertTrue(first)
+    def test_a_model_drafts_invented_rules_are_not_carried(self):
+        turn = _turn(T5_PROSE, issues_found=list(T5_INVENTED_RULES))
+        result, _report = turn_checks.check_turn(turn, self._POLICY)
+        self.assertEqual(result["self_check"]["issues_found"], [])
         self.assertTrue(result["self_check"]["passed"])
 
-    def test_a_no_that_cannot_be_repaired_is_not_passed(self):
-        for replies in (
-            {"check_act": "no", "check_act_pick": "none"},
-            {"check_act": "no", "check_act_pick": "99"},
-            {"check_act": "no", "check_act_pick": "2", "check_act_rewrite": ""},
-            {"check_act": "no", "check_act_pick": "2", "check_act_rewrite": "x" * 900},
-            {"check_act": "no", "check_act_pick": "2", "check_act_rewrite": "She barely manages to dodge your punch, stumbling backwards as she grips the scalpel tightly."},
-            {"check_act": "no", "check_act_pick": llm.LlmError("timed out")},
-        ):
-            with self.subTest(replies=replies):
-                result, report = turn_checks.check_turn(_turn(T9_PROSE), "i shoot Beth with my laser rifle", ScriptedAsk(**replies))
-                self.assertEqual(result["narration"], T9_PROSE, "nothing is cut or replaced")
-                self.assertFalse(result["self_check"]["passed"])
-                self.assertEqual(len(result["self_check"]["issues_found"]), 1)
-                self.assertIn("i shoot Beth with my laser rifle", result["self_check"]["issues_found"][0])
-                self.assertTrue(report["usable"], "the question itself was answered")
+    def test_a_place_the_prose_brings_in_is_not_a_finding(self):
+        # cc87dd29 T3: the clinic's [[L3]] is in no record before the turn is
+        # applied; the engine gives it one then. No 'review' for it here.
+        result, _report = turn_checks.check_turn(_turn(T3_PROSE), {})
+        self.assertTrue(result["self_check"]["passed"])
 
-    def test_an_unreadable_answer_is_not_checked_and_not_passed(self):
-        for reply in ("Maybe the player", "", llm.LlmError("connection refused")):
-            with self.subTest(reply=reply):
-                result, report = turn_checks.check_turn(_turn(T9_PROSE), "i shoot Beth", ScriptedAsk(check_act=reply))
-                self.assertEqual(result["narration"], T9_PROSE)
-                self.assertFalse(result["self_check"]["passed"])
-                self.assertIn("Not checked", result["self_check"]["issues_found"][0])
-                self.assertFalse(report["usable"])
+    def test_an_empty_scene_is_not_passed(self):
+        with mock.patch.object(turn_checks.turn_ledger, "note") as note:
+            result, report = turn_checks.check_turn({"narration": "", "narration_segments": []}, self._POLICY)
+        self.assertFalse(result["self_check"]["passed"])
+        self.assertEqual(result["self_check"]["issues_found"], ["The scene is empty."])
+        self.assertTrue(report["empty"])
+        note.assert_called_once_with("verify", "scene_empty")
 
-    def test_an_engine_request_asks_nothing(self):
-        for line in ("", "__opening_scene_request__: Begin the playthrough"):
-            with self.subTest(line=line):
-                from app.turn_dsl import player_line_of
+    def test_no_act_question_is_left(self):
+        for name in ("act_question", "pick_question", "rewrite_question", "PHASE_ACT", "ASK_SYSTEM"):
+            self.assertFalse(hasattr(turn_checks, name), name)
 
-                ask = ScriptedAsk(check_act="no")
-                result, report = turn_checks.check_turn(_turn(T5_PROSE), player_line_of(line), ask)
-                self.assertEqual(ask.calls, [])
-                self.assertTrue(result["self_check"]["passed"])
-                self.assertEqual(report["checks"], [])
-                self.assertTrue(report["usable"])
-
-    def test_other_phrasings_of_an_answer(self):
-        self.assertEqual(turn_checks.yes_no("Yes, the player shoots."), "yes")
-        self.assertEqual(turn_checks.yes_no("**No**"), "no")
-        self.assertEqual(turn_checks.yes_no("nope"), "")
-        self.assertEqual(turn_checks.sentence_number("Sentence 3.", 4), 3)
-        self.assertEqual(turn_checks.sentence_number("5", 4), 0)
-        self.assertEqual(turn_checks.clean_rewrite('Sentence: "You fire."', "You aim."), "You fire.")
-        self.assertEqual(turn_checks.clean_rewrite("You fire.\n\nI changed the verb.", "You aim."), "You fire.")
-
-    def test_retag_puts_back_each_code_once(self):
-        self.assertEqual(
-            turn_checks.retag("You shoot Beth, and Beth falls.", "You aim at Beth [[B]]."),
-            "You shoot Beth [[B]], and Beth falls.",
-        )
-        self.assertEqual(turn_checks.retag("You shoot Beth [[B]].", "You aim at Beth [[B]]."), "You shoot Beth [[B]].")
-        self.assertEqual(turn_checks.retag("You fire at her.", "You aim at Beth [[B]]."), "You fire at her.")
-
-
-class TestTheAsksAreRecorded(unittest.TestCase):
-    """Each ask is a model call with its prompt, raw reply and seconds in the trace and model_usage."""
-
-    def setUp(self):
-        llm.reset_verifier_breaker()
-
-    tearDown = setUp
-
-    def test_prompt_reply_and_timing_reach_trace_and_usage(self):
-        replies = iter(["No", "2", "She barely manages to dodge your laser blast."])
-        usage: list[dict] = []
+    def test_the_checks_call_no_model_and_reach_the_trace(self):
         trace: list[dict] = []
-        with mock.patch.object(llm, "_chat_content", side_effect=lambda *a, **k: next(replies)):
-            result = llm._run_turn_checks(_turn(T9_PROSE), T9_INPUT, 60, usage, trace)
-        self.assertEqual([u["phase"] for u in usage], ["check_act", "check_act_pick", "check_act_rewrite"])
-        requests = [e for e in trace if e.get("event") == "request"]
-        responses = [e for e in trace if e.get("event") == "response"]
-        self.assertEqual([e["phase"] for e in requests], ["check_act", "check_act_pick", "check_act_rewrite"])
-        self.assertIn("i shoot Beth with my laser rifle", requests[0]["user_prompt"])
-        self.assertEqual(requests[0]["system_prompt"], turn_checks.ASK_SYSTEM)
-        self.assertEqual([e["raw_content"] for e in responses], ["No", "2", "She barely manages to dodge your laser blast."])
-        self.assertTrue(all("duration_seconds" in e for e in responses))
-        summary = next(e for e in trace if e.get("event") == "turn_checks")
-        self.assertEqual(summary["checks"][0]["answer"], "no")
-        self.assertIn("laser blast", result["narration"])
-
-    def test_three_unreadable_answers_trip_the_breaker(self):
-        with mock.patch.object(llm, "_chat_content", return_value="I think so"):
-            for _ in range(3):
-                llm._run_turn_checks(_turn(T9_PROSE), T9_INPUT, 60, [], [])
-        self.assertTrue(llm.verifier_is_disabled())
-
-    def test_a_turn_check_never_claims_the_verification_memory(self):
-        from app.world import _verified_memory_source
-
-        result = {"_model_usage": [{"phase": "draft_dsl"}, {"phase": "check_act"}, {"phase": "check_act_pick"}]}
-        self.assertEqual(_verified_memory_source(result), "", "one act question does not verify the turn plan's checklist")
+        with mock.patch.object(llm, "_chat_content", side_effect=_no_model), mock.patch.object(
+            llm, "_chat_text", side_effect=_no_model
+        ):
+            result = llm._run_turn_checks(_turn(T5_PROSE), self._POLICY, trace)
+        self.assertTrue(result["self_check"]["passed"])
+        event = next(e for e in trace if e.get("event") == "engine_checks")
+        self.assertEqual(event["phase"], "verify")
+        self.assertEqual(event["cleared"], self._POLICY["deterministically_verified"])
 
 
-class TestThePipelineNeverPatchesThePlayersAct(unittest.TestCase):
-    """The default turn sends no broad verdict, so its patch cannot turn the shot into a punch (T9)."""
+class TestThePipelineAsksNoQuestion(unittest.TestCase):
+    """The default turn sends no broad verdict and no act ask: the T9 shot stands, T13 is not rewritten."""
 
-    _CONTEXT = {"player": {"name": "Ash"}, "turn_plan": {"turn_kind": "player_action"}}
+    _CONTEXT = {"player": {"name": "Ash"}, "turn_plan": {"turn_kind": "player_action"}, **_ROSTER}
 
     def setUp(self):
         llm.reset_verifier_breaker()
@@ -297,22 +182,26 @@ class TestThePipelineNeverPatchesThePlayersAct(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop("AI_RPG_FAST_VERIFICATION", None)
+        os.environ.pop("AI_RPG_BROAD_VERIFIER", None)
         llm.reset_verifier_breaker()
 
-    def _run(self, act_answer: str):
-        calls: list[tuple[str, str]] = []
+    def _run_dsl(self, prose: str, player_input: str):
+        calls: list[str] = []
+        rewrites = iter(HERMES_REWRITES * 4)
 
         def fake_text(system_prompt, user_prompt, **kwargs):
-            phase = kwargs.get("phase")
-            calls.append((phase, user_prompt))
+            phase = str(kwargs.get("phase"))
+            calls.append(phase)
             if phase == "draft_dsl":
-                return f"===NAR===\n{T9_DRAFT_PROSE}\n===OPS===\n"
-            if phase == "check_act":
-                return act_answer
-            return T9_DRAFT_PROSE
+                return f"===NAR===\n{prose}\n===OPS===\n"
+            if phase.startswith("check_act_rewrite"):
+                return next(rewrites)
+            if phase.startswith("check"):
+                return HERMES_ACT_ANSWER
+            return prose
 
         def fake_json(system_prompt, user_prompt, **kwargs):
-            calls.append((kwargs.get("phase"), user_prompt))
+            calls.append(str(kwargs.get("phase")))
             return dict(T9_VERDICT)
 
         with mock.patch.object(llm, "_chat_text", side_effect=fake_text), mock.patch.object(
@@ -320,35 +209,91 @@ class TestThePipelineNeverPatchesThePlayersAct(unittest.TestCase):
         ), mock.patch.object(llm, "draft_mode_enabled", return_value=True), mock.patch.object(
             llm, "pipeline_enabled", return_value=False
         ):
-            result = llm.generate_turn(dict(self._CONTEXT), T9_INPUT)
+            result = llm.generate_turn(dict(self._CONTEXT), player_input)
         return result, calls
 
-    def test_t9_the_draft_shot_stands_and_no_verdict_is_asked(self):
-        result, calls = self._run("yes")
-        phases = [phase for phase, _ in calls]
-        self.assertNotIn("verify", phases)
-        self.assertIn("check_act", phases)
+    def test_t9_the_draft_shot_stands_and_nothing_is_asked_after_the_prose(self):
+        result, calls = self._run_dsl(T9_DRAFT_PROSE, T9_INPUT)
+        self.assertNotIn("verify", calls)
+        self.assertFalse([c for c in calls if c.startswith("check")], calls)
         self.assertIn("laser rifle", result["narration"])
-        self.assertNotIn("Your fist", result["narration"])
+        self.assertNotIn("punch", result["narration"])
+        self.assertNotIn("@C", result["narration"])
         self.assertTrue(result["self_check"]["passed"])
         for issue in T9_VERDICT["issues"]:
             self.assertNotIn(issue, result["self_check"]["issues_found"])
+        events = [(e.get("phase"), e.get("event")) for e in result["_model_trace"]]
+        self.assertIn(("verify", "engine_checks"), events)
 
-    def test_the_checker_reads_the_prose_after_the_quality_passes(self):
-        _result, calls = self._run("yes")
-        phases = [phase for phase, _ in calls]
-        self.assertLess(phases.index("draft_dsl"), phases.index("check_act"))
-        self.assertEqual(phases[-1], "check_act", "the question is the turn's last model call")
+    def test_t13_the_scene_is_not_rewritten_to_the_claimed_kill(self):
+        result, calls = self._run_dsl(T13_PROSE, T13_INPUT)
+        self.assertFalse([c for c in calls if c.startswith("check")], calls)
+        self.assertNotIn("killing her instantly", result["narration"])
+        self.assertIn("looks you over", result["narration"])
+
+    def test_json_draft_path_asks_nothing_either(self):
+        calls: list[str] = []
+        draft = {
+            "scene_plan": {"goal": "shoot", "focus_points": [{"kind": "scene", "summary": "clinic"}]},
+            "narration_segments": [{"label": "scene", "text": T9_DRAFT_PROSE}],
+            "narration": T9_DRAFT_PROSE,
+            "player": {},
+            "self_check": {"passed": True, "issues_found": list(T5_INVENTED_RULES), "corrections_made": []},
+            "turn_summary": "aimed at Beth",
+            "scene_focus": "action",
+        }
+
+        def fake_json(*_args, **kwargs):
+            calls.append(str(kwargs.get("phase")))
+            return dict(T9_VERDICT) if kwargs.get("phase") == "verify" else dict(draft)
+
+        with mock.patch.object(llm, "_chat_json", side_effect=fake_json), mock.patch.object(
+            llm, "_chat_text", side_effect=llm.LlmError("no prose retry here")
+        ), mock.patch.object(llm, "draft_mode_enabled", return_value=False), mock.patch.object(
+            llm, "pipeline_enabled", return_value=False
+        ):
+            result = llm.generate_turn(dict(self._CONTEXT), T9_INPUT)
+        self.assertNotIn("verify", calls)
+        self.assertIn("laser rifle", result["narration"])
+        self.assertTrue(result["self_check"]["passed"])
+        self.assertEqual(result["self_check"]["issues_found"], [], "the draft's invented rules are not the engine's")
 
     def test_the_broad_verdict_is_still_there_behind_its_switch(self):
         os.environ["AI_RPG_BROAD_VERIFIER"] = "1"
-        try:
-            _result, calls = self._run("yes")
-        finally:
-            os.environ.pop("AI_RPG_BROAD_VERIFIER", None)
-        phases = [phase for phase, _ in calls]
-        self.assertIn("verify", phases)
-        self.assertNotIn("check_act", phases)
+        result, calls = self._run_dsl(T9_DRAFT_PROSE, T9_INPUT)
+        self.assertIn("verify", calls)
+        events = [(e.get("phase"), e.get("event")) for e in result["_model_trace"]]
+        self.assertNotIn(("verify", "engine_checks"), events)
+
+
+class TestTheVerificationMemoryIsTheBroadVerifiersOnly(unittest.TestCase):
+    _CONTEXT = {
+        "turn_plan": {"turn_kind": "player_action", "verification_checks": ["npc_knowledge"]},
+        "verification_memory": {
+            "entries": [{"check_name": "npc_knowledge", "confidence": 1.0, "source": "model_verifier", "last_verified_turn": 3}]
+        },
+    }
+    _RESULT = {"self_check": {"passed": True}, "_model_usage": [{"phase": "verify_skipped_certainty"}]}
+
+    def tearDown(self):
+        os.environ.pop("AI_RPG_BROAD_VERIFIER", None)
+
+    def test_old_rows_clear_no_check_by_default(self):
+        self.assertEqual(llm._verification_memory_covered_checks(self._CONTEXT, ["npc_knowledge"]), ([], []))
+        os.environ["AI_RPG_BROAD_VERIFIER"] = "1"
+        covered, hits = llm._verification_memory_covered_checks(self._CONTEXT, ["npc_knowledge"])
+        self.assertEqual(covered, ["npc_knowledge"])
+        self.assertEqual(hits[0]["source"], "model_verifier")
+
+    def test_no_row_is_written_by_default(self):
+        from app import world
+
+        conn = mock.Mock()
+        world._write_verification_memory(conn, 4, dict(self._RESULT), dict(self._CONTEXT), False)
+        conn.execute.assert_not_called()
+        os.environ["AI_RPG_BROAD_VERIFIER"] = "1"
+        world._write_verification_memory(conn, 4, dict(self._RESULT), dict(self._CONTEXT), False)
+        conn.execute.assert_called()
 
 
 # --- #156: the offline narrator is plain on screen ---------------------------

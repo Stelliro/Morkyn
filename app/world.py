@@ -21347,6 +21347,11 @@ def _write_verification_memory(
 ) -> None:
     if used_fallback or not isinstance(prompt_context, dict):
         return
+    from app.llm import _broad_verifier_enabled
+
+    if not _broad_verifier_enabled():
+        # Only the broad verifier's policy reads these rows (#157 b, app/turn_checks.py).
+        return
     self_check = result.get("self_check") if isinstance(result.get("self_check"), dict) else {}
     if self_check.get("passed") is not True:
         return
