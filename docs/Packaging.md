@@ -132,16 +132,28 @@ installed `versions/0.10.0-dev.15/`, the home exe started that build, which serv
 CI: `.github/workflows/package.yml` builds all three on every `v*` tag (and on request) and
 attaches the archives to that tag's release; the Linux job adds the `.deb`, `.rpm` and
 `.AppImage` and keeps the AUR files as an artifact. Linux and macOS install `llama-cpp-python` from the
-CPU wheel index; macOS adds pywebview for the native window; Linux ships browser mode (the native
-window needs PyGObject and WebKit2GTK from the distribution).
+CPU wheel index; macOS adds pywebview for the native window. The Linux window is the `qt-window`
+add-on pack (below), built by the packs job.
 
 ## Platform notes
 
 - Windows: pywebview uses WebView2 (in Windows 11; Windows 10 may need the Evergreen runtime).
   The native title bar colouring (`morkyn_app.paint_frame`) is Windows-only and skipped elsewhere.
-- Linux: `app/launcher.py` already ties child servers to the parent with `PR_SET_PDEATHSIG`; the
-  job-object limits are Windows-only. Without pywebview the build runs `--browser` (the entry
-  already falls back when `import webview` fails).
+- Linux: `app/launcher.py` ties child servers to the parent with `PR_SET_PDEATHSIG`; the
+  job-object limits are Windows-only. That signal fires when the *thread* that forked the child
+  ends, so every child is forked from one long-lived spawner thread (`launcher._spawn`): the
+  window started the server from the short-lived `morkyn-start` thread and it was killed a second
+  after it was ready (2026-10-23, the first Linux window).
+- Linux window (Stell, 2026-10-23, Pop!_OS: "it doesnt have a standalone application on
+  linux"): the `qt-window` add-on pack, `pywebview[qt]` (PyQt6 + Qt WebEngine 6.11, all pip
+  wheels, nothing from the distribution; 203 MB zipped, about 530 MB unpacked), built with
+  `packaging/build_packs.py window`. It is a pack, not part of the build, like every heavy
+  dependency. A packaged Linux start that wants the window and cannot import pywebview fetches
+  it (`runtime_packs.auto_install_window_if_needed`) and opens the browser that once; Settings →
+  Updates installs or removes it by hand. With no GTK bindings pywebview is started with
+  `gui="qt"`. Packs keep their files' mode bits on unpack (Qt's `QtWebEngineProcess` failed with
+  "failed to execvp" without them). Checked on Pop!_OS 24.04, COSMIC on Wayland: the AppImage
+  with the pack opens the game maximised and stays on the main menu.
 - macOS: pywebview's cocoa backend; the `.app` bundle is produced by the spec's `BUNDLE`. Code
   signing and notarisation are not set up; Gatekeeper will ask to allow the app on first open.
 
