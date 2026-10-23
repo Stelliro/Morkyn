@@ -14,11 +14,17 @@ attack, search or remember.
 How the engine reads a figure, structurally (no list of monster words):
 
 * A mention is a noun phrase the prose opens with a determiner or a count and
-  closes on a verb: "A ghoul lunges at you", "a group of 4 ghouls brutally
-  attack you", "Two raiders step out", "Another ghoul drops", "the second
-  ghoul", "The ghoul staggers back". The kind is the phrase's head noun (the
-  word before the verb), made singular and title case ("ghouls" -> "Ghoul").
-  Quoted speech is never read.
+  shows present by its grammar: the subject of a verb in its clause ("A ghoul
+  lunges at you", "a group of 4 ghouls brutally attack you", "Two raiders
+  step out", "Another ghoul drops", "The ghoul staggers back"); followed by an
+  -ing or a relative clause that has it act ("a pack of ghouls feasting",
+  "a ghoul that lunges"); the direct object of a verb the player is the
+  subject of in that clause ("you see a pack of ghouls", "you spot two
+  raiders behind the wreck", "you look up to face a deathclaw"); or of the
+  kind the player's own line acts on (player_objects). The kind is the
+  phrase's head noun, made singular and title case ("ghouls" -> "Ghoul").
+  Quoted speech is never read. Anything else ("the sensors flash a warning",
+  "stand over the two halves", "you shoot at a ghoul") is not shown present.
 * Whether that noun is a figure at all is the engine's records first: a person
   word world._figure_hints already knows, a kind the save has numbered before,
   or a figure this turn's own NPC op introduces (NPC_NEW "Ghoul" over prose
@@ -90,9 +96,20 @@ SPEAKS_QUOTE_CHARS = 120
 MAX_SPEAK_ASKS = 1
 YES_NO_SYSTEM = "Answer yes or no."
 MAX_TOKENS = 4
-MAX_KIND_ASKS = 3
+# The figure_kind and figure_kind_check asks together, per turn: a noun is
+# started only when both of its asks still fit, so at most three nouns are
+# fully checked (a first "no" costs one ask and leaves room for the next).
+# Measured on Hermes 3 8B at ~0.07 s an ask (live-eval-5): about 0.4 s a turn
+# at the cap. The hostility (MAX_HOSTILE_ASKS) and speech (MAX_SPEAK_ASKS)
+# asks have their own caps.
+MAX_FIGURE_ASKS = 6
 MAX_HOSTILE_ASKS = 2
-# An unstated plural ("some ghouls", "a pack of wolves") is the least a plural can be.
+# A group the prose does not count ("a pack of ghouls", "some raiders", "a
+# few drifters", "a crowd of refugees") is the least a plural can be: two.
+# Later prose that counts more ("another ghoul", "the third ghoul", "two more
+# ghouls") adds the rest; "some ghouls" again with two here adds none. A
+# collective noun alone ("A crowd gathers", "a pack circles") is asked about
+# as itself and files nothing unless both asks say it is a being.
 UNSTATED_PLURAL = 2
 # Never more than this many rows of one kind from one turn.
 MAX_PER_KIND = 8
@@ -296,7 +313,12 @@ def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
     shoulder").
 
     Each: {kind (lower singular), noun (as written), phrase, sentence, form,
-    count, ordinal, you, acts, subject}. ``form`` is "count" (a/an/one: 1, a
+    count, ordinal, you, acts, subject, seen}. ``seen``: the phrase is the
+    direct object of a verb whose subject is the player in that clause ("you
+    see a pack of ghouls", "you spot two raiders behind the wreck"), taken with
+    or without a verb of its own; an -ing or a relative clause after the noun
+    ("ghouls feasting", "a ghoul that lunges") makes it a subject wherever it
+    stands. ``form`` is "count" (a/an/one: 1, a
     number, an unstated plural), "another", "more" ("two more ghouls": that
     many added), "ordinal" (the/a second ...),
     "the" (one referred back to) or "the_plural" (several referred back to).
@@ -311,22 +333,31 @@ def mentions(text: str, objects: Any = ()) -> list[dict[str, Any]]:
         toks = [m.group(0) for m in _TOKEN_RE.finditer(sentence)]
         i = 0
         while i < len(toks):
-            found = _mention_at(toks, i, kinds)
+            # The clause the mention stands in (between punctuation marks).
+            start = max([k for k in range(i) if toks[k] in _CLAUSE_MARKS] + [-1]) + 1
+            seen = _players_object(toks[start:i])
+            found = _mention_at(toks, i, kinds, bare=seen)
             if found is None:
                 i += 1
                 continue
-            # The clause the mention stands in (between punctuation marks).
-            start = max([k for k in range(i) if toks[k] in _CLAUSE_MARKS] + [-1]) + 1
-            subject = found.pop("_object") is False and (found["_ing"] or _opens_clause(toks[start:i]))
-            if not subject and found["kind"] not in kinds:
+            bare = found.pop("_bare", False)
+            subject = (found.pop("_object") is False and not bare
+                       and (found["_ing"] or _opens_clause(toks[start:i])))
+            if not subject and not seen and found["kind"] not in kinds:
                 i += 1
                 continue
             end = found.pop("_end")
+            head = found.pop("_head")
+            if not subject:
+                # Taken as an object: its "verb" may be another phrase's ("you catch a
+                # glimpse of an NPC watching you"), so the next phrase is read too.
+                end = head + 1
             found.pop("_ing", None)
             stop = min([k for k in range(end, len(toks)) if toks[k] in _CLAUSE_MARKS] + [len(toks)])
             found["sentence"] = sentence
             found["subject"] = bool(subject)
-            # The player's own act on it has the player in it.
+            found["seen"] = bool(seen and not subject)
+            # The player's own act on it, or the player seeing it, has the player in it.
             found["you"] = (not subject) or bool(_YOU_RE.search(" ".join(toks[start:stop])))
             if not subject:
                 found["acts"] = True
@@ -357,6 +388,44 @@ def _opens_clause(before: list[str]) -> bool:
             continue
         return False
     return True
+
+
+def _players_object(before: list[str]) -> bool:
+    """Whether a noun phrase after these tokens of its clause is the object of the player's own verb.
+
+    The word right before the phrase (past any -ly adverb) is a verb, and the
+    player is a subject earlier in the clause: "you see", "Through the gap,
+    you see", "you look up to face", "you can see" (grammar: a "you" that is
+    no preposition's object, then an open-class word). "hands you a knife"
+    (you right before it), "behind you stands" and "you shoot at a ghoul" (a
+    preposition before it) are not; nor is a verb with a particle ("you make
+    out some raiders"), which reads as a preposition.
+    """
+    k = len(before) - 1
+    while k >= 0 and re.fullmatch(r"[a-z]+ly", before[k]):
+        k -= 1
+    if k < 1:
+        return False
+    verb = before[k]
+    if (not _word(verb) or verb[:1].isupper() or verb.lower() in _CLOSED or verb.lower() in _PREPOSITIONS
+            or verb.lower().endswith(("'s", "’s"))):
+        return False
+    for at in range(k - 1, -1, -1):
+        if before[at].lower() != "you":
+            continue
+        prev = before[at - 1].lower() if at > 0 else ""
+        if prev in _PREPOSITIONS or prev in {"for", "to", "like", "than"}:
+            continue  # "behind you", "gestures for you to take a seat": you are no subject there
+        nxt = before[at + 1]
+        # "you" then its verb (or a helper: "you can see", "you now spot"), never "you" then a noun phrase.
+        return nxt.lower() not in {"a", "an", "the", "some", "another"} and not _count_of(nxt)
+    return False
+
+
+def _np_ends(toks: list[str], at: int) -> bool:
+    """The noun phrase stops at this word: the clause, a function word or the sentence comes next."""
+    nxt = toks[at + 1] if at + 1 < len(toks) else ""
+    return not nxt or nxt in _CLAUSE_MARKS or not _word(nxt) or nxt.lower() in _CLOSED or nxt.lower() in _PREPOSITIONS
 
 
 def _acts(toks: list[str], verb_at: int) -> bool:
@@ -402,7 +471,8 @@ def player_objects(line: str) -> set[str]:
     return out
 
 
-def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = frozenset()) -> dict[str, Any] | None:
+def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = frozenset(),
+                bare: bool = False) -> dict[str, Any] | None:
     low = toks[i].lower()
     if i > 0 and toks[i - 1].lower() in {"of"} and low in {"the"}:
         return None  # "one of the ghouls": the ghouls already met
@@ -415,7 +485,7 @@ def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = fr
         if n:
             j += 1
         form, count, plural_needed, stated = "count", n or UNSTATED_PLURAL, True, bool(n)
-        found = _head_at(toks, i, j, form, count, 0, True, bool(n), objects)
+        found = _head_at(toks, i, j, form, count, 0, True, bool(n), objects, bare)
         if found is not None:
             return found
         # Not a group of figures ("A flicker of understanding passes"): the
@@ -448,12 +518,16 @@ def _mention_at(toks: list[str], i: int, objects: frozenset[str] | set[str] = fr
             form = "the"
     else:
         return None
-    return _head_at(toks, i, j, form, count, ordinal, plural_needed, stated, objects)
+    return _head_at(toks, i, j, form, count, ordinal, plural_needed, stated, objects, bare)
 
 
 def _head_at(toks: list[str], i: int, j: int, form: str, count: int, ordinal: int, plural_needed: bool | None,
-             stated: bool, objects: frozenset[str] | set[str] = frozenset()) -> dict[str, Any] | None:
-    """The head noun (after up to two modifiers from ``j``) and the verb it is the subject of."""
+             stated: bool, objects: frozenset[str] | set[str] = frozenset(), bare: bool = False) -> dict[str, Any] | None:
+    """The head noun (after up to two modifiers from ``j``) and the verb it is the subject of.
+
+    ``bare``: the phrase is the object of the player's verb, so it needs no
+    verb of its own; its head is the word the noun phrase stops on.
+    """
     for k in range(3):
         at = j + k
         if at >= len(toks):
@@ -472,16 +546,26 @@ def _head_at(toks: list[str], i: int, j: int, form: str, count: int, ordinal: in
             verb_at += 1  # an adverb: "4 ghouls brutally attack you"
         ing = False
         is_object = False
-        if verb_at < len(toks) and _verb_shaped(toks[verb_at], plural):
+        is_bare = False
+        if (verb_at + 1 < len(toks) and toks[verb_at].lower() in {"that", "who", "which"}
+                and _verb_shaped(toks[verb_at + 1], plural)):
+            # A relative clause that has it act ("a ghoul that lunges", "raiders who
+            # are aiming"): the figure doing it, wherever the phrase stands.
+            verb_at, ing = verb_at + 1, True
+        elif verb_at < len(toks) and _verb_shaped(toks[verb_at], plural):
             # Right after the noun, "-ing" is the figure doing it ("4 ghouls eating someone").
             ing = toks[verb_at].lower().endswith("ing") and toks[verb_at].lower() not in _BE_HAVE
         else:
             verb_at = _verb_after_phrase(toks, at + 1, plural) if at + 1 < len(toks) else -1
             if verb_at < 0:
-                if singular(noun) not in objects:
+                if bare and _np_ends(toks, at):
+                    # The player sees it: "you see a pack of ghouls", "you spot two raiders behind the wreck".
+                    verb_at, is_bare = at, True
+                elif singular(noun) in objects:
+                    # The player's line acts on this kind: the phrase counts with no verb.
+                    verb_at, is_object = at, True
+                else:
                     continue
-                # The player's line acts on this kind: the phrase counts with no verb.
-                verb_at, is_object = at, True
         this_form = form
         if form == "the" and plural:
             this_form = "the_plural"
@@ -493,10 +577,12 @@ def _head_at(toks: list[str], i: int, j: int, form: str, count: int, ordinal: in
             "count": count,
             "ordinal": ordinal,
             "stated": stated,
-            "acts": True if is_object else _acts(toks, verb_at),
+            "acts": True if (is_object or is_bare) else _acts(toks, verb_at),
             "_end": verb_at + 1,
             "_ing": ing,
             "_object": is_object,
+            "_bare": is_bare,
+            "_head": at,
         }
     return None
 
@@ -628,11 +714,14 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
     ``line`` is the player's own line: the kinds it acts on ("i shoot the
     ghoul") are kept on ``result["_figure_objects"]`` for file_figures.
 
-    A noun with no record is asked about only when the prose shows it doing
-    something (the subject of an action verb in a clause that has the player
-    in it) or the player's line acts on it, and only in a form that could
-    file one (a count, "another", an ordinal). It is a figure only when two
-    differently worded asks both say yes.
+    A noun with no record is asked about only when the prose shows it present
+    (the subject of an action verb in a clause that has the player in it, an
+    -ing or relative clause that has it act, or the object of the player's
+    own verb: "you see a pack of ghouls") or the player's line acts on it,
+    and only in a form that could file one (a count, "another", an ordinal).
+    It is a figure only when two differently worded asks both say yes; at
+    most MAX_FIGURE_ASKS of those asks a turn, in the order the prose shows
+    the nouns.
     """
     objects = sorted(player_objects(line)) if line else []
     if objects:
@@ -665,8 +754,10 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
                          None)
             if shown is None or not ask:
                 continue
-            if kind_asks >= MAX_KIND_ASKS:
-                turn_ledger.note("npc", "figure_kind_not_asked", kind=kind, reason="ask limit")
+            if kind_asks + 2 > MAX_FIGURE_ASKS:
+                # Both of a noun's asks must fit, or it is not started.
+                turn_ledger.note("npc", "figure_kind_not_asked", kind=kind, reason="ask limit",
+                                 limit=MAX_FIGURE_ASKS)
                 continue
             kind_asks += 1
             said = _ask_yes_no(call, YES_NO_SYSTEM, kind_prompt(shown["sentence"], kind), KIND_PHASE, kind, trace, usage)
@@ -675,6 +766,7 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
             checked = None
             if said:
                 # One yes files nothing: the second, differently worded check must agree.
+                kind_asks += 1
                 checked = _ask_yes_no(call, YES_NO_SYSTEM, kind_check_prompt(shown["sentence"], kind),
                                       KIND_CHECK_PHASE, kind, trace, usage)
                 if checked is None:
@@ -824,7 +916,9 @@ def speaker_lines(narration: str) -> list[dict[str, Any]]:
             word, by = _speaker_word(outside, last)
             text = unit if by != "pronoun" or not last_unit or last_unit == unit else f"{last_unit} {unit}"
             out.append({"kind": word, "by": by, "quote": spoken[0], "text": text})
-        shown = mentions(outside)
+        # The last figure shown doing something, as before the player's seeing was read:
+        # "you see a clipboard in her hand" is not who speaks next.
+        shown = [m for m in mentions(outside) if m["subject"]]
         if shown:
             last, last_unit = shown[-1]["kind"], unit
     return out
