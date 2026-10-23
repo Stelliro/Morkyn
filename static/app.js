@@ -16120,6 +16120,9 @@ async function saveModelConfig(form) {
   });
   if (!response.ok) throw new Error(await response.text());
   modelConfig = await response.json();
+  // The server copied the engine into the launcher prefs; the Gatehouse reads
+  // those (Settings reloads them each time it opens).
+  fetchLauncherPrefs().catch(() => {});
   let sessionNote = "";
   try {
     const applied = await applySessionThemeModelFromForm(form);
