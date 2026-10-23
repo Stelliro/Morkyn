@@ -188,6 +188,14 @@ belong to, with the date).
   splits a cost into coins. This is why the "silver" fault (F156: a pouch of "silver, copper"
   paid nothing) was held: it is fixed by this, built with the transaction parser. Open when
   building: what an old save's gold number becomes.
+  Same day, Stell: "currency should not just be limited to those three, we need a way for
+  different currencies to exist, for example credits, or bottle caps (if the player wants to
+  play a fallout rpg for example)". So a world has its own **currency set**: one or more named
+  denominations, each worth so many base units (copper / silver / gold at 1 / 100 / 10,000 is
+  one set; bottle caps or credits can be a single unit). The set is chosen with the world at
+  setup and stored with it; `$<number>` is always base units and the engine shows it in that
+  world's coins. Bartering (trading goods for goods) is wanted too but is harder and comes
+  after the currency work.
 - **#157's cross-reference is a system, not a fix** (2026-10-24): "this will be a big undertaking,
   as to do this we will need to ensure we build a cross referencing system between npc's and the
   llm, as well as what the player says and what the llm what the llm wants to say". Design it as

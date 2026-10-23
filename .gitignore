@@ -96,3 +96,7 @@ package-lock.json
 
 # itch.io page drafts, devlogs and upload art (kept local; Media/ holds what GitHub shows)
 /Itch.io/
+
+# Claude Code agent worktrees and saved agent patches (local only)
+.claude/worktrees/
+_worktree_patches/
