@@ -15836,7 +15836,7 @@ def _cut_scene_at_choice_taken(
         return turn
     from app.player_agency import choice_taken_cut
 
-    point = choice_taken_cut(str(turn.get("narration") or ""), asks)
+    point = choice_taken_cut(str(turn.get("narration") or ""), asks, player_line_of(player_input))
     if not point:
         return turn
     return _end_scene_at(
@@ -15895,14 +15895,17 @@ def _close_open_quotes(turn: dict[str, Any], phase: str, trace: list[dict[str, A
 
     if not isinstance(turn, dict):
         return turn
+    def _closed(paragraphs: list[str]) -> list[tuple[str, int]]:
+        return [close_open_quotes(p) for p in paragraphs]
+
     text = str(turn.get("narration") or "")
     paragraphs = re.split(r"(\n\s*\n)", text)
     fixed_any: list[str] = []
-    for i in range(0, len(paragraphs), 2):
-        fixed, count = close_open_quotes(paragraphs[i])
+    bodies = paragraphs[0::2]
+    for k, (fixed, count) in enumerate(_closed(bodies)):
         if count:
             fixed_any.append(fixed[:160])
-            paragraphs[i] = fixed
+            paragraphs[2 * k] = fixed
     if not fixed_any:
         return turn
     new = "".join(paragraphs)
@@ -15910,7 +15913,7 @@ def _close_open_quotes(turn: dict[str, Any], phase: str, trace: list[dict[str, A
     segments = turn.get("narration_segments")
     if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
         turn["narration_segments"] = [
-            {**seg, "text": "\n\n".join(close_open_quotes(p)[0] for p in re.split(r"\n\s*\n", str(seg.get("text") or "")))}
+            {**seg, "text": "\n\n".join(f for f, _c in _closed(re.split(r"\n\s*\n", str(seg.get("text") or ""))))}
             for seg in segments
         ]
     _append_trace(trace, {"phase": phase, "event": "open_quote_closed", "paragraphs": fixed_any[:6]})

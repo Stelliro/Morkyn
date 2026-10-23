@@ -12,6 +12,7 @@ from app.narration_pipeline import (
     drop_invented_player_speech,
     drop_lines_from_earlier_scenes,
     drop_repeated_sentences,
+    quoted_spans,
     split_sentences,
     speech_units,
 )
@@ -21,7 +22,9 @@ from app.player_agency import (
     close_open_quotes,
     drop_retold_paragraphs,
     parse_yes_no,
+    plain,
     reply_to_dropped_act_cut,
+    strip_refs,
 )
 
 
@@ -30,9 +33,14 @@ def fake(answer):
 
     def chat(system, user, phase):
         asked.append((phase, user))
-        return answer
+        return answer(phase, user) if callable(answer) else answer
 
     return AgencyAsks(chat), asked
+
+
+def by_kind(**replies):
+    """A fake whose reply depends on the ask: by_kind(choice="Yes", own_act="No.")."""
+    return lambda phase, user: replies.get(phase[len("agency_ask_"):], "")
 
 
 T7_P1 = (
@@ -164,6 +172,45 @@ class YouAsTheSpeaker(unittest.TestCase):
         self.assertEqual(dropped, [])
         self.assertEqual(len(asked), 1)
 
+    # Lines the player only hears, reads or is told, with the reply Hermes 3 8B
+    # gave to that shape in the live eval (2026-10-23; speaks 39/39), plus the
+    # round-2 skeptic's overhear/radio/sign cases.
+    HEARD = (
+        ("The curtain twitches. \"Get out of my clinic,\" you hear her say from behind the curtain.", "no"),
+        ("You hear Beth shout from the gate, \"Stay safe out there!\"", "no"),
+        ("\"Welcome to Thornford,\" you are told by the guard at the gate.", "no"),
+        ("You remember your mother's words: \"Never trust a doctor who smiles.\"", "No."),
+        ("You watch the stranger, who mutters, \"Not today.\"", "no"),
+        ("You overhear the guard, \"Gate closes at dusk.\"", "no"),
+        ("\"This is Radio Free Wasteland,\" you hear the radio announce.", "no"),
+        ("\"Get down!\" you hear someone shout.", "no"),
+    )
+
+    def test_lines_the_player_only_hears_stay_on_the_measured_reply(self):
+        for para, reply in self.HEARD:
+            asks, asked = fake(reply)
+            out, dropped = drop_invented_player_speech([para, T7_P2], "i wait by the door", says=asks.speaks)
+            self.assertEqual(dropped, [], para)
+            self.assertEqual(out[0], para, para)
+            self.assertTrue(all(p == "agency_ask_speaks" for p, _ in asked), para)
+
+    def test_a_note_that_reads_is_not_asked_and_stays_even_on_yes(self):
+        para = "A scrap of paper is pinned to the door. \"Meet me at the docks,\" it reads."
+        asks, asked = fake("Yes")
+        out, dropped = drop_invented_player_speech([para, T7_P2], "i read the note", says=asks.speaks)
+        self.assertEqual(dropped, [])
+        self.assertEqual(asked, [])
+
+    def test_lines_the_player_speaks_go_on_the_measured_reply(self):
+        for para, reply in (
+            ("\"Hands where I can see them,\" you bark, leveling the rifle.", "Yes"),
+            ("You lean in, \"Where is the key, Beth?\"", "yes"),
+            ("\"Run,\" you whisper back to the boy, and he bolts.", "yes"),
+        ):
+            asks, _ = fake(reply)
+            out, dropped = drop_invented_player_speech([para, T7_P2], "i wait by the door", says=asks.speaks)
+            self.assertEqual(len(dropped), 1, para)
+
     def test_other_tag_words_go_the_same_way(self):
         for tag in ("you murmur", "you concede", "you breathe out", "you offer quietly"):
             para = f"Beth [[B]] lowers her pistol. \"Fine, we both walk away,\" {tag}, and she nods."
@@ -184,12 +231,41 @@ class YouAsTheSpeaker(unittest.TestCase):
 class AVoicedRequest(unittest.TestCase):
     """T14: '"I'm looking for work if you've got something," you add' on "i say hi" (#30)."""
 
-    def test_t14_line_the_player_did_not_choose_goes(self):
-        asks, asked = fake("No.")
+    def test_t14_line_the_player_did_not_choose_goes_on_two_noes(self):
+        # Live: the voices ask answered "no" on this line 3/3 (live-eval T14_hi_work).
+        asks, asked = fake(by_kind(speaks="yes", voices="no", could_say="No."))
         out, dropped = drop_invented_player_speech([T14_P1, T14_P2, T14_P3], T14_INPUT, says=asks.speaks, voices=asks.voices)
         self.assertEqual(dropped, [T14_P2])
         self.assertEqual(out[1], "")
-        self.assertIn("The player chose to: i say hi to Beth", asked[-1][1])
+        kinds = [p for p, _ in asked]
+        self.assertEqual(kinds[-2:], ["agency_ask_voices", "agency_ask_could_say"])
+        self.assertIn("The player wanted to: i say hi to Beth\nThe player says:", asked[-2][1])
+        self.assertIn("Does saying that do what the player wanted?", asked[-2][1])
+
+    def test_the_raw_reference_is_shown_as_a_name(self):
+        asks, asked = fake(by_kind(speaks="yes", voices="no", could_say="No."))
+        drop_invented_player_speech([T14_P1, T14_P2, T14_P3], "i say hi to @Cbeth", says=asks.speaks, voices=asks.voices)
+        prompts = "\n".join(u for _p, u in asked)
+        self.assertNotIn("@C", prompts)
+        self.assertIn("The player wanted to: i say hi to Beth", prompts)
+
+    def test_a_no_alone_does_not_drop_a_greeting(self):
+        # Live: "Hello there, doc." for "say hi" and "Thanks, doc. I owe you one."
+        # for "thank her" drew a wrong "no" 3/3 (live-eval V_hi_hello, V_thank_ok).
+        for line, typed in (
+            ("\"Hello there, doc,\" you call out with a wave.", "i say hi to Beth [[B]]"),
+            ("\"Thanks, doc. I owe you one,\" you say.", "i thank Beth [[B]]"),
+        ):
+            for second in ("yes", "The player greets her."):
+                asks, _ = fake(by_kind(voices="no", could_say=second))
+                out, dropped = drop_invented_player_speech([T14_P1, line, T14_P3], typed, says=asks.speaks, voices=asks.voices)
+                self.assertEqual(dropped, [], (line, second))
+
+    def test_a_question_on_an_asking_turn_stays_on_yes(self):
+        line = "\"Got anything that pays?\" you ask, leaning on the counter."
+        asks, _ = fake(by_kind(voices="yes"))
+        out, dropped = drop_invented_player_speech([T14_P1, line, T14_P3], "i ask Beth [[B]] about work", says=asks.speaks, voices=asks.voices)
+        self.assertEqual(dropped, [])
 
     def test_without_the_ask_the_length_rule_kept_it(self):
         out, dropped = drop_invented_player_speech([T14_P1, T14_P2, T14_P3], T14_INPUT)
@@ -241,25 +317,41 @@ class AChoiceMadeForThePlayer(unittest.TestCase):
 
     TEXT = "\n\n".join([T2_P1, T2_P2, T2_P3, T2_P4])
 
-    def test_t2_scene_ends_before_the_choice_is_made(self):
-        asks, asked = fake("yes")
-        point = choice_taken_cut(self.TEXT, asks)
+    def test_t2_scene_ends_before_the_question_that_the_prose_answered(self):
+        # Live: choice "Yes" 3/3 on this pair (live-eval T2_turn_west).
+        asks, asked = fake(by_kind(choice="Yes", own_act="No."))
+        point = choice_taken_cut(self.TEXT, asks, T2_INPUT)
         self.assertIsNotNone(point)
-        self.assertTrue(self.TEXT[point["cut"]:].startswith("With a whir of servos, you turn aside"))
-        self.assertEqual([p for p, _ in asked], ["agency_ask_choice"])
+        self.assertTrue(self.TEXT[point["cut"]:].startswith("The decision presses - continue to New Vegas"))
+        self.assertTrue(self.TEXT[: point["cut"]].rstrip().endswith("lurking in the ruins."))
+        self.assertEqual([p for p, _ in asked], ["agency_ask_choice", "agency_ask_own_act"])
         self.assertIn("continue to New Vegas or investigate", asked[0][1])
+        self.assertIn("The player wanted to: " + T2_INPUT, asked[1][1])
+        self.assertIn("you turn aside from the main road", asked[1][1])
 
-    def test_the_cut_goes_through_the_turn_and_is_noted(self):
-        asks, _ = fake("yes")
+    def test_the_cut_goes_through_the_turn_and_ends_on_no_menu(self):
+        asks, _ = fake(by_kind(choice="Yes", own_act="No."))
         trace = []
         turn = llm._drop_player_overreach({"narration": self.TEXT}, T2_INPUT, "x", trace, {}, asks=asks)
         self.assertNotIn("turn aside from the main road", turn["narration"])
+        self.assertNotIn("or investigate this closer threat", turn["narration"])
         self.assertEqual(turn["_scene_cut"]["family"], "choice_taken")
         self.assertIn("scene_ended_before_choice_made_for_player", [e.get("event") for e in trace])
 
+    def test_the_choice_the_player_made_is_never_cut(self):
+        # Round-2 reverse case: the player typed the very choice the prose tells.
+        own = "i turn aside and head west to investigate the target"
+        text = T2_P1 + "\n\nContinue to New Vegas, or investigate the closer threat? You turn aside and march west toward the signal."
+        for second in ("Yes", "It does."):
+            asks, asked = fake(by_kind(choice="Yes", own_act=second))
+            self.assertIsNone(choice_taken_cut(text, asks, own))
+            turn = llm._drop_player_overreach({"narration": text}, own, "x", [], {}, asks=asks)
+            self.assertIn("You turn aside and march west toward the signal.", turn["narration"])
+
     def test_no_keeps_the_scene(self):
-        asks, _ = fake("no")
-        self.assertIsNone(choice_taken_cut(self.TEXT, asks))
+        asks, asked = fake("no")
+        self.assertIsNone(choice_taken_cut(self.TEXT, asks, T2_INPUT))
+        self.assertEqual([p for p, _ in asked], ["agency_ask_choice"])
 
     def test_a_question_with_no_choice_in_it_is_not_asked(self):
         asks, asked = fake("yes")
@@ -277,7 +369,11 @@ class AReplyToADroppedAct(unittest.TestCase):
         self.assertTrue(turn["narration"].endswith("\"Can I help you?\" Marisol [[A]] asks."))
         self.assertNotIn("wound", turn["narration"])
         self.assertEqual([p for p, _ in asked], ["agency_ask_reply"])
-        self.assertIn("The player did not do this: You explain that you were bitten", asked[0][1])
+        # The measured wording (live-eval ALT_reply_no_negation, 33/33).
+        self.assertTrue(asked[0][1].startswith("First: You explain that you were bitten"))
+        self.assertIn("\nThen: Marisol frowns.", asked[0][1])
+        self.assertTrue(asked[0][1].endswith('Is the "then" part an answer to the "first" part? Answer yes or no.'))
+        self.assertNotIn("did not do", asked[0][1])
 
     def test_no_keeps_what_the_act_drop_left(self):
         asks, _ = fake("no")
@@ -301,7 +397,38 @@ class ARetoldParagraph(unittest.TestCase):
         out, dropped = drop_retold_paragraphs([T2_P1, T2_P2], asks)
         self.assertEqual(out[0], T2_P1)
         self.assertTrue(any("ping a priority alert" in s for s in dropped))
-        self.assertEqual([p for p, _ in asked], ["agency_ask_retell"])
+        # One ask for the pair, then one per sentence that shares much of it;
+        # the question with mostly new words is not put to it and stays.
+        self.assertEqual(asked[0][1].split("\n")[1], "Passage 2: " + plain(T2_P2))
+        self.assertTrue(all(p == "agency_ask_retell" for p, _ in asked))
+        self.assertIn("The decision presses", out[1])
+
+    def test_only_the_sentences_the_ask_confirms_go(self):
+        # Round-2 skeptic's continuation: a new act in the same room shares 62%
+        # of the earlier paragraph's words. Per sentence, the ask answered the
+        # same shape "No." live (live-eval V_same_place_new_act) and "Yes." on
+        # a retold one (V_same_other_words).
+        p1 = (
+            "The clinic's grimy windows let in the morning light. Beth stands behind the examination table, her pistol "
+            "holstered, watching you with tired eyes as dust drifts over the rusted surgical tools."
+        )
+        p2 = (
+            "Beth steps out from behind the examination table, unholsters the pistol and sets it on the tray beside the "
+            "rusted surgical tools. The morning light catches the dust. \"Fine. Ask your questions,\" she says, tired eyes on you."
+        )
+
+        def reply(phase, user):
+            later = user.split("\nPassage 2: ", 1)[1]
+            if later.startswith("Beth steps out"):
+                return "No." if "catches the dust" not in later else "Yes."
+            return "Yes."
+
+        asks, asked = fake(reply)
+        out, dropped = drop_retold_paragraphs([p1, p2], asks)
+        self.assertEqual(dropped, ["The morning light catches the dust."])
+        self.assertIn("unholsters the pistol", out[1])
+        self.assertIn("\"Fine. Ask your questions,\" she says", out[1])
+        self.assertFalse(any("Fine. Ask" in u for _p, u in asked[1:]))  # new words are never put to it
 
     def test_no_keeps_both(self):
         asks, _ = fake("no")
@@ -362,8 +489,37 @@ class AnOpenQuote(unittest.TestCase):
             "\"Stop.\" He raises a hand. \"Now.\"",
             "She mutters something under her breath.",
             "the gate creaks shut.\"",
+            # Round-2 skeptic: balanced lines with a lower-case word after a stop.
+            "\"Help! help me!\" she cries.",
+            "\"Who? me?\" Jonah asks.",
+            "\"Wait. no, not that one,\" he says.",
+            "\"Oh! and bring the rope,\" she adds.",
+            "Beth sighs. \"Fine! fine. Take it,\" she says, and \"Go!\" you hear from the hall.",
+            # Curly quotes and a mark that cannot be read are not touched.
+            "“Hey! calls out a woman.",
+            "He wrote \" in the margin.",
         ):
             self.assertEqual(close_open_quotes(text), (text, 0), text)
+
+    def test_only_the_one_bad_shape_in_an_unbalanced_paragraph(self):
+        # Balanced line first, then the T14 shape: only the second line changes.
+        text = "\"Help! help me!\" she cries. " + T14_P1
+        fixed, count = close_open_quotes(text)
+        self.assertTrue(fixed.startswith("\"Help! help me!\" she cries. "))
+        self.assertIn("\"Hey!\" calls out", fixed)
+        # Two openers with no stop and lower-case word between: nothing is guessed.
+        text = "\"Wait for me. She runs off. \"Now!\""
+        self.assertEqual(close_open_quotes(text), (text, 0))
+
+    def test_the_real_t14_order_with_the_next_paragraph_opening_on_a_quote(self):
+        # In the shipped T14 the paragraph after the open one was the player's
+        # '"I'm looking for work ..."' line: both of the woman's lines close,
+        # and the balanced paragraphs around it are untouched.
+        turn = llm._close_open_quotes({"narration": "\n\n".join([T14_P1, T14_P2, T14_P3])}, "x", [])
+        paragraphs = turn["narration"].split("\n\n")
+        self.assertIn("\"Hey!\" calls out", paragraphs[0])
+        self.assertTrue(paragraphs[0].endswith("looking for work.\""))
+        self.assertEqual(paragraphs[1:], [T14_P2, T14_P3])
 
     def test_the_engine_pass_closes_it_on_the_turn(self):
         turn = llm._close_open_quotes(
@@ -399,6 +555,31 @@ class ALineSaidInAnEarlierScene(unittest.TestCase):
         self.assertEqual(dropped, ["You're not the enemy, but this is a dangerous place."])
         self.assertIn("\"Now put the launcher down", out[0])
 
+    def test_a_stock_line_with_one_word_changed_is_a_new_line(self):
+        # Round-2 skeptic: whole replies went for merely similar short lines.
+        earlier = ["I don't know what you mean.", "Can I help you with something?", "We need to get out of here now."]
+        for para in (
+            "Jonah shrugs. \"I don't know what you want.\" He turns away.",
+            "The clerk looks up. \"Can I help you with anything?\"",
+        ):
+            out, dropped = drop_lines_from_earlier_scenes([para], earlier, "i wait")
+            self.assertEqual(dropped, [], para)
+            self.assertEqual(out, [para])
+        # The same words are still a repeat.
+        out, dropped = drop_lines_from_earlier_scenes(["The clerk looks up. \"Can I help you with something?\""], earlier, "i wait")
+        self.assertEqual(len(dropped), 1)
+
+    def test_no_bare_tag_or_empty_quotation_is_left(self):
+        earlier = ["You're not the enemy, but this is a dangerous place."]
+        para = (
+            "Beth [[B]] lowers the pistol. \"You're not the enemy, but this is a dangerous place,\" she says, \"so tell "
+            "me what you came to my clinic for and why you brought a launcher with you.\""
+        )
+        out, dropped = drop_lines_from_earlier_scenes([para], earlier, "i lower the launcher")
+        self.assertNotIn("\"\"", out[0])
+        self.assertNotRegex(out[0], r"\"[\s,.]*\" she says")
+        self.assertTrue(all(any(c.isalpha() for c in s) for s in quoted_spans(out[0])))
+
     def test_the_players_own_typed_line_is_never_dropped(self):
         para = "\"I'm the doctor here, not the enemy!\" you say, mocking her."
         out, dropped = drop_lines_from_earlier_scenes([para], T8_EARLIER, "\"I'm the doctor here, not the enemy!\" i mock her")
@@ -418,6 +599,55 @@ class ALineSaidInAnEarlierScene(unittest.TestCase):
         para = "Beth [[B]] glares. \"You're not the enemy, but this is a dangerous place. I have to be careful.\""
         turn = llm._apply_speech_memory({"narration": "You wait.\n\n" + para}, context, "i wait", "x", [])
         self.assertNotIn("dangerous place", turn["narration"])
+
+
+class AQuoteAndItsTagAreOneSentence(unittest.TestCase):
+    """Live eval 2026-10-23: prose_state.sentence_spans numbered '"What the hell?"' apart from 'she exclaims'."""
+
+    def spans(self, text):
+        from app.prose_state import sentence_spans
+
+        return [s for _a, _b, s in sentence_spans(text)]
+
+    def test_t7_line_and_its_tag(self):
+        self.assertEqual(
+            self.spans(T7_P1.replace("Beth [[B]]'s", "Beth's")),
+            [
+                "Beth's eyes widen in surprise as you aim your rifle directly at her.",
+                "\"What the hell?\" she exclaims, hands raised.",
+                "\"I'm the doctor here, not the enemy!\"",
+                "You lower the barrel slightly.",
+                "\"You're not the enemy,\" you confirm, \"but this is a dangerous place.",
+                "I have to be careful.\"",
+                "A flicker of understanding passes between you.",
+            ],
+        )
+
+    def test_a_lower_case_tag_after_a_question(self):
+        self.assertEqual(self.spans("\"Back so soon?\" she asks from the doorway. She smiles."),
+                         ["\"Back so soon?\" she asks from the doorway.", "She smiles."])
+
+    def test_a_new_sentence_after_a_line_still_splits(self):
+        # 7B run 28 T2: a capitalised name after the quote starts a sentence an act cut reads.
+        self.assertEqual(
+            self.spans("\"Where's the reeve keep the tide tables these days?\" Lettice looks up from her notes."),
+            ["\"Where's the reeve keep the tide tables these days?\"", "Lettice looks up from her notes."],
+        )
+        self.assertEqual(self.spans("\"Go now.\" The door slams. \"Run!\" You sprint out."),
+                         ["\"Go now.\"", "The door slams.", "\"Run!\"", "You sprint out."])
+        self.assertEqual(self.spans("\"Help!\" The guard turns."), ["\"Help!\"", "The guard turns."])
+        self.assertEqual(self.spans("\"Fine.\" Beth turns away."), ["\"Fine.\"", "Beth turns away."])
+
+
+class ThePlayersReferencesInAnAsk(unittest.TestCase):
+    """Live eval 2026-10-23: 'i say hi to @Cbeth' reached the asks as typed."""
+
+    def test_a_named_pick_becomes_its_name_and_a_bare_code_goes(self):
+        self.assertEqual(plain("i say hi to @Cbeth"), "i say hi to Beth")
+        self.assertEqual(plain("i give !I2 to @B at #L1"), "i give to at")
+        self.assertEqual(strip_refs("ask @Cold_tom about @Q1"), "ask Old Tom about")
+        for prose in ("\"Hey! Beth, over here!\"", "Smith & Sons", "Room #4", "Beth [[B]] nods."):
+            self.assertEqual(strip_refs(prose), prose)
 
 
 class TheAsksAreOnTheCallPath(unittest.TestCase):
