@@ -586,7 +586,14 @@ def strip_negated_clauses(text: str) -> str:
 # Trimming prose to the state
 # ---------------------------------------------------------------------------
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"\u201d\u2019]))\s+")
+# A spoken line and its lower-case tag are one sentence (live eval 2026-10-23:
+# '"What the hell?"' / 'she exclaims, hands raised.' were numbered apart, so
+# the asks lost who was speaking). After a closing quote the text does not
+# split before a lower-case word, as speech_units already reads it. A
+# capitalised word after the quote is left a new sentence: '"Back so soon?"
+# Beth asks' cannot be told from '"...days?" Lettice looks up from her notes'
+# (7B run 28 T2, a new sentence an act cut reads) by the text alone.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|(?<=[.!?][\"\u201d\u2019])\s+(?![a-z])")
 
 
 def sentence_spans(text: str) -> list[tuple[int, int, str]]:
