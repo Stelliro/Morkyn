@@ -1,0 +1,7 @@
+#!/bin/sh
+# Mørkyn's AppImage entry. The image is mounted read-only, so data/, runtime/
+# and versions/ live in the player's home, the same one the .deb and .rpm use.
+here="$(dirname "$(readlink -f "$0")")"
+export MORKYN_HOME="${MORKYN_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/morkyn}"
+mkdir -p "$MORKYN_HOME/data"
+exec "$here/usr/lib/morkyn/Morkyn" "$@"

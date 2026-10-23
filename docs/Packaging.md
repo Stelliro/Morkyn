@@ -97,13 +97,41 @@ installed `versions/0.10.0-dev.15/`, the home exe started that build, which serv
   `dist/Morkyn.app`, and a `.tar.gz` / `.zip`.
 - Both need the repo's requirements plus `pyinstaller sse-starlette starlette-context
   pydantic-settings` (the llama.cpp server extras; the scripts install them).
+- A rebuild never touches the player's `data/`, `runtime/` and `versions/` beside the exe, and
+  no archive or package takes them (`build.sh` moves them to `dist/.keep` while PyInstaller
+  replaces the folder and puts them back on failure too; `build.ps1` builds into a staging
+  folder). `build.sh` had no such guard until 2026-10-23, when a Linux rebuild wiped a played
+  copy's saves and its 4.6 GB CUDA pack.
+- Linux packages: `bash packaging/build_linux.sh [--rebuild] [tar] [deb] [rpm] [appimage] [aur]`
+  (none named: all) from `dist/Morkyn`. The pieces are in `packaging/linux/`:
+  - `.tar.gz`: run `./Morkyn` in place (portable, `data/` beside it) or `./install.sh` to
+    install for the user only (`~/.local/opt/morkyn`, `~/.local/bin/morkyn`, a menu entry;
+    `--uninstall` removes it and keeps the saves). Saves from a portable run come along once.
+  - `.deb` (Debian, Ubuntu, Mint) and `.rpm` (Fedora, openSUSE; needs `rpmbuild`, the `rpm`
+    package on Ubuntu): `/opt/morkyn`, `/usr/bin/morkyn`, a menu entry and icon. The RPM has no
+    strip, debuginfo or automatic requires, which break or misread a PyInstaller build.
+  - `.AppImage`: any distro, one file; `appimagetool` 1.9.1 is fetched into
+    `packaging/build/tools/` and run extract-and-run, so the build machine needs no FUSE.
+  - AUR (Arch): `dist/aur/PKGBUILD` and `.SRCINFO` for `morkyn-bin`, which installs from the
+    release tarball of the same version. Its checksum is the tarball built beside it, so the
+    one to push to the AUR is CI's (the `Morkyn-aur` artifact), not a local build's.
+  - Every installed format keeps the player's folders in `~/.local/share/morkyn`
+    (`MORKYN_HOME`, set by `packaging/linux/morkyn.sh` or `AppRun`), so they share one set of
+    saves and engine packs and an update or uninstall keeps them. Settings and API keys stay
+    in `~/.config/morkyn` (app/user_store.py) in every case.
+  - The packages need the build machine's glibc or newer (the script prints it, the deb and
+    rpm depend on it): build on CI's ubuntu-22.04 (glibc 2.35) for releases. A local build on
+    Ubuntu 24.04 needs 2.39.
+  - Flatpak and Snap are not made: their sandboxes need permissions worked out for the engine
+    packs (native libraries downloaded at run time) and the GPU.
 - The spec is `packaging/morkyn.spec`: hidden imports for uvicorn's lazily imported workers,
   `app.main` (imported by name by uvicorn), the llama.cpp server and its extras, pywebview's
   platform backends; `app/comfy_workflows` and llama-cpp's binaries as data; tests, tools and
   tkinter excluded. The icon is made from `Media/morkyn-logo.png` at build time.
 
 CI: `.github/workflows/package.yml` builds all three on every `v*` tag (and on request) and
-attaches the archives to that tag's release. Linux and macOS install `llama-cpp-python` from the
+attaches the archives to that tag's release; the Linux job adds the `.deb`, `.rpm` and
+`.AppImage` and keeps the AUR files as an artifact. Linux and macOS install `llama-cpp-python` from the
 CPU wheel index; macOS adds pywebview for the native window; Linux ships browser mode (the native
 window needs PyGObject and WebKit2GTK from the distribution).
 
