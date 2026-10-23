@@ -54,7 +54,7 @@ def _fresh_world():
 
 
 # Hermes 3 8B's replies to these asks (live-eval-5 / live-eval-7), by what the noun is.
-_FIGURES = {"ghoul", "raider", "drifter", "wolf"}
+_FIGURES = {"ghoul", "raider", "drifter", "wolf", "rat"}
 _SCENERY_REPLY = "No, in this"
 
 
@@ -259,6 +259,120 @@ class SceneryIsNotCounted(unittest.TestCase):
             # Only both asks saying yes files a figure; the check is never reached on a "no".
             self.assertEqual(asker.asked("figure_kind_check"), [], prose)
         self.assertEqual(_count_rolls(), [])
+
+
+class _YesAsker(_Asker):
+    """Says yes to every figure ask: whatever is read as a kind would be filed."""
+
+    def __call__(self, system, user, *, trace=None, usage=None, phase="", max_tokens=None):
+        self.calls.append((phase, user))
+        if phase in ("figure_kind", "figure_kind_check", "figure_hostile"):
+            return "Yes."
+        return super().__call__(system, user, trace=trace, usage=usage, phase=phase, max_tokens=max_tokens)
+
+
+class QuantityWords(unittest.TestCase):
+    """The words that only say how many (reviewer probes on d94d240)."""
+
+    def setUp(self):
+        _fresh_world()
+
+    def _rolled(self, prose, dice="5"):
+        from app import unnamed
+
+        with mock.patch.object(unnamed, "UNSTATED_DICE", dice):
+            turn, _ = _play(prose, "i wait", _YesAsker())
+        return turn["narration"], _names()
+
+    def test_a_couple_of_and_a_pair_of_are_a_stated_two(self):
+        for prose in ("A couple of raiders step toward you.", "A pair of raiders step toward you."):
+            _fresh_world()
+            narration, names = self._rolled(prose)
+            self.assertEqual(narration, prose)
+            self.assertEqual(names, ["Raider 1", "Raider 2"], prose)
+            self.assertEqual(_count_rolls(), [], prose)
+
+    def test_a_quantity_word_gives_way_to_the_rolled_number(self):
+        cases = {
+            "Countless rats swarm over you.": ("Five rats swarm over you.", "Rat"),
+            "Numerous raiders surround you.": ("Five raiders surround you.", "Raider"),
+            "A handful of raiders step toward you.": ("Five raiders step toward you.", "Raider"),
+            "Dozens of ghouls pour into the street toward you.": ("Five ghouls pour into the street toward you.", "Ghoul"),
+            "Many ghouls lunge at you.": ("Five ghouls lunge at you.", "Ghoul"),
+            "Lots of raiders surround you.": ("Five raiders surround you.", "Raider"),
+            "Scores of rats pour toward you.": ("Five rats pour toward you.", "Rat"),
+            "A few drifters shuffle toward you.": ("Five drifters shuffle toward you.", "Drifter"),
+            "Several ghouls lunge at you.": ("Five ghouls lunge at you.", "Ghoul"),
+            "Some raiders close in on you.": ("Five raiders close in on you.", "Raider"),
+        }
+        for prose, (want, kind) in cases.items():
+            _fresh_world()
+            narration, names = self._rolled(prose)
+            self.assertEqual(narration, want, prose)
+            self.assertEqual(names, [f"{kind} {n}" for n in range(1, 6)], prose)
+            self.assertEqual(len(_count_rolls()), 1, prose)
+
+    def test_a_group_noun_keeps_its_noun(self):
+        for prose, want in (("A pack of ghouls lunges at you.", "A pack of five ghouls lunges at you."),
+                            ("A horde of ghouls surges at you.", "A horde of five ghouls surges at you."),
+                            ("A group of raiders aims at you.", "A group of five raiders aims at you.")):
+            _fresh_world()
+            narration, names = self._rolled(prose)
+            self.assertEqual(narration, want)
+            self.assertEqual(len(names), 5, prose)
+
+    def test_the_summary_drops_the_quantity_word_too(self):
+        from app import unnamed
+
+        with mock.patch.object(unnamed, "UNSTATED_DICE", "3"):
+            turn, _ = _play("Countless rats swarm over you.", "i wait", _YesAsker(),
+                            summary="The player is swarmed by countless rats.")
+        self.assertEqual(turn["turn_summary"], "The player is swarmed by three rats.")
+
+
+class NamesAreNoBarePlural(unittest.TestCase):
+    """A name ending in -s at a sentence start (reviewer probes: Carlos, James, Silas, Thomas)."""
+
+    def setUp(self):
+        _fresh_world()
+
+    def test_names_are_not_read_as_a_kind(self):
+        from app import unnamed
+
+        def kinds(text, names=()):
+            return [m["kind"] for m in unnamed.mentions(text, (), names)]
+
+        # Agreement: a singular verb has a singular subject.
+        self.assertEqual(kinds("Carlos steps toward you."), [])
+        self.assertEqual(kinds("James waves you over."), [])
+        self.assertEqual(kinds("Silas glares at you."), [])
+        self.assertEqual(kinds("Thomas lunges at you."), [])
+        # Another capitalised word, a [[code]], the prose naming it inside a sentence, the roster.
+        self.assertEqual(kinds("Carlos Khan turned to you."), [])
+        self.assertEqual(kinds("Thomas [[N3]] turned to you."), [])
+        self.assertEqual(kinds("Silas turned to you. You nod to Silas."), [])
+        self.assertEqual(kinds("Carlos looked up at you.", {"carlos"}), [])
+        # A relative pronoun's verb and a possessive are no group either.
+        self.assertEqual(kinds("You aim at the doctor, who remains calm."), [])
+        self.assertEqual(kinds("Raiders' bullets whiz past you."), [])
+        # A real bare plural still is one, in the past tense too.
+        self.assertEqual(kinds("Ghouls lunged at you."), ["ghoul"])
+
+    def test_a_roster_name_files_nothing_and_stays_as_written(self):
+        from app import db, unnamed
+
+        with db.connect().closing() as conn:
+            loc = conn.execute("SELECT current_location_id FROM player LIMIT 1").fetchone()[0]
+            conn.execute("INSERT INTO npcs (code, location_id, name) VALUES ('N90', ?, 'Carlos Reyes')", (loc,))
+            conn.commit()
+        prose = "Carlos looked up at you from the counter."
+        asker = _YesAsker()
+        with mock.patch.object(unnamed, "UNSTATED_DICE", "4"):
+            turn, _ = _play(prose, "i wave", asker)
+        self.assertEqual(turn["narration"], prose)
+        self.assertEqual(_names(), [])
+        self.assertEqual(_count_rolls(), [])
+        self.assertFalse(any('"carlo"' in u for u in asker.asked("figure_kind")), asker.calls)
 
 
 if __name__ == "__main__":
