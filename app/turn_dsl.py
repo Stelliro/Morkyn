@@ -1270,6 +1270,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             to = to.split(" ", 1)[1] if " " in to else ""
         turn["_dsl"].setdefault("leads", []).append({"npc": who[:40], "to": to[:120]})
     elif op == "CAST":
+        if _cast_slot_chain(turn, args):
+            return
         slot = str(args[0] if args else "").strip().lower()
         value = " ".join(args[1:]).strip() if len(args) > 1 else ""
         # "CAST interacting [[H]] Tam" leads with the person's code on purpose;
@@ -1293,6 +1295,42 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             word = re.sub(r"[^A-Za-z0-9'-]+", "", value.split()[0]).lower()[:40]
             if len(word) >= 3 and word not in cast["keywords"]:
                 cast["keywords"].append(word)
+
+
+_CAST_SLOTS = ("present", "interacting", "off")
+
+
+def _cast_slot_chain(turn: dict[str, Any], args: list[Any]) -> bool:
+    """Hermes 3 8B's CAST shape: slots chained before the code ("CAST: present, interacting, A",
+    'CAST:"present interacting A"'), read as the person "interacting A" (live replays 2026-10-24:
+    every recorded run; the cast was empty, so a person on record elsewhere was never brought to
+    the player). A narrow repair of that one shape (CLAUDE.md rule 3): when every word is a slot
+    name or a person code, each code goes into every slot named before it. Anything with a name
+    in it keeps the ordinary path.
+    """
+    words = [w for w in re.split(r"[\s,;]+", " ".join(str(a) for a in args).replace('"', " ").strip()) if w]
+    if len(words) < 3 or words[0].lower() not in _CAST_SLOTS:
+        return False
+    if not all(w.lower() in _CAST_SLOTS or re.fullmatch(r"\[?\[?[A-Z]{1,3}\d{0,3}\]?\]?", w) for w in words):
+        return False
+    if sum(1 for w in words if w.lower() in _CAST_SLOTS) < 2:
+        return False
+    cast = turn.setdefault("scene_cast", {"present": [], "interacting": [], "off": [], "keywords": []})
+    slots: list[str] = []
+    last_was_code = False
+    for word in words:
+        if word.lower() in _CAST_SLOTS:
+            if last_was_code:
+                slots = []
+            slots.append(word.lower())
+            last_was_code = False
+            continue
+        code = word.strip("[]").upper()
+        for slot in slots or ["present"]:
+            if code not in cast[slot]:
+                cast[slot].append(code)
+        last_was_code = True
+    return True
 
 
 PLAYER_REF = "PLAYER"
