@@ -81,7 +81,10 @@ KIND_QUESTION = 'In this text, is "{noun}" a being that can act on its own?'
 # ghoul?" said no to 41 of 51 true figures; "could you ...? Answer yes or no."
 # 93% right, 0 false yes in 36.
 KIND_CHECK_PHASE = "figure_kind_check"
-KIND_CHECK_QUESTION = "In this text, could you fight or talk to the {noun}? Answer yes or no."
+# Measured live on Hermes 3 8B (live-eval-7): "could you fight or talk to" said no to figures that are
+# present but not engaging ("you see a pack of ghouls feasting", an NPC watching, a sleeping deathclaw);
+# "a creature or a person?": 0 false no on true figures, and the pair still filed 0 of 90 items and scenery.
+KIND_CHECK_QUESTION = "In this text, is the {noun} a creature or a person? Answer yes or no."
 HOSTILE_PHASE = "figure_hostile"
 HOSTILE_QUESTION = 'In this text, does "{phrase}" attack or threaten the player?'
 # Asked only when a pronoun ('"..." she asks') would give a quoted line to a
