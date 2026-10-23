@@ -2064,6 +2064,7 @@ def create_shell_npc(
     summary: str = "",
     sex: str = "",
     name: str = "",
+    kind: str = "",
 ) -> dict[str, Any]:
     """
     Minimal NPC for crowd / one-shot drama. No portrait, no deep stats.
@@ -2073,6 +2074,10 @@ def create_shell_npc(
     `summary` is what the prose said about them (playtest #34: a fixed
     placeholder gave every seeded face the same nothing); `sex` steers the
     drawn name; `name` is one the prose already gave them.
+
+    `kind` (an unnamed figure's kind, "Ghoul"): with no name given, the row is
+    named by its kind and the next number for that kind across the save
+    ("Ghoul 3"), not a drawn name (app/unnamed.py, Stell 2026-10-24).
     """
     presence = presence if presence in {"nameless", "background", "event_worthy"} else "nameless"
     sex = sex if sex in {"female", "male"} else ""
@@ -2082,6 +2087,16 @@ def create_shell_npc(
         or conn.execute("SELECT 1 FROM npcs WHERE name = ? COLLATE NOCASE", (wanted,)).fetchone()
     ):
         wanted = ""
+    kind_number = 0
+    kind = str(kind or "").strip()
+    if kind and not wanted:
+        from app import unnamed
+
+        kind = unnamed.kind_title(kind)
+        kind_number = unnamed.next_number(conn, kind) if kind else 0
+        wanted = unnamed.numbered(kind, kind_number) if kind else ""
+    if not kind_number:
+        kind = ""
     # Uniqueness is world-wide, not per-location: the pool is 20x20, and a run
     # with sixteen seeded faces produced three separate people all called
     # "Grainwick". Two of anyone reads as one character in two places.
@@ -2119,6 +2134,8 @@ def create_shell_npc(
             {"female": "she", "male": "he"}.get(sex, ""),
         ),
     )
+    if kind_number:
+        conn.execute("UPDATE npcs SET kind = ?, kind_number = ? WHERE id = ?", (kind, kind_number, int(cur.lastrowid)))
     try:
         from app.local_intel import ensure_npc_clock
 
@@ -5166,6 +5183,10 @@ def _clear_playthrough(conn) -> None:
         "equipment_slots",
         "inventory_capacity_modifiers",
         "npcs",
+        # The people who faded out of the last game are that game's: a new
+        # one could bring them back by name, and the unnamed figures' count
+        # (app/unnamed.next_number reads them) started the new game at Ghoul 2.
+        "faded_people",
         "player",
         "locations",
         # A new campaign has seen no streets, and its era may differ.
@@ -5176,7 +5197,7 @@ def _clear_playthrough(conn) -> None:
     conn.execute(
         """
         DELETE FROM sqlite_sequence
-        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships', 'town_seen')
+        WHERE name IN ('locations', 'npcs', 'faded_people', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships', 'town_seen')
         """
     )
     conn.execute("DELETE FROM pacing")
@@ -21145,6 +21166,21 @@ def _ensure_npcs_from_narration(
             parent = int(venues._field(here_row, "parent_id", 0) or 0) if here_row is not None else 0
             if parent:
                 intro_at = parent
+        # A name told for a numbered figure here is that figure's name now:
+        # "the raider, who says his name is Kade" (app/unnamed.py).
+        try:
+            from app import unnamed
+
+            renamed = unnamed.rename_told(conn, text, introduced["name"], int(location_id))
+        except Exception:
+            renamed = None
+        if renamed:
+            created_intro.append({
+                "code": renamed["code"], "name": renamed["name"], "role": renamed["role"], "summary": "",
+                "attitude": renamed["attitude"], "location": "", "presence": "event_worthy", "shell": False, "power_rank": 8,
+                "_seeded_from_narration": True,
+            })
+            continue
         try:
             shell = create_shell_npc(
                 conn,
@@ -21241,6 +21277,13 @@ def _ensure_npcs_from_narration(
                 existing.append({"code": known_row["code"], "name": known_row["name"], "role": known_row["role"]})
                 continue
             turn_ledger.note("npc", "figure_named_in_cut_part", hint=hint, name=given_name, role=told.get("role") or "")
+        # An unnamed figure is named by its kind and the next number for it
+        # ("a guard" -> Guard 1), not a drawn name (app/unnamed.py, 2026-10-24).
+        hint_words = hint.lower().split() if hint else []
+        hint_kind = ""
+        if hint_words and not given_name:
+            hint_kind = hint_words[-2] if len(hint_words) > 1 and re.match(
+                r"(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)$", hint_words[-1]) else hint_words[-1]
         try:
             shell = create_shell_npc(
                 conn,
@@ -21253,6 +21296,7 @@ def _ensure_npcs_from_narration(
                 summary=summary,
                 sex=_hint_sex(hint, sentence + " " + (told or {}).get("sentence", "")),
                 name=given_name,
+                kind=hint_kind,
             )
         except Exception:
             continue
@@ -22208,6 +22252,9 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
     rows = _mention_catalog(context)
     scene = _active_scene(context)
     resolved_notes: list[str] = []
+    from app import unnamed
+
+    story = unnamed.story_names(context)
     # The conversation line goes first: the brief trims this footer, and who
     # the player is talking to is the part a writer must not lose.
     conversation_turn = context.get("conversation_turn")
@@ -22247,7 +22294,7 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
         code = hit["code"]
         shown = f"{name} [[{code}]]" if code else name
         resolved_notes.append(f"@{kind}{hit['slug']} = {name} ({code or 'no code'}, {hit['label']})")
-        return shown
+        return unnamed.story_view(shown, story) if story else shown
 
     text = re.sub(r"@([CILSAEQ])([a-z0-9_]+)", replace_mention, text, flags=re.IGNORECASE)
 
@@ -22274,6 +22321,12 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
     if not notes:
         return text
     expansions = "; ".join(notes)
+    # The engine's notes name an unnamed figure as what it is ("an unnamed
+    # ghoul [[B]]"), as the context does: "Ghoul 2" reached the narrator here
+    # ("Also present, listening ...: Ghoul 1 [[A]]") and the player's own
+    # words around them are left as written (app/unnamed.py).
+    if story:
+        expansions = unnamed.story_view(expansions, story)
     return f"{text}\n\nResolved player references: {expansions}"
 
 
@@ -24946,6 +24999,15 @@ def apply_turn(
 
         # Flatten nested locations[].npcs + conversation speakers; drop place-as-person junk
         collected_npcs = _collect_npcs_from_turn_result(result)
+        # An op's "name" that is only a kind the prose shows (NPC_NEW "Ghoul"
+        # over "a ghoul lunges at you") is not filed by name: the figure is
+        # numbered below by unnamed.file_figures, with the op's attitude.
+        try:
+            from app import unnamed
+
+            collected_npcs = unnamed.take_op_figures(collected_npcs, result)
+        except Exception:
+            pass
         # A new person the prose never shows is not stored (playtest #34).
         try:
             collected_npcs = _npcs_shown_in_prose(conn, collected_npcs, narration)
@@ -25213,6 +25275,20 @@ def apply_turn(
             )
             if seeded and keeperless:
                 bind_venue_keeper(conn, int(loc_id_seed), seed_companions)
+            # Every unnamed figure the prose shows (a creature, raiders, a
+            # guard) is matched to the ones here or numbered per kind
+            # (app/unnamed.py, Stell 2026-10-24).
+            try:
+                from app import unnamed
+
+                numbered_now = unnamed.file_figures(conn, result, narration, loc_id_seed, int(max_npc_before or 0))
+                if numbered_now:
+                    seeded = list(seeded or []) + numbered_now
+                # The figures the prose shows again ("the ghoul circles you")
+                # are brought back, so they do not fade while in the scene.
+                touched_npc_ids.update(int(i) for i in result.get("_figures_shown") or [])
+            except Exception as exc:
+                turn_ledger.note("npc", "unnamed_figures_failed", error=f"{type(exc).__name__}: {exc}"[:200])
             # A person filed this turn whose name the prose tagged with a place
             # or item code ("Jonah [[L1]]", cc87dd29 T14) gets the repair too,
             # now that they have their own code (#155).
