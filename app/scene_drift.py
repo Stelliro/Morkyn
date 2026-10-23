@@ -21,7 +21,10 @@ The narrator's normal prompt is unchanged; the correction rides only on the re-d
 turn at most. Every ask goes through the turn's usage and trace (phases ``where_ended`` and the draft's
 own), the decision is a ``scene_drift`` trace record and a ledger note, and the re-draft is marked in
 model_usage (phase ``scene_drift_redraft``). Nothing here writes the save.
-AI_RPG_SCENE_DRIFT=0|off turns the re-draft off (where_ended still asks).
+The re-draft is off by default (AI_RPG_SCENE_DRIFT=1|on turns it on; where_ended still asks either
+way). Three reviewed rounds of reading "the line asked to go" with engine rules each left a class of
+moving line it re-drafted back in place ("I shoot my way out", "I buy passage to Dunmere"), which takes
+the player's move away; it stays off until that read is one measured yes/no ask on the 8B.
 """
 from __future__ import annotations
 
@@ -35,7 +38,7 @@ PHASE = "scene_drift"
 
 def enabled() -> bool:
     raw = str(os.environ.get("AI_RPG_SCENE_DRIFT", "") or "").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
+    return raw in {"1", "true", "yes", "on"}
 
 
 def correction(here_name: str) -> str:

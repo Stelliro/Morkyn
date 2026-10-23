@@ -28,6 +28,8 @@ from playtest_setup_presets import isolated_data_env  # noqa: E402
 
 _TMP = Path(tempfile.mkdtemp(prefix="morkyn-scene-drift-"))
 _ENV = isolated_data_env(str(_TMP))
+# The re-draft ships off (scene_drift.enabled); these tests are of that code path, so it is on here.
+_ENV["AI_RPG_SCENE_DRIFT"] = "on"
 _SAVED_ENV: dict[str, str | None] = {}
 
 
@@ -486,6 +488,17 @@ class DriftIsRedraftedOnce(unittest.TestCase):
         _tunnel_world()
         calls: list = []
         with mock.patch.dict(os.environ, {"AI_RPG_SCENE_DRIFT": "0"}):
+            first = {"narration": T4_PROSE, "player": {}}
+            self.assertIs(scene_drift.check(first, T4_LINE, lambda note: calls.append(note) or {}), first)
+        self.assertEqual(calls, [])
+
+    def test_the_shipped_default_is_off(self):
+        from app import scene_drift
+
+        _tunnel_world()
+        calls: list = []
+        with mock.patch.dict(os.environ, {"AI_RPG_SCENE_DRIFT": ""}):
+            self.assertFalse(scene_drift.enabled())
             first = {"narration": T4_PROSE, "player": {}}
             self.assertIs(scene_drift.check(first, T4_LINE, lambda note: calls.append(note) or {}), first)
         self.assertEqual(calls, [])
