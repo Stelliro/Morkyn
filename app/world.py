@@ -24951,9 +24951,30 @@ def apply_turn(
             pass  # agenda triggers must never block turn application
         # --------------------------------------------------------------------
 
-        # The interpreter's events (app/interpreter.py, #154): checked against
-        # the records, applied or refused, before the summary and the scene
-        # cast, so someone who died this turn is not left present.
+        # The interpreter (app/interpreter.py, #154, #157): it reads the prose
+        # here, after this function's own edits to it and with the turn's new
+        # people on the roster, so a death is read from the scene the player
+        # reads. Its events are checked against the records, applied or
+        # refused, before the summary and the scene cast, so someone who died
+        # this turn is not left present.
+        pending = result.pop("_interpreter_pending", None)
+        if isinstance(pending, dict):
+            try:
+                from app.interpreter import load_records
+                from app.llm import _model_timeout, _run_interpreter
+
+                result = _run_interpreter(
+                    result,
+                    player_input if input_kind == "player" else "",
+                    usage=result.setdefault("_model_usage", []),
+                    trace=result.setdefault("_model_trace", []),
+                    timeout=_model_timeout(45, 120, "AI_RPG_INTERPRETER_TIMEOUT"),
+                    records=load_records(conn),
+                    config=pending.get("config") or None,
+                )
+                narration = _narration_text(result)
+            except Exception as exc:
+                turn_ledger.note("interpreter", "run_failed", error=f"{type(exc).__name__}: {exc}"[:200])
         if result.get("interpreted_events"):
             try:
                 from app.interpreter import apply_events, without_refused

@@ -176,7 +176,8 @@ def roster(context: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         here = (cid is not None and location.get("id") == cid) or (ccode and str(location.get("code") or "") == ccode)
         for npc in location.get("npcs") or []:
-            if not isinstance(npc, dict):
+            # The dead are nobody a line can be said to (app/interpreter.py, #154).
+            if not isinstance(npc, dict) or int(npc.get("died_turn") or 0) > 0:
                 continue
             code = str(npc.get("code") or "").strip().upper()
             name = str(npc.get("name") or "").strip()
@@ -210,7 +211,8 @@ def known_elsewhere(context: dict[str, Any], here: set[str]) -> list[dict[str, A
         if not isinstance(location, dict):
             continue
         for npc in location.get("npcs") or []:
-            if not isinstance(npc, dict):
+            # The dead are not called over either (#154).
+            if not isinstance(npc, dict) or int(npc.get("died_turn") or 0) > 0:
                 continue
             code = str(npc.get("code") or "").strip().upper()
             name = str(npc.get("name") or "").strip()
