@@ -31,6 +31,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - [CLAUDE] The Linux window pack is built on PySide6 (LGPL-3.0) instead of PyQt6 (GPL-3.0): the packs are published and the game imports them into its own process (Stell, 2026-10-23: swap to non-GPL before uploading). - `packaging/build_packs.py`
 
 ### Fixed
+- [CLAUDE] A person the prose introduces is no longer seeded a second time from their own description: 'Dr. Vasilis, a middle-aged man with graying hair' made a drawn 'Wyatt' who took the clinic's doctor role and counter and was shipped to the next turn as its keeper. A title such as 'Dr.' no longer ends a sentence when the engine matches figures to names (#157, integ-r4 T1-T2). - `app/world.py`, `tests/test_integ_r4_keeper_roles.py`
 One roll decides an attack (#129): the combat math's hit or miss now follows the attack check rolled on the same person. In integ-r4 T3 the check rolled a critical success, the combat rolled a miss, and the prose wrote the miss.
 An attack the scene never shows (its target named nowhere in the final prose) gets the roll's own outcome line ('Your shot hits Vasilis [[B]].') and the turn summary follows it. No model ask, nothing cut.
 A turn whose line asks for no travel and whose rolled attack was aimed at someone in the room no longer moves the player to where drifted prose ended. Real travel still follows the prose.
