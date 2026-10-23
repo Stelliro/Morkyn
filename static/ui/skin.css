@@ -521,6 +521,20 @@ button:disabled:hover {
   --shard-line: var(--line);
 }
 
+/* A setting that does nothing under another setting's value (ui/interact.js,
+   DEPENDENT_FIELDS): faded like a disabled button, its reason in the title. */
+.uiDependentOff {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.uiDependentOff {
+  box-shadow: none;
+  color: var(--muted-2);
+  border-color: var(--line);
+  --shard-line: var(--line);
+}
+
 .secondaryButton:not(.chipBtn),
 .setupHeader .secondaryButton:not(.chipBtn),
 .setupHeader .buttonLike.secondaryButton:not(.chipBtn),

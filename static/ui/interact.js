@@ -217,6 +217,159 @@
   });
 
   /* ------------------------------------------------------------------------
+     4b. Dependent settings: a control that does nothing under another
+     setting's current value is greyed and made inert, with the reason as its
+     title. Inert, not disabled: FormData leaves disabled controls out, and
+     the launcher form saves every named control (Stell, 2026-10-23: "some of
+     the settings and menu ui is disabled when some settings are enabled").
+     ------------------------------------------------------------------------ */
+
+  function fieldValue(form, name) {
+    const field = form.elements?.[name];
+    if (!field) return "";
+    if (field instanceof HTMLInputElement && field.type === "checkbox") return field.checked;
+    return String(field.value ?? "");
+  }
+
+  const DEPENDENT_FIELDS = [
+    {
+      form: "#appSettingsForm",
+      targets: ['[name="narration_consolidate"]'],
+      on: (form) => fieldValue(form, "narration_pipeline") === "true",
+      why: "Runs only with the narration pipeline on.",
+    },
+    {
+      form: "#appSettingsForm",
+      targets: ['[name="dsl_skip_verify"]'],
+      on: (form) => fieldValue(form, "draft_mode") === "dsl",
+      why: "Applies to the DSL draft format only.",
+    },
+    {
+      // LLM LoRAs and the soft recycle act on the llama.cpp server alone (/api/llm-runtime/ensure).
+      form: "#modelForm",
+      targets: ['[name="lora_path"]', ".themeLoraRow", "[data-llm-soft-recycle]"],
+      on: (form) => fieldValue(form, "provider") === "llama_cpp",
+      why: "For llama.cpp / GGUF only.",
+    },
+    {
+      form: ".ttsForm",
+      targets: ['[name="enabled"]', "[data-tts-test]"],
+      on: (form) => fieldValue(form, "provider") !== "off",
+      why: "Choose a speech provider first.",
+    },
+    {
+      form: "#imageForm",
+      targets: [
+        '[name="auto_launch_if_offline"]',
+        '[name="auto_generate_npc_portraits"]',
+        ".faceLockSettings",
+        ".refreshImageCatalog",
+        ".testImageConnection",
+        ".checkImageReadiness",
+        ".launchImageBackend",
+      ],
+      on: (form) => fieldValue(form, "provider") !== "off",
+      why: "Images are off.",
+    },
+    {
+      form: "#imageForm",
+      targets: ['[name="fullbody_ref_denoise"]', '[name="character_lock_weight"]', ".testCharacterLock"],
+      on: (form) => fieldValue(form, "character_consistency") !== "off",
+      why: "Face lock is off.",
+    },
+    {
+      form: "#imageForm",
+      targets: ['[name="character_lock_weight"]'],
+      on: (form) => ["auto", "strong"].includes(fieldValue(form, "character_consistency")),
+      why: "Used only by Auto or Strong face lock.",
+    },
+    {
+      form: "#imageForm",
+      targets: [
+        '[name="adetailer_use_face_ref"]',
+        '[name="adetailer_on_face"]',
+        '[name="adetailer_on_fullbody"]',
+        '[name="adetailer_model"]',
+        '[name="adetailer_denoise"]',
+      ],
+      on: (form) => fieldValue(form, "adetailer_enable") === true,
+      why: "ADetailer is off.",
+    },
+  ];
+
+  // The row a target stands for: a radio's fieldset, a field's label, or the element itself.
+  function dependentRow(el) {
+    if (el instanceof HTMLInputElement && el.type === "radio") return el.closest("fieldset") || el;
+    if (el.matches("input, select, textarea")) return el.closest("label, .settingField, .appSettingsField") || el;
+    return el;
+  }
+
+  const CONTROLS = "input, select, textarea, button";
+
+  function applyDependentFields(root = document) {
+    // One row can be named by two rules (lock weight): it is off when any rule says so.
+    const off = new Map();
+    const seen = new Set();
+    DEPENDENT_FIELDS.forEach((spec) => {
+      root.querySelectorAll(spec.form).forEach((form) => {
+        const active = spec.on(form);
+        spec.targets.forEach((selector) => {
+          form.querySelectorAll(selector).forEach((el) => {
+            const row = dependentRow(el);
+            seen.add(row);
+            if (!active && !off.has(row)) off.set(row, spec.why);
+          });
+        });
+      });
+    });
+    // The row keeps the reason (its title shows on hover); the controls in it
+    // are what stop answering. A control inside two rows (ADetailer inside the
+    // face lock) is off while either is.
+    const controls = new Set();
+    seen.forEach((row) => {
+      const why = off.get(row);
+      const wasOff = row.classList.contains("uiDependentOff");
+      if (why) {
+        if (!wasOff) row.dataset.titleBefore = row.getAttribute("title") || "";
+        row.classList.add("uiDependentOff");
+        row.setAttribute("aria-disabled", "true");
+        row.title = why;
+      } else if (wasOff) {
+        row.classList.remove("uiDependentOff");
+        row.removeAttribute("aria-disabled");
+        if (row.dataset.titleBefore) row.title = row.dataset.titleBefore;
+        else row.removeAttribute("title");
+        delete row.dataset.titleBefore;
+      }
+      if (row.matches(CONTROLS)) controls.add(row);
+      row.querySelectorAll(CONTROLS).forEach((control) => controls.add(control));
+    });
+    const offRows = [...off.keys()];
+    controls.forEach((control) => {
+      const isOff = offRows.some((row) => row === control || row.contains(control));
+      if (control instanceof HTMLButtonElement) {
+        // A button is not form data, so it is disabled; only one this code
+        // disabled is enabled again (app.js disables buttons while they run).
+        if (isOff && !control.disabled) {
+          control.disabled = true;
+          control.dataset.dependentOff = "1";
+        } else if (!isOff && control.dataset.dependentOff) {
+          control.disabled = false;
+          delete control.dataset.dependentOff;
+        }
+      } else {
+        control.inert = isOff;
+      }
+    });
+  }
+
+  document.addEventListener("change", (event) => {
+    if (!(event.target instanceof Element)) return;
+    if (!DEPENDENT_FIELDS.some((spec) => event.target.closest(spec.form))) return;
+    applyDependentFields();
+  });
+
+  /* ------------------------------------------------------------------------
      Shared: turn an element into {type, entity, code}
      ------------------------------------------------------------------------ */
 
@@ -688,6 +841,7 @@
   function applyAll() {
     applyFolds();
     applyProviderFields();
+    applyDependentFields();
   }
   const observer = new MutationObserver(() => {
     clearTimeout(applyTimer);
@@ -705,5 +859,5 @@
   else boot();
 
   // A small public surface for the console and for tests.
-  window.MorkynInteract = { applyFolds, applyProviderFields, resolve, tileAt, mapActions, speechItems, closeMenu, hidePeek, openMenu: openMenuWith };
+  window.MorkynInteract = { applyFolds, applyProviderFields, applyDependentFields, resolve, tileAt, mapActions, speechItems, closeMenu, hidePeek, openMenu: openMenuWith };
 })();
