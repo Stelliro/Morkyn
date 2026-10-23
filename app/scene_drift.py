@@ -7,9 +7,11 @@ draft's packet alone moved clear drift only 7/36 -> 4/36.
 
 Engine first: app/where_ended.py already asks, on every player turn, where the prose leaves the player,
 and checks the answer with "are you still in <here>?" (live: 0 wrong moves in 72). When that checked
-answer is somewhere other than the player's place AND the player's line did not ask to go anywhere (the
-movement code's own reading, world.line_asks_to_go), the scene drifted: an unasked move is offered, not
-made (#46, #76). The engine then sends ONE re-draft of the turn through the same draft pipeline with one
+answer is somewhere other than the player's place AND the player's line is clearly a staying act (the
+turn's own intent reading is combat, trade, conversation, investigation or an item in hand, with no
+movement read at all: world.line_stays_here), the scene drifted: an unasked move is offered, not made
+(#46, #76). Any other line (a way of going the keywords miss, rest, anything unread) is left alone: a
+missed re-draft only keeps the draft, a wrong one would take the player's move away. The engine then sends ONE re-draft of the turn through the same draft pipeline with one
 short correction passed on as instruction, and asks where_ended again:
 
 * the re-draft stays here (checked): it is kept;
@@ -77,12 +79,12 @@ def _ask(turn: dict[str, Any], player_input: str) -> dict[str, Any] | None:
     return record
 
 
-def _asks_to_go(player_input: str) -> bool:
+def _stays_here(player_input: str) -> bool:
     from app.db import connect
-    from app.world import line_asks_to_go
+    from app.world import line_stays_here
 
     with connect().closing() as conn:
-        return line_asks_to_go(conn, player_input)
+        return line_stays_here(conn, player_input)
 
 
 def check(
@@ -112,10 +114,10 @@ def check(
         return turn
     answer = str(_choice(first).get("label") or "")
     try:
-        asked = _asks_to_go(player_input)
+        staying = _stays_here(player_input)
     except Exception:
-        asked = True  # unsure: the move rules decide, as before
-    if asked:
+        staying = False  # unsure: the move rules decide, as before
+    if not staying:
         return turn
     options = first.get("options") or []
     here_name = str((options[0] if options else {}).get("name") or "").strip()

@@ -10463,41 +10463,8 @@ def _invites_to_place(player_input: str, rows: list[Any], current_name: str = ""
     return False
 
 
-# The player's body going somewhere: a motion verb with a way to go after it
-# ("creep into", "retreat to", "continue down the tunnel", "set off to New
-# Vegas", "take the stairs down"), or one that is going on by itself ("I flee",
-# "I push on", "I explore"). Only line_asks_to_go reads it, so a scene the line
-# walked out of is never re-drafted back in place (review of the drift fix:
-# "I creep into the ruined subway tunnel ..." was). It errs towards motion: a
-# line read as moving only keeps the draft as it is.
-_LINE_MOTION_RE = re.compile(
-    r"\b(?:go|goes|going|went|walk\w*|run|runs|running|ran|head\w*|creep\w*|crept|sneak\w*|snuck|crawl\w*|"
-    r"climb\w*|clamber\w*|jump\w*|leap\w*|dive|dives|diving|dove|swim\w*|swam|wade\w*|retreat\w*|withdraw\w*|"
-    r"continu\w*|press\w*|push\w*|proceed\w*|advanc\w*|ventur\w*|delv\w*|descend\w*|ascend\w*|enter\w*|"
-    r"exit\w*|leave|leaves|leaving|left|return\w*|follow\w*|wander\w*|travel\w*|ride|rides|riding|rode|"
-    r"march\w*|stride|strides|striding|strode|slip\w*|step\w*|move|moves|moving|hurr\w*|dash\w*|sprint\w*|"
-    r"race|races|racing|rush\w*|escap\w*|cross\w*|make\s+my\s+way|set(?:s|ting)?\s+(?:off|out)|"
-    r"get\s+(?:out|away|back|down|up|off))\b"
-    r"(?:\s+(?!and\b|then\b)[\w'’-]+){0,4}?\s*"
-    r"\b(?:in|into|inside|out|outside|through|down|up|to|toward|towards|back|away|on|onward|onwards|further|"
-    r"farther|deeper|ahead|forward|across|over|along|past|around|off|north\w*|south\w*|east\w*|west\w*|home|"
-    r"there|upstairs|downstairs|below|above)\b"
-    r"|\b(?:flee|flees|fleeing|fled|explor\w*|retreat\w*|keep\s+(?:walking|going|moving|running)|move\s+on|"
-    r"get\s+(?:out|away)|"
-    r"take\s+(?:the\s+)?(?:stairs|steps|ladder|path|road|trail|track|passage|tunnel|corridor|exit|lift|elevator))\b",
-    re.I,
-)
-
-
-def line_asks_to_go(conn, player_input: str) -> bool:
-    """The movement code's own reading of the player's line: it asks to go somewhere.
-
-    The same readers resolve_movement and _unasked_unshown_move hold a move to
-    (its movement intent, travel, a doorway, a follow, business at another known
-    place, an invitation to one), over the narrated clauses the player does now,
-    and a body moving (_LINE_MOTION_RE) for the motion the travel keywords miss.
-    app/scene_drift.py reads it before it calls a scene that ends elsewhere drift.
-    """
+def _line_acts(player_input: str) -> tuple[str, str]:
+    """The player's line without quoted questions, and the clauses it narrates the player doing now."""
     line = _without_quoted_questions(str(player_input or ""))
     acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", _player_line(line))
     try:
@@ -10506,9 +10473,18 @@ def line_asks_to_go(conn, player_input: str) -> bool:
         acts = acts_now(acts)
     except Exception:
         pass
+    return line, acts
+
+
+def line_asks_to_go(conn, player_input: str) -> bool:
+    """The movement code's own reading of the player's line: it asks to go somewhere.
+
+    The same readers resolve_movement and _unasked_unshown_move hold a move to
+    (its movement intent, travel, a doorway, a follow, business at another known
+    place, an invitation to one), over the narrated clauses the player does now.
+    """
+    line, acts = _line_acts(player_input)
     if travel_intent(acts) or venue_move_intent(acts) or _turn_intent(acts)[0] == "travel":
-        return True
-    if _LINE_MOTION_RE.search(acts):
         return True
     try:
         # resolve_movement's own intent: "I ask Mara to take me to the clinic".
@@ -10525,6 +10501,58 @@ def line_asks_to_go(conn, player_input: str) -> bool:
         return False
     current_name = str(here["name"] or "") if here is not None else ""
     return _acts_at_known_place(acts, rows, current_name) or _invites_to_place(line, rows, current_name)
+
+
+# The turn intents whose act is done where the player stands: a blow, a deal,
+# words, a look or search. Not inventory: its verbs are also ways of going
+# ("take the stairs", "pack up", "draw near"); and not rest, training, ability,
+# claim_check or "general" (a line the intent keywords do not read).
+_STAYING_INTENTS = ("combat", "trade", "conversation", "investigation")
+
+# The verb that leads each act of the line: the word after the player's own
+# "I"/"we" (past one -ly adverb), and the word that opens the line, a comma
+# stretch or an and/then/but clause.
+_ACT_HEAD_AFTER_SUBJECT_RE = re.compile(r"\b(?:i|we)\s+(?:[a-z]+ly\s+)?([a-z][a-z'’-]*)", re.I)
+_ACT_HEAD_OPENING_RE = re.compile(
+    r"(?:^|[,;]|\b(?:and|then|but)\b)\s*(?:(?:and|then)\s+)?(?:[a-z]+ly\s+)?([a-z][a-z'’-]*)", re.I
+)
+
+
+def _act_heads(acts: str) -> list[str]:
+    heads = [m.group(1).lower() for m in _ACT_HEAD_AFTER_SUBJECT_RE.finditer(acts)]
+    heads += [
+        m.group(1).lower() for m in _ACT_HEAD_OPENING_RE.finditer(acts)
+        if m.group(1).lower() not in {"i", "we", "and", "then", "but"}
+    ]
+    return heads
+
+
+def line_stays_here(conn, player_input: str) -> bool:
+    """The player's line is clearly a staying act by the turn's own intent reading, with no movement read at all.
+
+    app/scene_drift.py re-drafts a scene that ended elsewhere only on such a line.
+    Both the line's intent and the verb leading each of its acts must be a
+    staying one, and no movement reader may read a move in it. Anything else is
+    "not clearly staying": a way of going the keywords do not know ("I make for
+    the docks", "I limp back to camp", "I creep into the tunnel where a pack of
+    ghouls ...") is left alone, so the error this makes is a missed re-draft (the
+    draft stands, as it did before the check), never a move taken from the player.
+    """
+    line, acts = _line_acts(player_input)
+    readings = [_turn_intent(text) for text in (acts, line)]
+    if any(primary not in _STAYING_INTENTS or "travel" in secondary for primary, secondary in readings):
+        return False
+    staying_words = set().union(*(TURN_INTENT_KEYWORDS[intent] for intent in _STAYING_INTENTS))
+    heads = _act_heads(acts)
+    if not heads or any(not (_intent_tokens(head) & staying_words) for head in heads):
+        return False
+    try:
+        # resolve_movement's own intent turns to travel on a walk inside another act.
+        if _movement_intent(conn, line) != readings[1][0]:
+            return False
+        return not line_asks_to_go(conn, player_input)
+    except Exception:
+        return False
 
 
 def _acts_at_known_place(acts: str, rows: list[Any], current_name: str = "") -> bool:
