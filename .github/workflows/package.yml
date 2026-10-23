@@ -100,16 +100,11 @@ jobs:
             acc: metal
           - os: macos-15-intel
             acc: cpu
-          # The local speech engine add-on (Piper), one per platform.
-          - os: windows-latest
-            acc: piper
-          - os: ubuntu-22.04
-            acc: piper
-          - os: macos-14
-            acc: piper
-          - os: macos-15-intel
-            acc: piper
-          # The Linux window (pywebview on Qt WebEngine); Windows and macOS ship theirs.
+          # No Piper speech pack: piper-tts and the espeak-ng inside it are
+          # GPL-3.0, and the game imports packs into its own process (Stell,
+          # 2026-10-23: no GPL in published packs). `build_packs.py piper`
+          # still builds one for local testing.
+          # The Linux window (pywebview on Qt WebEngine, PySide6); Windows and macOS ship theirs.
           - os: ubuntu-22.04
             acc: window
     runs-on: ${{ matrix.os }}

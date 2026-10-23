@@ -65,7 +65,8 @@ belong to, with the date).
   Stell (2026-10-23) asked to get "0.10.2" ready and, asked which, chose 0.11.0 as recorded
   here: a 0.10.x number now would sort below the 0.11.0 builds already made. The 0.11.0
   section, README, `changelogs/0.11.md` and CHANGELOGS.md are written; the tag and push wait
-  for the ask, and the `qt-window` pack needs the packs workflow run (`packs: true`).
+  for the ask. The Linux `qt-window` (PySide6) and fixed Linux CUDA packs were uploaded by hand
+  on 2026-10-23 (sha256 checked against the release); the packs workflow no longer builds Piper.
 - **Playtests: log only.** While Stell is playtesting, log each reported issue in
   docs/PLAYTEST_ISSUES.md (where, what, evidence, first guess at cause) and acknowledge. No fixes
   until Stell says testing is done (2026-10-05).

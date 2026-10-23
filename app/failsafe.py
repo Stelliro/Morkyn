@@ -88,10 +88,11 @@ _COPY: dict[str, dict[str, Any]] = {
         ],
     },
     "engine_missing": {
-        "title": "The local engine is not installed",
-        "summary": "Python could not import llama_cpp, so no GGUF can run in-process.",
+        "title": "The local engine is missing or did not load",
+        "summary": "llama_cpp would not import or load its library, so no GGUF can run in-process. A smaller context will not help.",
         "tips": [
-            "Run the launcher once with the install step, or run: pip install llama-cpp-python inside .venv.",
+            "In the packaged game: open Updates → Local engine, reinstall the pack for your graphics card, then restart Mørkyn.",
+            "From the source folder: run the launcher once with the install step, or run: pip install llama-cpp-python inside .venv.",
             "Or switch Provider in LLM settings to a llama.cpp server or a cloud API.",
         ],
     },
@@ -194,6 +195,14 @@ def classify_failure(message: Any, *, stage: str = "turn", provider: str = "") -
         "actions": [RETRY_ACTION, SETTINGS_ACTION],
         "fallback": dict(OFFLINE_NARRATOR) if stage == "turn" else None,
     }
+    return problem
+
+
+def engine_problem(error: str = "") -> dict[str, Any]:
+    """The MLE loader's case: llama_cpp would not import or load its library, so no context size can help."""
+    problem = classify_failure(error, stage="load", provider="mle")
+    copy = _COPY["engine_missing"]
+    problem.update(code="engine_missing", title=copy["title"], summary=copy["summary"], tips=list(copy["tips"]))
     return problem
 
 

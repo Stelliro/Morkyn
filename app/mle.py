@@ -58,6 +58,10 @@ class MleNotReady(RuntimeError):
         self.problem = problem
 
 
+class MleEngineMissing(MleNotReady):
+    """llama_cpp itself would not import or load its library: no context size can help."""
+
+
 def models_dir() -> Path:
     """Directory of local GGUF weights. data/ is gitignored."""
     from app.paths import ROOT
@@ -444,7 +448,7 @@ def _open_model(path: str, n_ctx: int):
     try:
         from llama_cpp.llama import Llama
     except Exception as exc:
-        raise MleNotReady(f"MLE could not import llama_cpp to load {path}. {exc}") from exc
+        raise MleEngineMissing(f"MLE could not import llama_cpp to load {path}. {exc}") from exc
     return Llama(
         model_path=path,
         n_ctx=n_ctx,
@@ -484,6 +488,14 @@ def _ensure_loaded(path: Path) -> None:
         loaded = None
         try:
             loaded = _open_model(resolved, n_ctx)
+        except MleEngineMissing as exc:
+            # The engine is missing or broken (a pack without its CUDA libraries,
+            # 2026-10-23): it was offered as "did not fit, continue with 8,192".
+            from app.failsafe import engine_problem
+
+            _LAST_PROBLEM = engine_problem(str(exc))
+            exc.problem = _LAST_PROBLEM
+            raise
         except Exception as exc:
             errors.append(f"context {n_ctx}: {exc}")
             if loaded is not None:
