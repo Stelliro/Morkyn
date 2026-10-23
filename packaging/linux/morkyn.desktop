@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mørkyn
+Comment=A dark-fantasy RPG narrated by a local or cloud language model
+Exec=morkyn
+Icon=morkyn
+Terminal=false
+Categories=Game;RolePlaying;
+Keywords=RPG;fantasy;LLM;

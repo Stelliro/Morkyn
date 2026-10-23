@@ -7,6 +7,9 @@ This folder is Mørkyn ready to run: no Python, no pip.
 - **macOS:** open `Morkyn.app`.
 - **Linux:** run `./Morkyn`. It opens the game in your browser (the native window needs
   PyGObject and WebKit2GTK, which most distributions ship as `python3-gi gir1.2-webkit2-4.1`).
+  Run `./install.sh` to install it for your user with a menu entry (`./install.sh --uninstall`
+  removes it). The installed game, like the `.deb`, `.rpm` and `.AppImage`, keeps your saves
+  and engine packs in `~/.local/share/morkyn` instead of beside the program.
 
 Options: `Morkyn.exe --browser` (system browser instead of the window), `--console` (no window,
 run in the terminal), `lan` / `vpn` / a port number (reach and port for this start).

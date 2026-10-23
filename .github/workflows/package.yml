@@ -51,19 +51,36 @@ jobs:
       - name: Build (Linux/macOS)
         if: matrix.name != 'windows'
         run: bash packaging/build.sh --python python
+      - name: Linux packages (.deb, .rpm, AppImage, AUR PKGBUILD)
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm fakeroot
+          bash packaging/build_linux.sh deb rpm appimage aur
+      - name: The AUR files (pushed to aur.archlinux.org by hand, not attached)
+        if: matrix.name == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Morkyn-aur
+          path: dist/aur/
+          include-hidden-files: true
       - uses: actions/upload-artifact@v4
         with:
           name: Morkyn-${{ matrix.name }}
           path: |
             dist/*.zip
             dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
           if-no-files-found: error
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh release upload "${GITHUB_REF_NAME}" dist/*.zip dist/*.tar.gz --clobber 2>/dev/null || gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+        run: |
+          shopt -s nullglob
+          gh release upload "${GITHUB_REF_NAME}" dist/*.zip dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.AppImage --clobber
 
   packs:
     if: github.event_name == 'workflow_dispatch' && inputs.packs

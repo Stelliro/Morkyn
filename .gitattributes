@@ -2,3 +2,5 @@
 # with "bad interpreter: /bin/bash^M", and most Windows clones set
 # core.autocrlf=true, which would otherwise rewrite them on checkout.
 *.sh text eol=lf
+# AppRun is a shell script without the extension (the AppImage entry).
+packaging/linux/AppRun text eol=lf
