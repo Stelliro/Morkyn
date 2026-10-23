@@ -1,26 +1,34 @@
-"""Person or place: the one question asked before a name is filed (#155, #152).
+"""Person or place, and the place a line goes to: small asks before a turn is filed (#155, #152).
 
 The engine mints people and places from names. A name it reads out of the
-prose ("New Vegas, the minigun cradled in your armored fist") can be either,
-and the shape of the sentence does not say which: Hermes 3 8B run cc87dd29 T2
-filed the city New Vegas as NPC A because the player "set off to New Vegas to
-fight a Deathclaw". So, before apply_turn files anyone:
+prose ("New Vegas, the minigun cradled in your armored fist") or out of the
+model's own ops (NPC_NEW "Megaton", QUEST AT "Mattias Slade") can be either,
+and neither the sentence's shape nor the op says which: Hermes 3 8B run
+cc87dd29 T2 filed the city New Vegas as NPC A because the player "set off to
+New Vegas to fight a Deathclaw". So, before apply_turn files anyone, outside
+its write block:
 
-1. A name the engine itself reads out of the prose (world._introduced_people)
-   is a place when a record says so (a place this turn's ops name: LOC_NEW,
-   MOVE, a job's AT); otherwise one small plain ask decides:
-   'In this text, is "New Vegas" a person or a place?'
-2. When the ops and the records disagree (NPC_NEW under a place's name, or
-   LOC_NEW under a roster person's name), the same ask decides.
+1. Every new name the turn would file (a person the engine reads out of the
+   prose, a new person or place the ops write) is a candidate. The engine's
+   own records decide what they can (a stored place is never read as a new
+   person); the model's ops are candidates, not records. One small plain ask
+   decides each one: 'In this text, is "New Vegas" a person or a place?'.
+   Only the offline narrator, whose ops the engine wrote, is read as a record.
+2. A quoted line no known person says still seeds a stranger in
+   world._ensure_npcs_from_narration. When the turn files nobody, one ask
+   checks that a person says it ('A new message blinks into existence:
+   "New target detected."' is a readout, not a stranger).
+3. #152, places by reference: the place the player's line goes to is first a
+   place the line names outright (world's name matching), then a place code
+   the line types (#L3) or the chat last showed under a word the line uses
+   ("I go into the clinic" after "... clinic [[L3]]"). That reference is a
+   candidate; one ask checks the player is the one going there ('I tell Beth
+   to go to the clinic' is not the player going).
 
 Each ask goes through llm._chat_text, so its prompt, raw reply and seconds are
 in the turn's trace (model_trace) and model_usage like every other call, and
-its decision is a turn_ledger note. A name settled as a place is never filed as
-a person; a name settled as a person is never filed as a place.
-
-The same file holds the reference binding of #152: a place the player's line
-names ("I go into the clinic") is the place the chat last showed with that
-word, by its code ([[L3]]), before any matching by name.
+its decision is a turn_ledger note. A reply the engine cannot read changes
+nothing: the turn is filed as it was before these asks.
 """
 from __future__ import annotations
 
@@ -29,32 +37,45 @@ from typing import Any, Callable
 
 from app import turn_ledger
 
-# The ask: one question, a one-word answer.
+# The kind ask: one question, a one-word answer (Hermes 3 8B: 54/54, live eval 2026-10-23).
 KIND_SYSTEM = "Answer with one word: person or place."
 KIND_QUESTION = 'In this text, is "{name}" a person or a place?'
 KIND_PHASE = "entity_kind"
 KIND_MAX_TOKENS = 4
-# At most this many asks in one turn; a name past them is filed as before.
-MAX_ASKS = 3
+# The yes/no asks.
+YES_NO_SYSTEM = "Answer yes or no."
+SPEAKER_QUESTION = 'In this text, does a person say "{quote}"?'
+SPEAKER_PHASE = "quote_speaker"
+GOING_QUESTION = "Is the player going to {place}?"
+GOING_PHASE = "place_going"
+YES_NO_MAX_TOKENS = 4
+# At most this many kind asks in one turn; a name past them is filed as before.
+MAX_ASKS = 6
+# At most this many places checked for one line.
+MAX_GOING_ASKS = 2
 
 Ask = Callable[..., str]
 _ASK_OVERRIDE: list[Ask | None] = [None]
 
 
 def set_kind_ask(ask: Ask | None) -> Ask | None:
-    """Use ``ask`` for the kind question (None: the turn's own model). Returns the previous one."""
+    """Use ``ask`` for this module's asks (None: the turn's own model). Returns the previous one.
+
+    ``ask(system, user, *, trace, usage, phase, max_tokens)`` returns the reply text.
+    """
     previous = _ASK_OVERRIDE[0]
     _ASK_OVERRIDE[0] = ask
     return previous
 
 
-def _model_ask(system: str, user: str, *, trace: list | None, usage: list | None) -> str:
+def _model_ask(system: str, user: str, *, trace: list | None, usage: list | None,
+               phase: str = KIND_PHASE, max_tokens: int = KIND_MAX_TOKENS) -> str:
     """The turn's own model, through the plain-text call path that records the
     prompt, the raw reply and the seconds in the turn's trace and usage."""
     from app.llm import _chat_text
 
     return _chat_text(
-        system, user, timeout=60, usage=usage, phase=KIND_PHASE, max_tokens=KIND_MAX_TOKENS,
+        system, user, timeout=60, usage=usage, phase=phase, max_tokens=max_tokens,
         trace=trace, temperature=0.0,
     )
 
@@ -64,12 +85,15 @@ def _ask() -> Ask:
 
 
 def read_kind(reply: Any) -> str:
-    """'person', 'place', or '' when the reply is neither or both."""
-    words = set(re.findall(r"[a-z]+", str(reply or "").lower()))
-    person, place = "person" in words, "place" in words
-    if person == place:
-        return ""
-    return "person" if person else "place"
+    """'person' or 'place' when the reply opens on it, else '' (unread)."""
+    m = re.match(r"\W*(person|place)\b", str(reply or "").lower())
+    return m.group(1) if m else ""
+
+
+def read_yes_no(reply: Any) -> bool | None:
+    """True or False when the reply opens on yes or no, else None (unread)."""
+    m = re.match(r"\W*(yes|no)\b", str(reply or "").lower())
+    return None if not m else m.group(1) == "yes"
 
 
 # ------------------------------------------------------------------ records
@@ -102,7 +126,7 @@ def _kinds(result: dict[str, Any] | None) -> dict[str, str]:
 
 
 def settled_places(result: dict[str, Any] | None) -> set[str]:
-    """Names this turn settled as places (by a record or by the ask)."""
+    """Names this turn settled as places (by the ask, or the offline narrator's own ops)."""
     return {str(name) for name, kind in _kinds(result).items() if kind == "place"}
 
 
@@ -112,11 +136,10 @@ def settled_person(result: dict[str, Any] | None, name: Any) -> bool:
 
 
 def not_people(result: dict[str, Any] | None) -> set[str]:
-    """Names the prose-reading mint must not file as a person (lower case):
-    places this turn names, and names settled as places, unless the ask
-    settled them as people."""
-    kinds = _kinds(result)
-    return {n for n in turn_place_names(result) if kinds.get(n) != "person"} | settled_places(result)
+    """Names the prose-reading mint must not file as a person (lower case): the
+    names this turn settled as places. A model op naming a place is not enough
+    on its own: QUEST AT "Mattias Slade" over "Mattias Slade, the courier"."""
+    return settled_places(result)
 
 
 def drop_places_from_people(conn, npcs: list[Any], result: dict[str, Any] | None) -> list[Any]:
@@ -134,7 +157,13 @@ def drop_places_from_people(conn, npcs: list[Any], result: dict[str, Any] | None
     return kept
 
 
-# --------------------------------------------------------------- the ask
+def quote_not_spoken(result: dict[str, Any] | None) -> list[str]:
+    """Quoted lines the speaker ask said no person says (they seed no stranger)."""
+    quotes = result.get("_quotes_not_spoken") if isinstance(result, dict) else None
+    return [str(q) for q in quotes] if isinstance(quotes, list) else []
+
+
+# --------------------------------------------------------------- the asks
 
 
 def _sentences_naming(text: str, name: str, limit: int = 2) -> list[str]:
@@ -155,16 +184,22 @@ def _ask_text(name: str, narration: str, player_line: str) -> str:
 
 
 def kind_prompt(name: str, narration: str, player_line: str) -> str:
-    """The user half of the ask, exactly as sent."""
+    """The user half of the kind ask, exactly as sent."""
     return f"Text: {_ask_text(name, narration, player_line)}\n{KIND_QUESTION.format(name=name)}"
 
 
+def _call(system: str, user: str, phase: str, max_tokens: int, trace, usage) -> str:
+    return _ask()(system, user, trace=trace, usage=usage, phase=phase, max_tokens=max_tokens)
+
+
 def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True) -> dict[str, str]:
-    """Settle which names this turn would file as the wrong kind; called before apply_turn.
+    """Settle person or place for every new name this turn would file; called before apply_turn.
 
     Verdicts go on ``result["_entity_kinds"]`` (lower-case name -> "person" or
-    "place"); apply_turn and the prose mint read them. ``ask=False`` (the
-    offline narrator) keeps to the records.
+    "place"); apply_turn and the prose mint read them. The same call runs the
+    speaker check and the place-reference check (see the module notes).
+    ``ask=False`` (the offline narrator, whose ops the engine wrote) reads
+    those ops as records and asks nothing.
     """
     if not isinstance(result, dict):
         return {}
@@ -172,6 +207,14 @@ def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True)
     from app.db import connect
 
     narration = world._narration_text_of(result)
+    trace = result.get("_model_trace") if isinstance(result.get("_model_trace"), list) else None
+    usage = result.get("_model_usage") if isinstance(result.get("_model_usage"), list) else None
+    line = world._player_line(player_input)
+    if ask:
+        try:
+            settle_place_reference(result, player_input, trace=trace, usage=usage)
+        except Exception as exc:
+            turn_ledger.note("movement", "place_reference_failed", error=f"{type(exc).__name__}: {exc}"[:160])
     if not narration.strip():
         return {}
     try:
@@ -185,53 +228,55 @@ def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True)
             except Exception:
                 player_names = []
             places = [str(r[0] or "") for r in conn.execute("SELECT name FROM locations").fetchall()]
+            unspoken = world._unattributed_dialogue(conn, narration, result) if ask else ""
     except Exception:
         return {}
     roster_keys = {_norm(n) for n in roster} - {""}
     place_keys = {_norm(n) for n in places} - {""}
-    records = turn_place_names(result)
+    op_places = turn_place_names(result)
     op_people = [
         str(n.get("name") or "").strip() for n in result.get("npcs") or []
         if isinstance(n, dict) and str(n.get("name") or "").strip() and not str(n.get("code") or "").strip()
     ]
 
-    # (name, the record that disagrees or "" for the engine's own guess)
+    # (name, why it is asked about)
     questions: list[tuple[str, str]] = []
     kinds: dict[str, str] = {}
-    # 1. People the engine reads out of the prose.
+    introduced: list[str] = []
+    # 1. People the engine reads out of the prose (stored places are already left out).
     for person in world._introduced_people(narration, roster + player_names + op_people, set(places)):
         name = str(person.get("name") or "").strip()
-        key = _norm(name)
-        if not key or key in kinds:
-            continue
-        if key in records:
-            kinds[key] = "place"
-            turn_ledger.note("npc", "name_is_a_place", name=name, by="record")
-        else:
+        if _norm(name):
+            introduced.append(name)
             questions.append((name, "prose"))
-    # 2. A new person the ops file under a place's name.
+    # 2. A new person the ops file (not one the roster already holds).
     for name in op_people:
-        key = _norm(name)
-        if key and key not in roster_keys and (key in place_keys or key in records) and key not in kinds:
-            questions.append((name, "op_person_named_as_place"))
+        if _norm(name) and _norm(name) not in roster_keys:
+            questions.append((name, "op_person"))
     # 3. A new place the ops file under a roster person's name.
     for loc in result.get("locations") or []:
         name = str(loc.get("name") or "").strip() if isinstance(loc, dict) else ""
         key = _norm(name)
-        if key and key not in place_keys and key in roster_keys and key not in kinds:
+        if key and key not in place_keys and key in roster_keys:
             questions.append((name, "op_place_named_as_person"))
 
-    trace = result.get("_model_trace") if isinstance(result.get("_model_trace"), list) else None
-    usage = result.get("_model_usage") if isinstance(result.get("_model_usage"), list) else None
-    line = world._player_line(player_input)
     asked: set[str] = set()
     for name, why in questions:
         key = _norm(name)
-        if not ask or key in asked or key in kinds or len(asked) >= MAX_ASKS:
+        if key in asked or key in kinds:
+            continue
+        if not ask:
+            # The offline narrator's ops are the engine's own: they are records.
+            if key in op_places and why != "op_place_named_as_person":
+                kinds[key] = "place"
+                turn_ledger.note("npc", "name_is_a_place", name=name, by="record", why=why)
+            continue
+        if len(asked) >= MAX_ASKS:
+            turn_ledger.note("npc", "kind_not_asked", name=name, why=why, reason="ask limit")
             continue
         asked.add(key)
         try:
-            reply = _ask()(KIND_SYSTEM, kind_prompt(name, narration, line), trace=trace, usage=usage)
+            reply = _call(KIND_SYSTEM, kind_prompt(name, narration, line), KIND_PHASE, KIND_MAX_TOKENS, trace, usage)
         except Exception as exc:
             turn_ledger.note("npc", "kind_ask_failed", name=name, why=why, error=f"{type(exc).__name__}: {exc}"[:160])
             continue
@@ -243,10 +288,59 @@ def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True)
         turn_ledger.note("npc", "name_is_a_place" if kind == "place" else "name_is_a_person", name=name, by="ask", why=why)
     if kinds:
         result["_entity_kinds"] = {**_kinds(result), **kinds}
+
+    # The speaker check: only when the turn files nobody, so a quote is all
+    # that would seed a stranger.
+    files_someone = any(_norm(n) not in settled_places(result) for n in op_people) or any(
+        _norm(n) not in settled_places(result) for n in introduced
+    )
+    if ask and unspoken and not files_someone:
+        _check_speaker(result, narration, unspoken, trace, usage)
     return kinds
 
 
-# ------------------------------------------------- places by the chat's code
+_QUOTE_RE = re.compile(r"[“\"]([^”\"]{8,})[”\"]")
+
+
+def _paragraph_with(text: str, quote: str) -> str:
+    flat = re.sub(r"\s*\[\[[^\]]*\]\]", "", str(text or ""))
+    for para in re.split(r"\n\s*\n", flat):
+        if quote in para:
+            return re.sub(r"\s+", " ", para).strip()[:700]
+    return ""
+
+
+def speaker_prompt(paragraph: str, quote: str) -> str:
+    """The user half of the speaker ask, exactly as sent."""
+    return f"Text: {paragraph}\n{SPEAKER_QUESTION.format(quote=quote)}"
+
+
+def _check_speaker(result: dict[str, Any], narration: str, unspoken: str, trace, usage) -> None:
+    """Ask whether a person says the first quoted line no known person says."""
+    m = _QUOTE_RE.search(unspoken)
+    if not m:
+        return
+    quote = m.group(1).strip()
+    paragraph = _paragraph_with(narration, quote)
+    if not paragraph:
+        return
+    try:
+        reply = _call(YES_NO_SYSTEM, speaker_prompt(paragraph, quote), SPEAKER_PHASE, YES_NO_MAX_TOKENS, trace, usage)
+    except Exception as exc:
+        turn_ledger.note("npc", "speaker_ask_failed", quote=quote[:80], error=f"{type(exc).__name__}: {exc}"[:160])
+        return
+    said = read_yes_no(reply)
+    if said is None:
+        turn_ledger.note("npc", "speaker_unread", quote=quote[:80], reply=str(reply or "")[:80])
+        return
+    if said:
+        turn_ledger.note("npc", "quote_said_by_a_person", quote=quote[:80])
+        return
+    turn_ledger.note("npc", "quote_not_said_by_a_person", quote=quote[:80])
+    result["_quotes_not_spoken"] = quote_not_spoken(result) + [quote]
+
+
+# ------------------------------------------------- places by reference (#152)
 
 
 _CODE_RE = re.compile(r"\[\[(L\d+)\]\]", re.I)
@@ -288,44 +382,114 @@ def _heads(text: str, at: int, stored_name: str) -> set[str]:
     return {h for h in heads if len(h) >= 4}
 
 
-def place_shown_in_chat(rows: list[Any], player_input: str, chat: list[str] | None, current_name: str = "") -> Any:
-    """The known place the player's line goes to, read by reference (#152).
+def reference_candidates(rows: list[Any], player_input: str, chat: list[str] | None,
+                         current_name: str = "") -> list[tuple[Any, str, str]]:
+    """Known places the player's line refers to by reference, best first, as
+    (row, the words the ask names it by, the line as the ask shows it).
 
-    First a place code the player typed (#L3); then the place the chat showed
-    most recently under a word the line goes to ("I go into the clinic" after
-    "... the clinic [[L3]]"). None leaves the matching by name to decide.
+    A code the line types (#L3) comes first; then the places the chat showed
+    most recently under a word the line uses ("the clinic" after "... clinic
+    [[L3]]"). A place the line names as where the player comes from is left
+    out (world._code_is_origin). Whether the player goes there is the ask's.
     """
     from app import world
 
     by_code = {str(r["code"] or "").upper(): r for r in rows if r["code"]}
     if not by_code:
-        return None
+        return []
     current = _norm(current_name)
     line = world._player_line(player_input)
+    out: list[tuple[Any, str, str]] = []
+    seen: set[str] = set()
+
+    def _with_names(text: str) -> str:
+        def _name(m: re.Match[str]) -> str:
+            row = by_code.get((m.group(1) or m.group(2) or "").upper())
+            return str(row["name"] or "") if row is not None else m.group(0)
+
+        return re.sub(r"\s+", " ", _TYPED_CODE_RE.sub(_name, text)).strip()
+
     for m in _TYPED_CODE_RE.finditer(line):
         row = by_code.get((m.group(1) or m.group(2) or "").upper())
-        if row is not None and _norm(row["name"]) != current:
-            turn_ledger.note("movement", "place_bound_by_typed_code", code=str(row["code"]), place=str(row["name"] or ""))
-            return row
+        code = str(row["code"]).upper() if row is not None else ""
+        if row is None or code in seen or _norm(row["name"]) == current:
+            continue
+        if world._code_is_origin(line, m.start(), m.end()):
+            continue
+        seen.add(code)
+        out.append((row, str(row["name"] or ""), _with_names(line)))
     if not chat:
-        return None
-    dest = f" {world._destination_text(player_input).lower()} "
+        return out
+    dest = f" {world._destination_text(player_input)} "
     for text in chat:
         for m in reversed(list(_CODE_RE.finditer(text or ""))):
             row = by_code.get(m.group(1).upper())
-            if row is None or _norm(row["name"]) == current:
+            code = m.group(1).upper()
+            if row is None or code in seen or _norm(row["name"]) == current:
                 continue
-            for head in _heads(text, m.start(), str(row["name"] or "")):
-                for hit in re.finditer(rf"(?<![\w'’-]){re.escape(head)}s?(?![\w'’-])", dest):
-                    # Gone to: a going word with at most an article and a few
-                    # describing words before the noun ("into the old clinic").
-                    clause = re.split(r"[.!?;,]", dest[: hit.start()])[-1]
-                    goings = list(world._GOING_WORD_RE.finditer(clause))
-                    if not goings or not re.fullmatch(r"\s*(?:[\w'’-]+\s+){0,3}", clause[goings[-1].end():]):
-                        continue
-                    if world._code_is_origin(dest, hit.start(), hit.end()):
-                        continue
-                    turn_ledger.note("movement", "place_bound_by_chat_code", word=head, code=str(row["code"]),
-                                     place=str(row["name"] or ""))
-                    return row
+            for head in sorted(_heads(text, m.start(), str(row["name"] or ""))):
+                hit = next((
+                    h for h in re.finditer(rf"(?<![\w'’-]){re.escape(head)}s?(?![\w'’-])", dest, re.I)
+                    if not world._code_is_origin(dest.lower(), h.start(), h.end())
+                ), None)
+                if hit is None:
+                    continue
+                article = re.search(r"\b(the|a|an)\s+$", dest[: hit.start()], re.I)
+                seen.add(code)
+                out.append((row, f"the {hit.group(0).lower()}" if article else hit.group(0), _with_names(line)))
+                break
+    return out
+
+
+def going_prompt(line: str, place: str) -> str:
+    """The user half of the going ask, exactly as sent."""
+    return f"The player wrote: {line}\n{GOING_QUESTION.format(place=place)}"
+
+
+def settle_place_reference(result: dict[str, Any], player_input: str, *, trace=None, usage=None) -> str:
+    """The place code this line goes to by reference, or ''. Set on
+    ``result["_place_by_reference"]`` for resolve_movement.
+
+    A place the line names outright wins and nothing is asked. Otherwise each
+    reference candidate (at most two) is checked with one ask: is the player
+    going there?
+    """
+    from app import world
+    from app.db import connect
+
+    with connect().closing() as conn:
+        rows = conn.execute("SELECT id, code, name, parent_id, kind FROM locations ORDER BY id").fetchall()
+        here = conn.execute(
+            "SELECT l.name FROM player p LEFT JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+        ).fetchone()
+        current_name = str((here[0] if here else "") or "")
+        chat = chat_narrations(conn)
+    if world._movement_destination_from_input(rows, player_input, current_name, names_only=True) is not None:
+        return ""
+    candidates = reference_candidates(rows, player_input, chat, current_name)
+    for row, place, shown_line in candidates[:MAX_GOING_ASKS]:
+        code = str(row["code"])
+        try:
+            reply = _call(YES_NO_SYSTEM, going_prompt(shown_line, place), GOING_PHASE, YES_NO_MAX_TOKENS, trace, usage)
+        except Exception as exc:
+            turn_ledger.note("movement", "going_ask_failed", code=code, error=f"{type(exc).__name__}: {exc}"[:160])
+            return ""
+        going = read_yes_no(reply)
+        if going:
+            turn_ledger.note("movement", "place_bound_by_reference", code=code, place=str(row["name"] or ""), words=place)
+            result["_place_by_reference"] = code
+            return code
+        turn_ledger.note("movement", "place_not_gone_to" if going is False else "going_unread", code=code,
+                         words=place, reply=str(reply or "")[:80])
+    return ""
+
+
+def place_by_reference(result: dict[str, Any] | None, rows: list[Any], current_name: str = "") -> Any:
+    """The row settle_place_reference bound this turn's line to, or None."""
+    code = str((result or {}).get("_place_by_reference") or "").upper() if isinstance(result, dict) else ""
+    if not code:
+        return None
+    for row in rows:
+        if str(row["code"] or "").upper() == code and _norm(row["name"]) != _norm(current_name):
+            return row
     return None

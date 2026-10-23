@@ -4,11 +4,16 @@
 fight a Deathclaw" filed the city as NPC A "New Vegas" (role "minigun cradled"),
 read from "New Vegas, the minigun cradled in your armored fist".
 #155 T14 (the reverse): a new person was linked with a place code, "Jonah [[L1]]".
-#28 T10: NPC_NEW: "NAME: Beth" minted a second person "NAME: Beth" beside Beth [[B]].
-#152: a place the player's line names binds to the code the chat showed for it
-("I go into the clinic" after "... clinic [[L3]]").
+#28 T10: NPC_NEW: "NAME: Beth" minted a second person "NAME: Beth" beside Beth [[B]];
+T14 NPC_NEW: "NAME Marisol Carter ROLE doctor LOC clinic" and T8 "NAME Eli Abbott"
+are the same fault without the colon.
+#152: a place the player's line goes to binds by reference ("I go into the
+clinic" after "... clinic [[L3]]"), but a place named outright wins and only
+the player's own going counts.
 
-Every quoted string below is copied from the run's traces.
+Every quoted string below from the run is copied from its traces. The mocked
+replies are the shapes Hermes 3 8B gave on the live eval (2026-10-23): the kind
+ask answered "place" / "Place." / "person" on its first word.
 """
 from __future__ import annotations
 
@@ -51,6 +56,7 @@ T2_PROSE = (
     "threat.\n\nThe power armor's readouts flicker, a priority alert ping interrupting your march towards New Vegas. "
     "A blinking arrow points 2 miles west, where a new target waits."
 )
+T2_QUOTE = "New target detected. 2 miles west. Priority high."
 T2_QUEST_OP = ('QUEST: "Find and fight a Deathclaw in New Vegas", "giver: yourself", "step: find and fight a '
                'Deathclaw", "AT: New Vegas", "REWARD: the satisfaction of a successful fight and experience".')
 T10_OPS = (
@@ -84,28 +90,93 @@ def _fresh_world():
                              "special_ability_origin": "none"})
 
 
-def _no_ask(*_a, **_k):
-    raise AssertionError("no ask expected")
-
-
 class _Asker:
-    def __init__(self, reply: str):
-        self.reply = reply
-        self.calls: list[tuple[str, str]] = []
+    """A stand-in for the model: one reply per ask (phase), every call kept."""
 
-    def __call__(self, system, user, *, trace=None, usage=None):
-        self.calls.append((system, user))
-        return self.reply
+    def __init__(self, kind: str = "", speaker: str = "", going: str = "", kinds: dict | None = None):
+        self.replies = {"entity_kind": kind, "quote_speaker": speaker, "place_going": going}
+        self.kinds = kinds or {}
+        self.calls: list[tuple[str, str, str]] = []
+
+    def __call__(self, system, user, *, trace=None, usage=None, phase="", max_tokens=None):
+        self.calls.append((phase, system, user))
+        if phase == "entity_kind":
+            for name, reply in self.kinds.items():
+                if f'is "{name}" a person' in user:
+                    return reply
+        reply = self.replies.get(phase, "")
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    def asked(self, phase):
+        return [c for c in self.calls if c[0] == phase]
+
+
+class _Using:
+    def __init__(self, asker):
+        self.asker = asker
+
+    def __enter__(self):
+        from app import entity_kinds
+
+        self.previous = entity_kinds.set_kind_ask(self.asker)
+        return self.asker
+
+    def __exit__(self, *exc):
+        from app import entity_kinds
+
+        entity_kinds.set_kind_ask(self.previous)
+
+
+def _apply(prose, ops, line, asker):
+    """Parse the draft, settle before apply_turn as play_turn does, then apply."""
+    from app import db, entity_kinds, world
+    from app.turn_dsl import parse_dsl_turn
+
+    turn = parse_dsl_turn(f"===NAR===\n{prose}\n\n===OPS===\n{ops}\n", line)
+    turn["narration"] = prose
+    with _Using(asker):
+        entity_kinds.settle_kinds(turn, line)
+        world.apply_turn(turn, line, input_kind="player")
+    with db.connect().closing() as conn:
+        return turn, [r[0] for r in conn.execute("SELECT name FROM npcs")]
+
+
+# ------------------------------------------------------------------ #28
 
 
 class FieldLabelIsNotPartOfAValue(unittest.TestCase):
-    """#28: an op's field word and colon inside the quotes label the part."""
+    """#28: an op's own field label inside a value labels that part."""
+
+    def _npc(self, line):
+        from app.turn_dsl import parse_dsl_turn
+
+        turn = parse_dsl_turn("===NAR===\nBeth waits.\n\n===OPS===\n" + line + "\n")
+        npc = turn["npcs"][0]
+        return npc["name"], npc["role"], npc["location"]
 
     def test_t10_npc_new_name_label(self):
         from app.turn_dsl import parse_dsl_turn
 
         turn = parse_dsl_turn(T10_OPS)
         self.assertEqual([n["name"] for n in turn["npcs"]], ["Beth"])
+
+    def test_labels_without_a_colon_as_hermes_wrote_them(self):
+        # cc87dd29 T14, T8 and the baseline replay T3, exactly as written.
+        self.assertEqual(self._npc('NPC_NEW: "NAME Marisol Carter ROLE doctor LOC clinic"'),
+                         ("Marisol Carter", "doctor", "clinic"))
+        self.assertEqual(self._npc('NPC_NEW: "NAME Eli Abbott" ROLE night clerk LOC "the Rusty Anchor tavern"'),
+                         ("Eli Abbott", "night clerk", "the Rusty Anchor tavern"))
+        self.assertEqual(self._npc('NPC_NEW: "NAME Jonah Park", ROLE host, LOC inside')[:2], ("Jonah Park", "host"))
+
+    def test_several_labels_in_one_value(self):
+        self.assertEqual(self._npc('NPC_NEW: "NAME: Beth, ROLE: doctor"')[:2], ("Beth", "doctor"))
+        self.assertEqual(self._npc('NPC_NEW: "NAME: Beth ROLE: doctor LOC: clinic"'), ("Beth", "doctor", "clinic"))
+        self.assertEqual(self._npc("NPC_NEW: NAME: Beth ROLE: doctor")[:2], ("Beth", "doctor"))
+        self.assertEqual(self._npc('NPC_NEW NAME: "Beth" ROLE: doctor')[:2], ("Beth", "doctor"))
+        self.assertEqual(self._npc('NPC_NEW "Name: Beth" "Role: doctor"')[:2], ("Beth", "doctor"))
+        self.assertEqual(self._npc('NPC_NEW "name:Beth" ROLE doctor')[:2], ("Beth", "doctor"))
 
     def test_t2_quest_parts_are_read_by_their_labels(self):
         from app.turn_dsl import parse_dsl_turn
@@ -117,16 +188,20 @@ class FieldLabelIsNotPartOfAValue(unittest.TestCase):
         self.assertEqual(mark["step"], "find and fight a Deathclaw")
         self.assertEqual(mark["title"], "Find and fight a Deathclaw in New Vegas")
 
-    def test_other_shapes_of_the_label(self):
+    def test_name_label_on_ops_that_open_on_a_name(self):
         from app.turn_dsl import parse_dsl_turn
 
-        for line in ('NPC_NEW NAME: "Beth" ROLE: doctor', 'NPC_NEW "Name: Beth" "Role: doctor"',
-                     'NPC_NEW "name:Beth" ROLE doctor'):
-            turn = parse_dsl_turn("===NAR===\nBeth waits.\n\n===OPS===\n" + line + "\n")
-            self.assertEqual(turn["npcs"][0]["name"], "Beth", line)
-            self.assertEqual(turn["npcs"][0]["role"], "doctor", line)
+        turn = parse_dsl_turn('===NAR===\nA bar.\n\n===OPS===\nLOC_NEW: "NAME: The Rusty Bar" "a bar"\nGRANT: "NAME: rusty knife"\n')
+        self.assertEqual(turn["locations"][0]["name"], "The Rusty Bar")
+        self.assertEqual(turn["inventory_changes"][0]["name"], "rusty knife")
 
-    def test_a_colon_that_is_not_a_field_stays_text(self):
+    def test_an_unquoted_label_runs_to_the_next_label(self):
+        from app.turn_dsl import parse_dsl_turn
+
+        turn = parse_dsl_turn("===NAR===\nYou snarl.\n\n===OPS===\nKARMA: -2, REASON: starting conflict\n")
+        self.assertEqual(turn["player"]["karma_reason"], "starting conflict")
+
+    def test_a_colon_that_is_not_the_ops_field_stays_text(self):
         from app.turn_dsl import parse_dsl_turn
 
         turn = parse_dsl_turn(
@@ -134,10 +209,26 @@ class FieldLabelIsNotPartOfAValue(unittest.TestCase):
             'EVENT "Warning: raiders at the gate"\n'
             'SUMMARY: "Summary: you read the sign."\n'
             'FOCUS npc "npc: the guard watches"\n'
+            "JOURNAL: fact, Name: the doctor is Beth\n"
+            "TALK: B, Name: what is yours?\n"
+            'NPC_NEW: "AT: the gate"\n'
         )
         self.assertEqual(turn["events"][0]["title"], "Warning: raiders at the gate")
         self.assertIn("Summary: you read the sign.", turn["turn_summary"])
         self.assertEqual(turn["scene_plan"]["focus_points"][0]["summary"], "npc: the guard watches")
+        self.assertEqual(turn["journal"][0]["content"], "Name: the doctor is Beth")
+        self.assertEqual(turn["conversations"][0]["summary"], "Name: what is yours?")
+        self.assertEqual(turn["npcs"][0]["name"], "AT: the gate")
+        turn = parse_dsl_turn("===NAR===\nYou meet Beth.\n\n===OPS===\nSUMMARY: You meet Beth. Role: doctor.\n")
+        self.assertEqual(turn["turn_summary"], "You meet Beth. Role: doctor.")
+
+    def test_the_field_table_is_read_from_the_op_list(self):
+        from app import turn_dsl
+
+        self.assertEqual(turn_dsl._OP_FIELDS["NPC_NEW"], {"NAME", "ROLE", "LOC", "ATTITUDE", "RACE", "RANK"})
+        self.assertEqual(turn_dsl._OP_FIELDS["QUEST"], {"GIVER", "STEP", "AT", "REWARD"})
+        self.assertNotIn("JOURNAL", turn_dsl._OP_FIELDS)
+        self.assertEqual(turn_dsl._NAME_FIRST_OPS, {"GRANT", "TAKE", "LOC_NEW", "SKILL"})
 
     def test_the_label_free_name_binds_to_the_roster_person(self):
         from app import db, world
@@ -153,107 +244,117 @@ class FieldLabelIsNotPartOfAValue(unittest.TestCase):
         self.assertEqual(names, ["Beth"])
 
 
-class APlaceTheTurnNamesIsNotAPerson(unittest.TestCase):
-    """#155 T2: New Vegas is a place this turn's job names; no ask is needed."""
+# ------------------------------------------------------------------ #155
+
+
+class TheAskDecidesNotTheOps(unittest.TestCase):
+    """#155: every new name the turn would file is asked about; the model's ops are candidates."""
 
     def setUp(self):
-        from app import entity_kinds
-
         _fresh_world()
-        self.previous = entity_kinds.set_kind_ask(_no_ask)
 
-    def tearDown(self):
+    def test_t2_real_ops_ask_once_and_file_no_one(self):
+        """The real T2 draft: New Vegas is a place, and the armour's readout seeds no stranger."""
         from app import entity_kinds
 
-        entity_kinds.set_kind_ask(self.previous)
+        asker = _Asker(kind="place", speaker="No")
+        turn, names = _apply(T2_PROSE, T2_QUEST_OP, T2_LINE, asker)
+        kind_calls = asker.asked("entity_kind")
+        self.assertEqual(len(kind_calls), 1)  # the QUEST AT op did not decide on its own
+        self.assertEqual(kind_calls[0][1], entity_kinds.KIND_SYSTEM)
+        self.assertTrue(kind_calls[0][2].endswith('In this text, is "New Vegas" a person or a place?'))
+        self.assertIn(T2_LINE, kind_calls[0][2])
+        speaker = asker.asked("quote_speaker")
+        self.assertEqual(len(speaker), 1)
+        self.assertEqual(speaker[0][1], "Answer yes or no.")
+        self.assertTrue(speaker[0][2].endswith(f'In this text, does a person say "{T2_QUOTE}"?'), speaker[0][2])
+        self.assertIn("A new message blinks into existence", speaker[0][2])
+        self.assertEqual(names, [])
+        self.assertEqual(turn.get("_quotes_not_spoken"), [T2_QUOTE])
 
-    def test_t2_new_vegas_is_not_minted(self):
+    def test_a_quote_a_person_says_still_seeds_a_face(self):
+        """The reverse: a stranger's line with nobody filed still gets a face."""
+        from app import db, world
+
+        prose = 'You reach the gate at dusk. A voice calls down from the wall: "Who goes there? State your name."'
+        asker = _Asker(speaker="Yes")
+        with _Using(asker):
+            from app import entity_kinds
+
+            turn = {"narration": prose, "npcs": []}
+            entity_kinds.settle_kinds(turn, "i walk to the gate")
+        self.assertEqual(len(asker.asked("quote_speaker")), 1)
+        self.assertNotIn("_quotes_not_spoken", turn)
+        with db.connect().closing() as conn:
+            seeded = world._ensure_npcs_from_narration(conn, turn, prose, 1)
+        self.assertEqual(len(seeded), 1)
+
+    def test_a_job_at_a_person_does_not_drop_the_person(self):
+        """QUEST AT "Mattias Slade" over 'Mattias Slade, the courier': the ask says person, he is filed."""
+        prose = "Beth points at the map. \"Go to Goodsprings.\" Mattias Slade, the courier, nods along."
+        asker = _Asker(kind="person")
+        _, names = _apply(prose, 'QUEST: "Deliver the package", "AT: Mattias Slade"', "I ask about the job", asker)
+        self.assertIn("Mattias Slade", names)
+        self.assertEqual(len(asker.asked("entity_kind")), 1)
+
+    def test_a_new_person_op_under_a_place_name(self):
+        """NPC_NEW "Megaton" on 'I travel to Megaton': no record names it, the ask does."""
+        prose = "You set off along the cracked highway toward Megaton. The wind howls across the dunes."
+        asker = _Asker(kind="place")
+        _, names = _apply(prose, 'NPC_NEW: "Megaton", "settlement"', "I travel to Megaton", asker)
+        self.assertNotIn("Megaton", names)
+        self.assertEqual(len(asker.asked("entity_kind")), 1)
+
+    def test_people_the_prose_introduces_are_filed_on_person(self):
+        prose = "Mattias Slade, a herbalist with a greying beard, leans against the wall. Rosa Vance, the smith, hammers nearby."
+        asker = _Asker(kind="person")
+        _, names = _apply(prose, "", "I look around", asker)
+        self.assertIn("Mattias Slade", names)
+        self.assertIn("Rosa Vance", names)
+
+    def test_offline_narrator_ops_are_records(self):
+        """The offline narrator's ops are the engine's own: they decide, and nothing is asked."""
         from app import db, entity_kinds, world
         from app.turn_dsl import parse_dsl_turn
 
         turn = parse_dsl_turn(f"===NAR===\n{T2_PROSE}\n\n===OPS===\n{T2_QUEST_OP}\n", T2_LINE)
-        kinds = entity_kinds.settle_kinds(turn, T2_LINE)
+        asker = _Asker(kind="person")
+        with _Using(asker):
+            kinds = entity_kinds.settle_kinds(turn, T2_LINE, ask=False)
+        self.assertEqual(asker.calls, [])
         self.assertEqual(kinds, {"new vegas": "place"})
         with db.connect().closing() as conn:
             seeded = world._ensure_npcs_from_narration(conn, turn, T2_PROSE, 1)
-            names = [r[0] for r in conn.execute("SELECT name FROM npcs")]
         self.assertNotIn("New Vegas", [n.get("name") for n in seeded])
-        self.assertNotIn("New Vegas", names)
-
-    def test_the_mint_reads_the_record_on_its_own(self):
-        """The offline narrator asks nothing; the turn's own place record still holds."""
-        from app import db, world
-
-        turn = {"narration": T2_PROSE, "npcs": [], "quest_marks": [{"op": "QUEST", "location": "New Vegas"}]}
-        with db.connect().closing() as conn:
-            seeded = world._ensure_npcs_from_narration(conn, turn, T2_PROSE, 1)
-        self.assertNotIn("New Vegas", [n.get("name") for n in seeded])
-
-
-class TheKindAskDecides(unittest.TestCase):
-    """#155: with no record, one small ask: person or place."""
-
-    def setUp(self):
-        _fresh_world()
-
-    def _settle(self, prose, line, reply):
-        from app import entity_kinds
-
-        asker = _Asker(reply)
-        previous = entity_kinds.set_kind_ask(asker)
-        try:
-            turn = {"narration": prose, "npcs": []}
-            entity_kinds.settle_kinds(turn, line)
-        finally:
-            entity_kinds.set_kind_ask(previous)
-        return turn, asker
-
-    def _minted(self, turn, prose):
-        from app import db, world
-
-        with db.connect().closing() as conn:
-            return [n.get("name") for n in world._ensure_npcs_from_narration(conn, turn, prose, 1)]
-
-    def test_t2_without_the_job_asks_and_files_no_person(self):
-        from app import entity_kinds
-
-        turn, asker = self._settle(T2_PROSE, T2_LINE, "place")
-        self.assertEqual(len(asker.calls), 1)
-        system, user = asker.calls[0]
-        self.assertEqual(system, entity_kinds.KIND_SYSTEM)
-        self.assertTrue(user.endswith('In this text, is "New Vegas" a person or a place?'), user)
-        self.assertIn(T2_LINE, user)
-        self.assertIn("New Vegas, the minigun cradled", user)
-        self.assertNotIn("New Vegas", self._minted(turn, T2_PROSE))
-
-    def test_another_place_phrasing(self):
-        prose = "You crest the dune. Haven Ridge, the walled settlement, glows with cookfires."
-        turn, asker = self._settle(prose, "i walk toward the lights", "Place.")
-        self.assertEqual(len(asker.calls), 1)
-        self.assertNotIn("Haven Ridge", self._minted(turn, prose))
-
-    def test_a_person_is_still_minted(self):
-        prose = "Mattias Slade, a herbalist with a greying beard, is leaning against the wall."
-        turn, asker = self._settle(prose, "i look around", "person")
-        self.assertEqual(len(asker.calls), 1)
-        self.assertIn("Mattias Slade", self._minted(turn, prose))
 
     def test_an_unread_reply_keeps_the_old_reading(self):
-        turn, _ = self._settle(T2_PROSE, T2_LINE, "I am not sure.")
-        self.assertNotIn("_entity_kinds", turn)
-        self.assertIn("New Vegas", self._minted(turn, T2_PROSE))
+        from app import db, entity_kinds, world
 
-    def test_read_kind(self):
-        from app.entity_kinds import read_kind
+        for reply in ("I am not sure.", "", RuntimeError("model down")):
+            turn = {"narration": T2_PROSE, "npcs": []}
+            with _Using(_Asker(kind=reply, speaker="")):
+                entity_kinds.settle_kinds(turn, T2_LINE)
+            self.assertNotIn("_entity_kinds", turn)
+            with db.connect().closing() as conn:
+                names = [n.get("name") for n in world._ensure_npcs_from_narration(conn, turn, T2_PROSE, 1)]
+            self.assertIn("New Vegas", names, reply)
+            with db.connect().closing() as conn:
+                conn.execute("DELETE FROM npcs WHERE name = 'New Vegas'")
+
+    def test_read_kind_and_yes_no(self):
+        from app.entity_kinds import read_kind, read_yes_no
 
         self.assertEqual(read_kind(" Place."), "place")
         self.assertEqual(read_kind("PERSON"), "person")
-        self.assertEqual(read_kind("person or place"), "")
+        self.assertEqual(read_kind("You stride towards the place"), "")
         self.assertEqual(read_kind(""), "")
+        self.assertIs(read_yes_no("No, Beth does not speak"), False)
+        self.assertIs(read_yes_no("Yes."), True)
+        self.assertIsNone(read_yes_no("Nobody knows"))
 
 
 class TheOpsAgainstTheRecords(unittest.TestCase):
-    """A new person under a place's name, and a new place under a person's name, are asked about."""
+    """A new person under a place's name, and a new place under a person's name."""
 
     def setUp(self):
         from app import db
@@ -267,47 +368,41 @@ class TheOpsAgainstTheRecords(unittest.TestCase):
     def _settle(self, turn, reply):
         from app import entity_kinds
 
-        asker = _Asker(reply)
-        previous = entity_kinds.set_kind_ask(asker)
-        try:
+        asker = _Asker(kind=reply)
+        with _Using(asker):
             entity_kinds.settle_kinds(turn, "i look around")
-        finally:
-            entity_kinds.set_kind_ask(previous)
         return asker
 
-    def test_npc_new_under_a_place_name_is_dropped_when_the_ask_says_place(self):
+    def test_npc_new_under_a_place_name(self):
         from app import db, entity_kinds
 
         turn = {"narration": "The lights of New Vegas burn on the horizon.", "npcs": [{"name": "New Vegas", "role": "local"}]}
-        asker = self._settle(turn, "place")
-        self.assertEqual(len(asker.calls), 1)
+        self.assertEqual(len(self._settle(turn, "place").asked("entity_kind")), 1)
         with db.connect().closing() as conn:
-            kept = entity_kinds.drop_places_from_people(conn, turn["npcs"], turn)
-        self.assertEqual(kept, [])
-
-    def test_npc_new_under_a_place_name_stays_when_the_ask_says_person(self):
-        from app import db, entity_kinds
-
+            self.assertEqual(entity_kinds.drop_places_from_people(conn, turn["npcs"], turn), [])
         turn = {"narration": "New Vegas, a scarred courier, tips her hat.", "npcs": [{"name": "New Vegas", "role": "courier"}]}
         self._settle(turn, "person")
         with db.connect().closing() as conn:
             kept = entity_kinds.drop_places_from_people(conn, turn["npcs"], turn)
         self.assertEqual([n["name"] for n in kept], ["New Vegas"])
 
+    def test_a_roster_person_in_the_ops_is_not_asked_about(self):
+        turn = {"narration": "Beth waves.", "npcs": [{"name": "Beth", "role": "doctor"}]}
+        self.assertEqual(self._settle(turn, "person").asked("entity_kind"), [])
+
     def test_loc_new_under_a_roster_name(self):
         from app import entity_kinds
 
         turn = {"narration": "You find Beth by the door.", "npcs": [], "locations": [{"name": "Beth", "summary": ""}]}
-        asker = self._settle(turn, "person")
-        self.assertEqual(len(asker.calls), 1)
+        self.assertEqual(len(self._settle(turn, "person").asked("entity_kind")), 1)
         self.assertTrue(entity_kinds.settled_person(turn, "Beth"))
         turn2 = {"narration": "You find Beth by the door.", "npcs": [], "locations": [{"name": "Beth", "summary": ""}]}
         self._settle(turn2, "place")
         self.assertFalse(entity_kinds.settled_person(turn2, "Beth"))
 
 
-class TheAskIsTraced(unittest.TestCase):
-    """The ask goes through llm._chat_text: prompt, reply and time in the turn's trace and usage."""
+class TheAsksAreTraced(unittest.TestCase):
+    """The asks go through llm._chat_text: prompt, reply and time in the turn's trace and usage."""
 
     def test_trace_and_usage(self):
         from app import entity_kinds
@@ -320,25 +415,29 @@ class TheAskIsTraced(unittest.TestCase):
         self.assertEqual(reply, "place")
         self.assertEqual(chat.call_args.kwargs.get("max_tokens"), entity_kinds.KIND_MAX_TOKENS)
         self.assertEqual([u["phase"] for u in usage], ["entity_kind"])
-        events = [(t["phase"], t["event"]) for t in trace]
-        self.assertEqual(events, [("entity_kind", "request"), ("entity_kind", "response")])
+        self.assertEqual([(t["phase"], t["event"]) for t in trace], [("entity_kind", "request"), ("entity_kind", "response")])
         self.assertEqual(trace[0]["system_prompt"], entity_kinds.KIND_SYSTEM)
-        self.assertIn("person or a place", trace[0]["user_prompt"])
         self.assertEqual(trace[1]["raw_content"], "place")
         self.assertIn("duration_seconds", trace[1])
 
-    def test_settle_writes_to_the_turns_own_lists(self):
+    def test_settle_writes_every_ask_to_the_turns_own_lists(self):
         from app import entity_kinds
 
         _fresh_world()
         trace: list = []
         usage: list = []
         turn = {"narration": T2_PROSE, "npcs": [], "_model_trace": trace, "_model_usage": usage}
-        with mock.patch("app.llm._chat_content", return_value="place"):
+
+        def _reply(system, user, **_k):
+            return "place" if "person or a place" in user else "No."
+
+        with mock.patch("app.llm._chat_content", side_effect=_reply):
             entity_kinds.settle_kinds(turn, T2_LINE)
         self.assertEqual(turn["_entity_kinds"], {"new vegas": "place"})
-        self.assertEqual([t["event"] for t in trace if t["phase"] == "entity_kind"], ["request", "response"])
-        self.assertEqual([u["phase"] for u in usage], ["entity_kind"])
+        self.assertEqual([u["phase"] for u in usage], ["entity_kind", "quote_speaker"])
+        self.assertEqual([(t["phase"], t["event"]) for t in trace],
+                         [("entity_kind", "request"), ("entity_kind", "response"),
+                          ("quote_speaker", "request"), ("quote_speaker", "response")])
 
 
 class AWrongKindCodeIsRetagged(unittest.TestCase):
@@ -387,8 +486,11 @@ class AWrongKindCodeIsRetagged(unittest.TestCase):
         self.assertIn(f"Jonah [[{jonah[0]}]]", shown[0])
 
 
-class APlaceBindsToTheChatsCode(unittest.TestCase):
-    """#152: "I go into the clinic" is the clinic the chat linked last."""
+# ------------------------------------------------------------------ #152
+
+
+class APlaceBindsByReference(unittest.TestCase):
+    """#152: a typed code or the chat's code, checked by one ask; a place named outright wins."""
 
     def setUp(self):
         from app import db
@@ -397,60 +499,98 @@ class APlaceBindsToTheChatsCode(unittest.TestCase):
         with db.connect().closing() as conn:
             conn.execute("INSERT INTO locations (code, name, parent_id) VALUES ('L3', 'Radiation Fenced Sanctuary Clinic', 1)")
             conn.execute("INSERT INTO locations (code, name, parent_id) VALUES ('L4', 'Thornford Clinic', 0)")
+            conn.execute("INSERT INTO locations (code, name, parent_id) VALUES ('L5', 'Thornford', 0)")
+            conn.execute("INSERT INTO journal (turn, kind, content) VALUES (1, 'narration', ?)", (T3_PROSE,))
 
-    def _chat(self, *texts):
+    def _settle(self, line, going="Yes"):
+        from app import entity_kinds
+
+        asker = _Asker(going=going)
+        result: dict = {"player": {}}
+        with _Using(asker):
+            entity_kinds.settle_place_reference(result, line)
+        return result.get("_place_by_reference", ""), asker.asked("place_going")
+
+    def test_go_into_the_clinic_after_t3(self):
+        from app import db, world
+
+        code, asks = self._settle("I go into the clinic.")
+        self.assertEqual(code, "L3")
+        self.assertEqual(asks[0][1], "Answer yes or no.")
+        self.assertEqual(asks[0][2], "The player wrote: I go into the clinic.\nIs the player going to the clinic?")
+        with db.connect().closing() as conn:
+            rows = conn.execute("SELECT id, code, name, parent_id, kind FROM locations ORDER BY id").fetchall()
+        # Two clinics: by name alone the line names neither.
+        self.assertIsNone(world._movement_destination_from_input(rows, "I go into the clinic.", "Radiation Fenced Sanctuary"))
+
+    def test_a_place_named_outright_wins_and_nothing_is_asked(self):
+        for line in ("I go to the Thornford Clinic.", "go to the Thornford clinic, not the sanctuary one",
+                     "I walk from #L3 to Thornford", "I leave #L3 and head for Thornford"):
+            code, asks = self._settle(line)
+            self.assertEqual((code, asks), ("", []), line)
+
+    def test_only_the_players_own_going_binds(self):
+        # The going ask says no (another person goes, or the line only points).
+        for line in ("I tell Beth to go to the clinic", "I shout to the clinic staff", "I point to the clinic"):
+            code, asks = self._settle(line, going="No.")
+            self.assertEqual(code, "", line)
+            self.assertEqual(len(asks), 1, line)
+
+    def test_a_typed_code_is_asked_by_its_name(self):
+        code, asks = self._settle("I walk to #L4", going="Yes")
+        self.assertEqual(code, "L4")
+        self.assertEqual(asks[0][2], "The player wrote: I walk to Thornford Clinic\nIs the player going to Thornford Clinic?")
+
+    def test_a_place_left_is_no_candidate(self):
+        code, asks = self._settle("I walk out of #L3")
+        self.assertEqual((code, asks), ("", []))
+
+    def test_an_unread_reply_binds_nothing(self):
+        code, _ = self._settle("I go into the clinic.", going="Perhaps")
+        self.assertEqual(code, "")
+
+    def test_a_person_tagged_with_the_code_gives_no_word(self):
         from app import db
 
         with db.connect().closing() as conn:
-            for text in texts:
-                conn.execute("INSERT INTO journal (turn, kind, content) VALUES (1, 'narration', ?)", (text,))
+            conn.execute("DELETE FROM journal")
+            conn.execute("INSERT INTO journal (turn, kind, content) VALUES (1, 'narration', 'You notice Jonah [[L3]] standing by the doorway.')")
+        self.assertEqual(self._settle("I go to Jonah"), ("", []))
 
-    def _resolve(self, line):
-        from app import db, world
+    def test_resolve_movement_end_to_end(self):
+        from app import db, entity_kinds, world
 
+        narr = "You push open the door and step inside the clinic."
+        result = {"player": {}, "narration": narr}
+        with _Using(_Asker(going="Yes")):
+            entity_kinds.settle_kinds(result, "I go into the clinic.")
         with db.connect().closing() as conn:
-            rows = conn.execute("SELECT id, code, name, parent_id, kind FROM locations ORDER BY id").fetchall()
-            from app import entity_kinds
-
-            chat = entity_kinds.chat_narrations(conn)
-            with_chat = world._movement_destination_from_input(rows, line, "Radiation Fenced Sanctuary", chat)
-            by_name = world._movement_destination_from_input(rows, line, "Radiation Fenced Sanctuary")
-        return (with_chat["code"] if with_chat is not None else None,
-                by_name["code"] if by_name is not None else None)
-
-    def test_go_into_the_clinic_after_t3(self):
-        self._chat(T3_PROSE)
-        bound, by_name = self._resolve("I go into the clinic.")
-        self.assertEqual(bound, "L3")
-        self.assertIsNone(by_name)  # two clinics: the name alone cannot tell
-
-    def test_the_most_recent_mention_wins(self):
-        self._chat(T3_PROSE, "The road bends toward Thornford Clinic [[L4]], its windows dark.")
-        self.assertEqual(self._resolve("go to the clinic")[0], "L4")
-
-    def test_a_typed_code_wins(self):
-        self._chat(T3_PROSE)
-        self.assertEqual(self._resolve("I walk to #L4")[0], "L4")
-
-    def test_not_a_destination(self):
-        self._chat(T3_PROSE)
-        self.assertIsNone(self._resolve("I leave the clinic")[0])
-        self.assertIsNone(self._resolve("I ask Beth about the clinic's records")[0])
-        self.assertIsNone(self._resolve("I wait")[0])
-
-    def test_a_person_tagged_with_the_code_gives_no_word(self):
-        self._chat("You notice Jonah [[L3]] standing by the doorway.")
-        self.assertIsNone(self._resolve("I go to Jonah")[0])
-
-    def test_resolve_movement_uses_the_chat(self):
-        from app import db, world
-
-        self._chat(T3_PROSE)
-        result = {"player": {}, "narration": "You push open the door and step inside the clinic."}
-        with db.connect().closing() as conn:
-            report = world.resolve_movement(conn, result, "I go into the clinic.", intent="travel",
-                                            narration=result["narration"])
+            report = world.resolve_movement(conn, result, "I go into the clinic.", intent="travel", narration=narr)
         self.assertEqual(result["player"].get("move_to_location_code"), "L3", report)
+
+    def test_resolve_movement_keeps_the_model_move_to_the_named_place(self):
+        """'I go to the Thornford Clinic.' with MOVE L4: no reference overrides it."""
+        from app import db, entity_kinds, world
+
+        narr = "You set off down the road toward Thornford Clinic [[L4]]."
+        result = {"player": {"move_to_location_code": "L4"}, "narration": narr}
+        with _Using(_Asker(going="Yes")):
+            entity_kinds.settle_kinds(result, "I go to the Thornford Clinic.")
+        self.assertNotIn("_place_by_reference", result)
+        with db.connect().closing() as conn:
+            world.resolve_movement(conn, result, "I go to the Thornford Clinic.", intent="travel", narration=narr)
+        self.assertEqual(result["player"].get("move_to_location_code"), "L4")
+
+    def test_telling_someone_else_to_go_leaves_the_player(self):
+        from app import db, entity_kinds, world
+
+        narr = "Beth nods and hurries off toward the clinic while you wait by the gate."
+        result = {"player": {}, "narration": narr}
+        with _Using(_Asker(going="No")):
+            entity_kinds.settle_kinds(result, "I tell Beth to go to the clinic")
+        with db.connect().closing() as conn:
+            world.resolve_movement(conn, result, "I tell Beth to go to the clinic", intent="social", narration=narr)
+        self.assertNotEqual(result["player"].get("move_to_location_code"), "L3")
 
 
 if __name__ == "__main__":
