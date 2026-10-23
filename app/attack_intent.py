@@ -278,3 +278,36 @@ def attack_target(check: dict[str, Any] | None) -> str:
         return ""
     attack = check.get("attack") if isinstance(check.get("attack"), dict) else {}
     return str(attack.get("code") or "").strip().upper()
+
+
+# What an attack roll's degree means for the blow, in the engine's own combat
+# outcomes (world._resolve_player_attack: hit, glancing_hit, miss). One roll
+# decides the attack: the combat math follows it (world._combat_follows_attack_check)
+# and so does the line the engine adds when the prose leaves the target out.
+LANDS = {
+    "critical_success": "hit",
+    "success": "hit",
+    "partial": "glancing_hit",
+    "failure": "miss",
+    "critical_failure": "miss",
+}
+_LANDS_WORDS = {"hit": "hits", "glancing_hit": "only grazes", "miss": "misses"}
+
+
+def lands(check: dict[str, Any] | None) -> str:
+    """hit, glancing_hit or miss for a rolled attack check, else ""."""
+    if not isinstance(check, dict) or check.get("natural") is None or not attack_target(check):
+        return ""
+    return LANDS.get(str(check.get("outcome") or ""), "")
+
+
+def outcome_line(check: dict[str, Any] | None, label: str) -> str:
+    """The attack's outcome as one plain line: "Your shot hits Vasilis [[B]]." ("" when it is no rolled attack)."""
+    landed = lands(check)
+    label = str(label or "").strip()
+    if not landed or not label:
+        return ""
+    skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+    code = str(skill.get("code") or check.get("skill_code") or "")
+    noun = "shot" if code == "ranged" else "blow"
+    return f"Your {noun} {_LANDS_WORDS[landed]} {label}."

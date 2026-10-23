@@ -336,6 +336,27 @@ def outside_place(conn, option: dict[str, Any], player_input: str) -> str:
     return code
 
 
+def attacked_here(conn, result: dict[str, Any], here_id: int) -> str:
+    """The code of a living person the turn's rolled attack was aimed at who is at ``here_id``, else "".
+
+    The records decide it: the attack check's own target (app/attack_intent.py)
+    and that person's row (alive, at the place the player is in).
+    """
+    from app.attack_intent import attack_target
+
+    for check in result.get("skill_checks") or [] if isinstance(result, dict) else []:
+        code = attack_target(check)
+        if not code or not isinstance(check, dict) or check.get("natural") is None:
+            continue
+        try:
+            row = conn.execute("SELECT location_id, died_turn FROM npcs WHERE UPPER(code) = ?", (code,)).fetchone()
+        except Exception:
+            row = None
+        if row is not None and int(row["location_id"] or 0) == int(here_id) and int(row["died_turn"] or 0) == 0:
+            return code
+    return ""
+
+
 def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: str) -> dict[str, Any]:
     """Act on a checked answer: refuse an unshown server move, or move a player the rules left in place."""
     record = result.pop("_where_ended", None)
@@ -398,6 +419,14 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
     if status in _STAYED and not result.get("map_walk"):
         if choice["kind"] == "here":
             turn_ledger.note("movement", "stays_as_shown", place=choice["name"], status=status)
+            return report
+        aimed = attacked_here(conn, result, int(record.get("here_id") or 0)) if status == "not_travel" else ""
+        if aimed:
+            # The line asked for no travel and its act was aimed at someone in
+            # this room: a scene that ends elsewhere drifted (integ-r4 T3).
+            turn_ledger.note("movement", "move_from_prose_refused", answer=choice["label"], attacked=aimed,
+                             why="the line attacks someone here and asks for no travel")
+            report["where_ended_refused"] = "act_aimed_here"
             return report
         move_to(choice)
         turn_ledger.note("movement", "move_from_prose", destination=choice["name"], kind=choice["kind"], status=status)

@@ -2415,8 +2415,11 @@ def check_for_clause(player_line: str, skill_code: str) -> str:
     told only "mining, failure" and wrote both traps set without trouble. The
     clause holding that skill's trigger is the act; otherwise the first clause.
     """
+    from app.narration_pipeline import NOT_AFTER_TITLE
+
     own = _SPOKEN_RE.sub(" ", str(player_line or ""))
-    clauses = [c.strip(" ,") for c in re.split(r"(?<=[.!?;])\s+", own) if c.strip(" ,.")]
+    # Not after a title: "i shoot Dr. Vasilis" was told to the narrator as "i shoot Dr." (integ-r4 T3).
+    clauses = [c.strip(" ,") for c in re.split(NOT_AFTER_TITLE + r"(?<=[.!?;])\s+", own) if c.strip(" ,.")]
     if not clauses:
         return ""
     patterns = [p for p, code in SKILL_TRIGGER_PATTERNS if code == skill_code]
