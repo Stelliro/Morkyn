@@ -17537,6 +17537,8 @@ def _try_dsl_draft(
                 # untraced, so a model writing QUEST before it existed lost the
                 # line with no record.
                 "unknown_ops": list(dsl_meta.get("unknown_ops") or [])[:8],
+                # Ops left out because their only value was None / empty (#163).
+                "placeholder_ops": list(dsl_meta.get("placeholder_ops") or [])[:24],
             },
         )
         return turn
