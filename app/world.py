@@ -24398,6 +24398,18 @@ def apply_turn(
                 town_report = {"error": f"{type(exc).__name__}: {exc}"[:200]}
             if town_report and isinstance(movement_report, dict):
                 movement_report["town"] = town_report
+        # The move the server made, or could not make, checked against where
+        # the prose leaves the player (#46, #76). After the snapshot, so a place
+        # made outside the town is undone by a rewind. Not in a plotted town.
+        if not town_turn and isinstance(movement_report, dict):
+            try:
+                from app import where_ended
+
+                movement_report = where_ended.settle(conn, result, movement_report, player_input)
+            except Exception as exc:
+                turn_ledger.note("movement", "where_ended_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        else:
+            result.pop("_where_ended", None)
 
         # A refused move ends the scene here, before any op is applied, and
         # the ops of the cut part go with it (#76).
@@ -24806,7 +24818,9 @@ def apply_turn(
             result["player"]["_turn_line"] = str(player_input or "")
         _apply_player(conn, result.get("player") or {})
         try:
-            _adopt_new_place_into_town(conn, here_before, max_place_before, player_input)
+            # The engine's place outside the town is not a part of it (#46).
+            if not (isinstance(movement_report, dict) and movement_report.get("rule") == "where_ended_outside"):
+                _adopt_new_place_into_town(conn, here_before, max_place_before, player_input)
         except Exception:
             pass
         try:
@@ -25122,7 +25136,25 @@ def apply_turn(
                 (turn, "self_check", json.dumps(result.get("self_check"), ensure_ascii=True)[:1800]),
             )
         # Movement repairs are state changes the model did not ask for — say so.
-        if movement_report.get("status") == "repaired":
+        # The where_ended rules say what decided them (#46, #76): the prose's
+        # ending, checked, not a MOVE.
+        where_rule = str(movement_report.get("rule") or "")
+        if where_rule.startswith("where_ended"):
+            if where_rule == "where_ended_here":
+                where_line = (
+                    f"The server's own move to {movement_report.get('destination') or '?'} "
+                    f"({movement_report.get('dropped_rule') or '?'}) was not made: the prose ends with the player "
+                    f"{movement_report.get('where_ended') or 'where they were'}."
+                )
+            else:
+                where_line = (
+                    f"The prose ends with the player {movement_report.get('where_ended') or '?'}; the server moved "
+                    f"the player to {movement_report.get('destination') or '?'} ({where_rule})."
+                )
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (turn, "system", where_line[:1400])
+            )
+        elif movement_report.get("status") == "repaired":
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                 (
@@ -27279,6 +27311,17 @@ def play_turn(
             npc_max_before = int(_conn_max.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
     except Exception:
         npc_max_before = None
+    # Where the prose leaves the player, asked and checked on every player turn
+    # (#46, #76; app/where_ended.py). Asked here, outside apply_turn's write
+    # block; apply_turn acts on a confirmed answer after the movement rules.
+    if input_kind == "player" and not used_fallback and isinstance(result, dict):
+        try:
+            from app import where_ended
+
+            with connect().closing() as _conn_where:
+                where_ended.ask_where(_conn_where, result, actual_player_input, _narration_text_of(result))
+        except Exception as exc:
+            turn_ledger.note("movement", "where_ended_failed", error=f"{type(exc).__name__}: {exc}"[:200])
     state = apply_turn(
         result,
         actual_player_input,
