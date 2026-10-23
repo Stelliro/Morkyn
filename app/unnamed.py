@@ -606,6 +606,10 @@ def _verb_after_phrase(toks: list[str], at: int, plural: bool) -> int:
 # ------------------------------------------------------------------ the op
 
 
+# What may stand before a capitalised word at the start of a sentence or of a quote.
+_SENTENCE_OPENERS = frozenset('.!?"\'“”‘’:')
+
+
 def op_kind(name: Any, narration: str) -> str:
     """The kind an op's "name" is when it is only a common noun the prose shows.
 
@@ -628,7 +632,13 @@ def op_kind(name: Any, narration: str) -> str:
         re.I,
     )
     for hit in hits:
-        if is_plural(hit.group(1)) and hit.group(1).lower() != base:
+        word = hit.group(1)
+        before = plain[: hit.start()].rstrip()
+        if word[:1].isupper() and before and before[-1] not in _SENTENCE_OPENERS:
+            # Capitalised inside a sentence: a proper name, never a kind ('the name Veyra' read as
+            # the kind Veyra and made 'Veyra 1'; prose does not capitalise 'ghoul' mid-sentence).
+            return ""
+        if is_plural(word) and word.lower() != base:
             continue
         if not det.search(plain[max(0, hit.start() - 60): hit.start()]):
             return ""

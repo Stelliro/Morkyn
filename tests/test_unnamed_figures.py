@@ -1004,3 +1004,21 @@ class OldSaves(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ANameIsNeverAKind(unittest.TestCase):
+    """The combined #33 + unnamed run: the op name 'Veyra' over 'the name Veyra' read as the kind Veyra
+    ('the' two words before it) and made 'Veyra 1'. Capitalised mid-sentence is a proper name."""
+
+    def test_capitalised_mid_sentence_is_a_name(self):
+        from app.unnamed import op_kind
+
+        self.assertEqual(op_kind("Veyra", "The words were smudged, but you could make out the name Veyra at the bottom."), "")
+        self.assertEqual(op_kind("Stone", "Stone [[B]] nods."), "")
+
+    def test_a_common_noun_is_still_a_kind(self):
+        from app.unnamed import op_kind
+
+        self.assertEqual(op_kind("Ghoul", "A ghoul lunges at you. The ghoul hisses."), "Ghoul")
+        self.assertEqual(op_kind("Ghoul", "Ghouls lunge at you from the dark."), "Ghoul")
+        self.assertEqual(op_kind("Raider", '"Drop it," a raider growls.'), "Raider")
