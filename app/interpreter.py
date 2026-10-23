@@ -857,7 +857,7 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
         # did not allow is refused, the person stays alive, and the prose is
         # put back in line with the dice.
         for event in events:
-            reason = allow_event(event, turn_result)
+            reason = allow_event(event, turn_result, str(records.get("player_line") or ""))
             if not reason:
                 continue
             subject = event.get("subject") if isinstance(event.get("subject"), dict) else {}
@@ -865,7 +865,7 @@ def run(text: str, records: dict[str, Any], ask: Ask, turn_result: dict[str, Any
             event["reason"] = reason
             _note("event_refused", kind=str(event.get("kind") or ""), code=str(subject.get("code") or ""), reason=reason)
             text = reconcile_refused_death(
-                text, event, attack_rolls(event, turn_result), ask, report, match, records.get("player_quotes") or []
+                text, event, attack_rolls(event, turn_result, str(records.get("player_line") or "")), ask, report, match, records.get("player_quotes") or []
             )
         # The other way round: an attack the prose never shows its target in
         # gets the roll's outcome line (no ask: the records and the codes).
@@ -964,8 +964,28 @@ def without_refused(summary_text: str, events: list[dict[str, Any]]) -> str:
 DEATH_ALLOWED_OUTCOMES = frozenset({"success", "critical_success"})
 
 
-def attack_rolls(event: dict[str, Any], turn_result: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """The turn's rolled checks that attacked the event's person (their "attack" code, app/attack_intent.py)."""
+COMBAT_SKILLS = frozenset({"melee", "ranged"})
+
+
+def line_names(line: str, subject: dict[str, Any]) -> bool:
+    """Whether the player's own line names the person: their [[code]] or @code, or their recorded name whole."""
+    text = str(line or "")
+    code = str(subject.get("code") or "").strip()
+    name = str(subject.get("name") or "").strip()
+    if code and re.search(rf"(?:\[\[|@){re.escape(code)}(?:\]\]|\b)", text, re.I):
+        return True
+    return bool(name) and len(name) >= 3 and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.I) is not None
+
+
+def attack_rolls(event: dict[str, Any], turn_result: dict[str, Any] | None, line: str = "") -> list[dict[str, Any]]:
+    """The turn's rolled checks that attacked the event's person (their "attack" code, app/attack_intent.py).
+
+    When no roll carries that mark but the player's own line names the person, an unaimed melee or
+    ranged roll this turn is the attack on them. Live (final replay, 2026-10-24): 'i shoot Nate'
+    rolled ranged critical_failure with no target, because the roster placed Nate in the town while
+    the prose had him in the clinic, so attack_intent found nobody here; the prose killed him and the
+    death stood.
+    """
     subject = event.get("subject") if isinstance(event.get("subject"), dict) else {}
     code = str(subject.get("code") or "").strip().upper()
     checks = (turn_result or {}).get("skill_checks") if isinstance(turn_result, dict) else None
@@ -973,13 +993,17 @@ def attack_rolls(event: dict[str, Any], turn_result: dict[str, Any] | None) -> l
         return []
     from app.attack_intent import attack_target
 
+    rolled = [c for c in checks if isinstance(c, dict) and c.get("natural") is not None]
+    aimed = [c for c in rolled if attack_target(c) == code]
+    if aimed or not line_names(line, subject):
+        return aimed
     return [
-        check for check in checks
-        if isinstance(check, dict) and check.get("natural") is not None and attack_target(check) == code
+        c for c in rolled
+        if not attack_target(c) and str(((c.get("skill") or {}).get("code") if isinstance(c.get("skill"), dict) else "") or "") in COMBAT_SKILLS
     ]
 
 
-def allow_event(event: dict[str, Any], turn_result: dict[str, Any] | None = None) -> str:
+def allow_event(event: dict[str, Any], turn_result: dict[str, Any] | None = None, line: str = "") -> str:
     """"" when the event may stand, else why not.
 
     The dice/outcome check (#85, #129): the death of someone the player
@@ -989,7 +1013,7 @@ def allow_event(event: dict[str, Any], turn_result: dict[str, Any] | None = None
     """
     if not isinstance(event, dict) or event.get("kind") != KIND_DIED:
         return ""
-    rolls = attack_rolls(event, turn_result)
+    rolls = attack_rolls(event, turn_result, line)
     if not rolls or any(str(c.get("outcome") or "") in DEATH_ALLOWED_OUTCOMES for c in rolls):
         return ""
     return f"attack roll {rolls[-1].get('outcome') or 'failure'}"

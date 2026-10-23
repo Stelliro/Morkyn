@@ -394,7 +394,12 @@ def _bare_value(text: str, *, name_label: bool = False) -> str:
 # None", "EVENT: None"), minted a place and an event called None. An op whose
 # only value is one of these is no op. GOLD, XP, HP and KARMA take "none" as a
 # band (the op list's amounts), which already changes nothing, so they keep it.
-_PLACEHOLDER_VALUES = frozenset({"", "none", "null", "n/a"})
+# Final live replay 2026-10-24: "LOC_NEW: not present" minted a place called "Not".
+# A closed set of empty values (orthographic no-ops, rule 3), not a list for meaning.
+_PLACEHOLDER_VALUES = frozenset({
+    "", "none", "null", "n/a", "na", "-", "--", "nothing", "not present", "not applicable",
+    "no change", "none needed", "empty",
+})
 _BAND_OPS = frozenset({"GOLD", "XP", "HP", "KARMA"})
 
 

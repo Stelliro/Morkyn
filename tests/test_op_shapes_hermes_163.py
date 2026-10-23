@@ -226,6 +226,16 @@ class APlaceholderOpIsNoOp(unittest.TestCase):
                          ([], [], [], [], []))
         self.assertEqual(turn.get("quest_marks", []), [])
 
+    def test_final_replay_not_present_mints_no_place(self):
+        # Final live replay 2026-10-24 T3: "LOC_NEW: not present" made a place "Not",
+        # which the interpreter then recorded destroyed.
+        turn = _turn('LOC_NEW: not present\nMOVE: nothing\nEVENT: "-"')
+        self.assertEqual((turn["locations"], turn["events"]), ([], []))
+        self.assertIsNone(turn["player"]["move_to_location"])
+        # A real place that holds one of the words is a place.
+        turn = _turn('LOC_NEW: "Not Present Tavern", "A bar with no sign."')
+        self.assertEqual([loc["name"] for loc in turn["locations"]], ["Not Present Tavern"])
+
     def test_a_block_of_only_placeholders_is_not_the_wrong_format(self):
         turn = _turn("MOVE: None\nEVENT: None\nQUEST: None")
         self.assertEqual(turn["events"], [])

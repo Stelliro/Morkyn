@@ -17850,7 +17850,7 @@ def _run_interpreter(
             if records is None:
                 with connect().closing() as conn:
                     records = interpreter.load_records(conn)
-            records = {**records, "player_quotes": quotes}
+            records = {**records, "player_quotes": quotes, "player_line": str(player_input or "")}
             ask = _interpreter_ask(usage=usage, trace=trace, timeout=timeout, config=config)
             # The turn's rolls ride along: a death the attack roll did not allow is refused (#85, #129).
             out = interpreter.run(narration, records, ask, turn)
