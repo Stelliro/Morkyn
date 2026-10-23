@@ -85,10 +85,13 @@ def _fresh_world():
 
 class _Asker:
     """The model, scripted: both figure checks yes for the nouns given (the second check only for
-    ``checked``, when given), figure_hostile per noun; every call kept."""
+    ``checked``, when given), figure_hostile per noun; every call kept. The replies are the ones
+    Hermes 3 8B gave to these asks (live-eval-5): cut at 4 tokens, never a bare word."""
 
-    def __init__(self, figures=(), hostile=(), entity_kind="person", checked=None):
+    def __init__(self, figures=(), hostile=(), entity_kind="person", checked=None, speaks=None):
         self.figures = {f.lower() for f in figures}
+        # figure_speaks is not measured live yet: a plain "Yes." / "No." here.
+        self.speaks = self.figures if speaks is None else {s.lower() for s in speaks}
         self.checked = self.figures if checked is None else {c.lower() for c in checked}
         self.hostile = {h.lower() for h in hostile}
         self.entity_kind = entity_kind
@@ -97,11 +100,13 @@ class _Asker:
     def __call__(self, system, user, *, trace=None, usage=None, phase="", max_tokens=None):
         self.calls.append((phase, user))
         if phase == "figure_kind":
-            return "Yes." if any(f'is "{f}" a person' in user for f in self.figures) else "No."
+            return "Yes, in this" if any(f'is "{f}" a being' in user for f in self.figures) else "No, in this"
         if phase == "figure_kind_check":
-            return "Yes." if any(f"talk to the {f}?" in user for f in self.checked) else "No."
+            return "Yes, you could" if any(f"talk to the {f}?" in user for f in self.checked) else "No."
+        if phase == "figure_speaks":
+            return "Yes." if any(f"does the {s} say" in user for s in self.speaks) else "No."
         if phase == "figure_hostile":
-            return "Yes" if any(h in user.lower() for h in self.hostile) else "No"
+            return 'Yes, "a' if any(h in user.lower() for h in self.hostile) else 'No, "a'
         if phase == "entity_kind":
             return self.entity_kind
         if phase == "quote_speaker":
@@ -202,7 +207,7 @@ class Numbered(unittest.TestCase):
         self.assertEqual(rows[0]["race"], "unknown")
         self.assertRegex(rows[0]["code"], r"^[A-Z]{1,3}$")
         self.assertEqual(len(asker.asked("figure_kind")), 1)
-        self.assertIn('is "deathclaw" a person, an animal or a monster?', asker.asked("figure_kind")[0])
+        self.assertIn('is "deathclaw" a being that can act on its own?', asker.asked("figure_kind")[0])
 
     def test_a_noun_the_ask_says_is_no_figure_is_not_filed(self):
         asker = _Asker(figures=())
@@ -439,7 +444,7 @@ class TheFigureGate(unittest.TestCase):
         self.assertEqual(_names(), ["Ghoul 1"])
         self.assertEqual(asker.asked("figure_kind_check"),
                          ["Text: A rotting ghoul lunges at you from the shadows.\n"
-                          "In this text, could the player fight or talk to the ghoul?"])
+                          "In this text, could you fight or talk to the ghoul? Answer yes or no."])
         # Only the first said yes: no ghoul.
         _fresh_world()
         _play("A rotting ghoul lunges at you from the shadows.", "i look around", _Asker(figures=("ghoul",), checked=()))
@@ -480,7 +485,10 @@ class TwoFiguresInOneTurn(unittest.TestCase):
     def test_who_speaks_each_line(self):
         from app import unnamed
 
-        self.assertEqual(unnamed.speaker_kinds(T3_PROSE), ["nurse"])
+        # "she asks" after the nurse: hers only when the figure_speaks ask said so (no person word).
+        self.assertEqual(unnamed.speaker_kinds(T3_PROSE), [""])
+        self.assertEqual(unnamed.speaker_kinds(T3_PROSE, ["nurse"]), ["nurse"])
+        self.assertEqual(unnamed.speaker_kinds('A guard steps out. "Halt!" he says.'), ["guard"])
         self.assertEqual(unnamed.speaker_kinds('"Get down!" someone shouts. A ghoul lunges at you.'), ["someone"])
         self.assertEqual(unnamed.speaker_kinds('A guard steps out. "Halt," says the guard.'), ["guard"])
 
@@ -583,6 +591,243 @@ class TheStorySeesWhatTheyAre(unittest.TestCase):
                 narration_pipeline.NarrationLedger(1, "i talk to Woman 1", {"paragraphs": 1}))
         self.assertEqual(captured["names"], {"Woman 1": "an unnamed woman"})
         self.assertNotIn("Woman 1", json.dumps(briefs))
+
+
+class TheMeasuredAsks(unittest.TestCase):
+    """The asks as live-eval-5 measured them on Hermes 3 8B (scratchpad live-eval-5/results.json)."""
+
+    def test_the_kind_and_check_asks_are_the_measured_wording(self):
+        from app import unnamed
+
+        self.assertEqual(unnamed.kind_prompt("A ghoul lunges at you.", "ghoul"),
+                         'Text: A ghoul lunges at you.\nIn this text, is "ghoul" a being that can act on its own?')
+        self.assertEqual(unnamed.kind_check_prompt("A ghoul lunges at you.", "ghoul"),
+                         "Text: A ghoul lunges at you.\n"
+                         "In this text, could you fight or talk to the ghoul? Answer yes or no.")
+        self.assertEqual(unnamed.hostile_prompt("A ghoul lunges at you.", "A ghoul"),
+                         'Text: A ghoul lunges at you.\nIn this text, does "A ghoul" attack or threaten the player?')
+
+    def test_the_measured_replies_are_read(self):
+        from app.entity_kinds import read_yes_no
+
+        # The replies the 8B gave, cut at 4 tokens.
+        for reply in ("Yes, in this", 'Yes, "gh', "Yes, a Death", "Yes, you could", 'Yes, "a'):
+            self.assertIs(read_yes_no(reply), True, reply)
+        for reply in ("No, in this", 'No, "ping', "No.", "No. The flick", 'No, "a'):
+            self.assertIs(read_yes_no(reply), False, reply)
+
+
+class NoNumberInTheStory(unittest.TestCase):
+    """The numbered label is the save's and the UI's; the narrator and the prose see what the figure is."""
+
+    def setUp(self):
+        _fresh_world()
+
+    def test_prose_view(self):
+        from app import unnamed
+
+        names = {"Ghoul 1": "the ghoul", "Ghoul 2": "the ghoul", "Guard 1": "the guard"}
+        self.assertEqual(unnamed.prose_view("The ghoul [[A]] snarls while Ghoul 2 [[B]] lunges at you.", names),
+                         "The ghoul [[A]] snarls while the ghoul [[B]] lunges at you.")
+        self.assertEqual(unnamed.prose_view("Ghoul 2 [[B]] lunges. \"Down!\" Guard 1 shouts.", names),
+                         "The ghoul [[B]] lunges. \"Down!\" The guard shouts.")
+        self.assertEqual(unnamed.prose_view("You hit the Ghoul 1 [[A]].", names), "You hit the ghoul [[A]].")
+        # Ghoul 10 is not Ghoul 1; a name told later is not numbered.
+        self.assertEqual(unnamed.prose_view("Ghoul 10 and Kade wait.", names), "Ghoul 10 and Kade wait.")
+        self.assertEqual(unnamed.story_label("Ghoul", definite=True), "the ghoul")
+
+    def _turn(self, narrator_prose):
+        """One real play_turn with every model call recorded (the transport mocked)."""
+        from unittest import mock
+
+        from app import llm, world
+
+        rows = {r["name"]: r["code"] for r in _rows()}
+        sent: list[tuple[str, str]] = []
+        draft = "===NAR===\n" + narrator_prose.format(**{k.replace(" ", ""): v for k, v in rows.items()}) + \
+            '\n\n===OPS===\nSUMMARY: "Ghouls circle."\n'
+
+        def fake(system_prompt, user_prompt, *args, **kwargs):
+            sent.append((system_prompt, user_prompt))
+            if "===NAR===" in (system_prompt + user_prompt) or "nar_ops" in user_prompt:
+                return draft
+            return "no"
+
+        with mock.patch.object(llm, "_chat_content", side_effect=fake):
+            out = world.play_turn("i shoot the ghoul")
+        turn = (out or {}).get("turn") or {}
+        return sent, str(turn.get("narration") or "") if isinstance(turn, dict) else ""
+
+    def test_the_whole_packet_and_the_prose_carry_no_number(self):
+        import re
+
+        _play("A ghoul lunges at you from the shadows.", "i look around", _Asker(figures=("ghoul",), hostile=("ghoul",)))
+        _play("A guard in a dented helmet steps in front of you.", "i wait", _Asker())
+        self.assertEqual(sorted(r["name"] for r in _rows()), ["Ghoul 1", "Guard 1"])
+        # The 8B leaves a bare person code now and then (2 of 43 recorded outputs): the repair fills it.
+        sent, narration = self._turn("The ghoul circles you while [[{Ghoul1}]] snarls. [[{Guard1}]] raises his baton.")
+        label = re.compile(r"\b(?:Ghoul|Guard) \d+\b")
+        self.assertGreater(len(sent), 3)
+        for system, user in sent:
+            self.assertEqual(label.findall(system + "\n" + user), [], user[:160])
+        self.assertTrue(narration)
+        self.assertEqual(label.findall(narration), [], narration)
+        self.assertIn("the ghoul [[", narration)
+        self.assertIn("The guard [[", narration)
+
+    def test_two_of_a_kind_still_reach_the_narrator_as_what_they_are(self):
+        import re
+
+        _play("Two ghouls lunge at you from the shadows.", "i look around", _Asker(figures=("ghoul",), hostile=("ghoul",)))
+        _play("A guard in a dented helmet steps in front of you.", "i wait", _Asker())
+        sent, narration = self._turn("The ghoul [[{Ghoul1}]] snarls and circles you while [[{Ghoul2}]] lunges at you.")
+        label = re.compile(r"\b(?:Ghoul|Guard) \d+\b")
+        # What the narrator is sent (the scene packet, the rewrite, the repair) and what the player reads.
+        story = [u for _s, u in sent if '"world_state"' in u or "Rewrite this scene" in u or "repair_task" in u]
+        self.assertTrue(story)
+        for user in story:
+            self.assertEqual(label.findall(user), [], user[:160])
+        self.assertIn("an unnamed ghoul [[", "\n".join(story))
+        self.assertEqual(label.findall(narration), [], narration)
+        # A small ask about plain text keeps the number only where two would read alike ("Is Ghoul 1 dead").
+        for _s, user in sent:
+            if "Read this." in user:
+                self.assertEqual([n for n in label.findall(user) if n.startswith("Guard")], [], user)
+
+    def test_the_engine_lines_written_into_the_prose(self):
+        from app import interpreter
+
+        row = {"code": "B", "name": "Ghoul 2", "kind": "Ghoul", "kind_number": 2, "location_id": 3}
+        self.assertEqual(interpreter.outcome_beat(row, None), "The ghoul [[B]] is still alive.")
+        means = interpreter.dead_talk_outcome(row, "i talk to the ghoul", here=True)
+        self.assertNotIn("Ghoul 2", json.dumps(means))
+        twin = {**row, "code": "A", "name": "Ghoul 1", "kind_number": 1}
+        self.assertEqual(interpreter.called(row, [row]), "the ghoul")
+        self.assertEqual(interpreter.called(row, [row, twin]), "Ghoul 2")
+        self.assertEqual(interpreter.called(row, [row, twin], prose=True), "the ghoul")
+        self.assertEqual(interpreter.called({"code": "C", "name": "Kade", "kind": "Raider", "kind_number": 1}), "Kade")
+        # The turn summary the next turn's narrator reads.
+        died = interpreter._event(interpreter.KIND_DIED, "npc", row, "The ghoul falls still.")
+        self.assertEqual(died["subject"]["name"], "Ghoul 2")
+        self.assertEqual(interpreter.event_line(died), "The ghoul [[B]] died.")
+        carried = {**died, "kind": interpreter.KIND_BODY, "state": interpreter.BODY_CARRIED}
+        self.assertEqual(interpreter.event_line(carried), "You carry the body of the ghoul [[B]].")
+        beth = interpreter._event(interpreter.KIND_DIED, "npc", {"code": "A", "name": "Beth"}, "Beth falls.")
+        self.assertNotIn("story", beth["subject"])
+
+    def test_a_save_without_the_kind_columns_still_loads_its_records(self):
+        import sqlite3
+
+        from app import interpreter
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE npcs (code TEXT, name TEXT, died_turn INTEGER, location_id INTEGER, body TEXT)")
+        conn.execute("INSERT INTO npcs VALUES ('A', 'Beth', 0, 1, '')")
+        people = interpreter.load_records(conn)["people"]
+        conn.close()
+        self.assertEqual([(p["name"], p["kind"], p["kind_number"]) for p in people], [("Beth", "", 0)])
+
+
+class NeverAcrossKinds(unittest.TestCase):
+    def setUp(self):
+        _fresh_world()
+
+    def test_same_kind(self):
+        from app import sketches
+
+        ghoul = {"kind": "Ghoul", "kind_number": 1, "role": "ghoul"}
+        guard = {"kind": "Guard", "kind_number": 1, "role": "guard"}
+        aldric = {"kind": "", "kind_number": 0, "role": "gate guard"}
+        beth = {"kind": "", "kind_number": 0, "role": "trader"}
+        woman = {"kind": "Woman", "kind_number": 1, "role": "woman"}
+        self.assertFalse(sketches.same_kind(ghoul, guard))
+        self.assertTrue(sketches.same_kind(guard, aldric))
+        self.assertFalse(sketches.same_kind(ghoul, beth))
+        self.assertFalse(sketches.same_kind(woman, ghoul))
+        # A vague person word is anyone, as before the numbering.
+        self.assertTrue(sketches.same_kind(woman, beth))
+        self.assertTrue(sketches.same_kind(beth, aldric))
+
+    def test_a_wrong_identity_answer_does_not_merge_a_ghoul_into_a_guard(self):
+        import re
+
+        from app import sketches
+
+        asked: list[str] = []
+
+        def first_code(system, user, **kw):
+            asked.append(user)
+            codes = re.findall(r"^([A-Z]{1,2}): ", user, re.M)
+            return '{"answer": "%s"}' % codes[0] if codes else '{"answer": "new"}'
+
+        previous = sketches.set_identity_ask(first_code)
+        try:
+            _play("A ghoul lunges at you from the shadows. A guard in a dented helmet steps in front of you.", "i look",
+                  _Asker(figures=("ghoul",), hostile=("ghoul",)))
+            for prose in ("The ghoul circles you, snarling. The guard watches you, baton raised.",
+                          "The ghoul circles you, snarling."):
+                _play(prose, "i wait", _Asker())
+        finally:
+            sketches.set_identity_ask(previous)
+        rows = {r["name"]: (r["attitude"], r["role"]) for r in _rows()}
+        self.assertEqual(rows, {"Ghoul 1": ("hostile", "ghoul"), "Guard 1": ("neutral", "guard")})
+        for user in asked:
+            self.assertFalse("Ghoul 1" in user and "Guard 1" in user, user)
+
+
+class ThePronounInASpeechTag(unittest.TestCase):
+    def setUp(self):
+        _fresh_world()
+
+    def test_she_after_a_ghoul_is_not_the_ghoul(self):
+        prose = 'A ghoul lunges at you from the doorway. "Get down!" she shouts from behind the counter.'
+        asker = _Asker(figures=("ghoul",), hostile=("ghoul",), speaks=())
+        _play(prose, "i duck", asker)
+        here = _rows("location_id = (SELECT current_location_id FROM player)")
+        ghouls = [r for r in here if r["kind"] == "Ghoul"]
+        self.assertEqual([(r["name"], r["attitude"], r["race"]) for r in ghouls], [("Ghoul 1", "hostile", "unknown")])
+        speakers = [r for r in here if r["kind"] == ""]
+        self.assertEqual(len(speakers), 1, [dict(r) for r in here])
+        self.assertNotEqual(speakers[0]["attitude"], "hostile")
+        self.assertEqual(asker.asked("figure_speaks"),
+                         ['Text: A ghoul lunges at you from the doorway. "Get down!" she shouts from behind the counter.\n'
+                          'In this text, does the ghoul say "Get down!"? Answer yes or no.'])
+
+    def test_offline_the_face_stays_the_speaker(self):
+        from app import entity_kinds, world
+        from app.turn_dsl import parse_dsl_turn
+
+        prose = 'A ghoul lunges at you from the doorway. "Get down!" she shouts from behind the counter.'
+        turn = parse_dsl_turn(f'===NAR===\n{prose}\n\n===OPS===\nSUMMARY: "A ghoul."\nNPC_NEW NAME "Ghoul" ROLE "monster" '
+                              'ATTITUDE hostile\n', "i duck")
+        turn["narration"] = prose
+        entity_kinds.settle_kinds(turn, "i duck", ask=False)
+        world.apply_turn(turn, "i duck", input_kind="player")
+        here = _rows("location_id = (SELECT current_location_id FROM player)")
+        self.assertEqual([r["name"] for r in here if r["kind"] == "Ghoul"], ["Ghoul 1"])
+        self.assertEqual(len([r for r in here if r["kind"] == ""]), 1, [dict(r) for r in here])
+
+
+class MoreAndReferredBack(unittest.TestCase):
+    def setUp(self):
+        _fresh_world()
+
+    def test_two_more_ghouls_are_two_more(self):
+        _play("A ghoul lunges at you from the shadows. Then two more ghouls follow.", "i back away",
+              _Asker(figures=("ghoul",), hostile=("ghoul",)))
+        self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3"])
+        _play("One more ghoul drops from the roof onto you.", "i fight", _Asker())
+        self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3", "Ghoul 4"])
+
+    def test_a_deathclaw_referred_back_to_mints_nothing_without_an_op(self):
+        asker = _Asker(figures=("deathclaw",), hostile=("deathclaw",))
+        _play("The deathclaw charges you, roaring.", "i brace", asker)
+        self.assertEqual(_names(), [])
+        self.assertEqual(asker.asked("figure_kind"), [])
+        _play("The deathclaw charges you, roaring.", "i brace", asker,
+              ops='SUMMARY: "A deathclaw charges."\nNPC_NEW NAME "Deathclaw" ROLE "monster" ATTITUDE hostile')
+        self.assertEqual(_names(), ["Deathclaw 1"])
 
 
 class OldSaves(unittest.TestCase):

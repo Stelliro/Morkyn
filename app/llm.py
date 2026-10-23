@@ -12327,13 +12327,26 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
         out = _coded_names_in_stored_case(out, code_map)
         return out
 
+    # An unnamed figure the repair writes in (a bare "[[B]]" filled with its
+    # record's name) is written as what it is, "the ghoul [[B]]": "Ghoul 2" is
+    # the engine's label for the save and the UI, never story (app/unnamed.py).
+    try:
+        from app.unnamed import prose_view, story_names
+
+        story = story_names(context, definite=True)
+    except Exception:
+        story, prose_view = {}, None  # type: ignore[assignment]
+
+    def as_story(text: str) -> str:
+        return prose_view(text, story) if story and prose_view else text
+
     segments = result.get("narration_segments")
     if isinstance(segments, list) and segments:
         new_segments: list[Any] = []
         for seg in segments:
             if isinstance(seg, dict):
                 text = rewrite_names(str(seg.get("text") or ""))
-                text = _repair_prose_entity_labels(text, code_map)
+                text = as_story(_repair_prose_entity_labels(text, code_map))
                 new_segments.append({**seg, "text": text})
             else:
                 new_segments.append(seg)
@@ -12345,11 +12358,11 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
             result["narration"] = joined[:5600]
     elif result.get("narration"):
         text = rewrite_names(str(result.get("narration") or ""))
-        result["narration"] = _repair_prose_entity_labels(text, code_map)[:5600]
+        result["narration"] = as_story(_repair_prose_entity_labels(text, code_map))[:5600]
 
     if result.get("turn_summary"):
         text = rewrite_names(str(result.get("turn_summary") or ""))
-        result["turn_summary"] = _repair_prose_entity_labels(text, code_map)[:700]
+        result["turn_summary"] = as_story(_repair_prose_entity_labels(text, code_map))[:700]
 
     mismatches = _role_mismatches(str(result.get("narration") or ""), code_roles)
     if mismatches:
@@ -15289,8 +15302,12 @@ def _make_pipeline_consolidator(
     from app.conversation import writer_view
     from app.scene_thread import writer_view as thread_writer_view
 
-    talk = writer_view((context or {}).get("conversation_turn"))
-    thread = thread_writer_view((context or {}).get("scene_thread"))
+    from app.unnamed import story_names, story_view
+
+    # Who answers, as the scene knows them: "an unnamed ghoul [[B]]", never "Ghoul 2" (app/unnamed.py).
+    story = story_names(context)
+    talk = story_view(writer_view((context or {}).get("conversation_turn")), story)
+    thread = story_view(thread_writer_view((context or {}).get("scene_thread")), story)
     system = (
         "You are the scene consolidator. Read all paragraphs together. "
         "Fix doubling, contradictions, and simultaneous dual intents. "

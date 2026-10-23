@@ -22219,6 +22219,9 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
     rows = _mention_catalog(context)
     scene = _active_scene(context)
     resolved_notes: list[str] = []
+    from app import unnamed
+
+    story = unnamed.story_names(context)
     # The conversation line goes first: the brief trims this footer, and who
     # the player is talking to is the part a writer must not lose.
     conversation_turn = context.get("conversation_turn")
@@ -22258,7 +22261,7 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
         code = hit["code"]
         shown = f"{name} [[{code}]]" if code else name
         resolved_notes.append(f"@{kind}{hit['slug']} = {name} ({code or 'no code'}, {hit['label']})")
-        return shown
+        return unnamed.story_view(shown, story) if story else shown
 
     text = re.sub(r"@([CILSAEQ])([a-z0-9_]+)", replace_mention, text, flags=re.IGNORECASE)
 
@@ -22285,6 +22288,12 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
     if not notes:
         return text
     expansions = "; ".join(notes)
+    # The engine's notes name an unnamed figure as what it is ("an unnamed
+    # ghoul [[B]]"), as the context does: "Ghoul 2" reached the narrator here
+    # ("Also present, listening ...: Ghoul 1 [[A]]") and the player's own
+    # words around them are left as written (app/unnamed.py).
+    if story:
+        expansions = unnamed.story_view(expansions, story)
     return f"{text}\n\nResolved player references: {expansions}"
 
 
