@@ -284,7 +284,8 @@ belong to, with the date).
   11.0 s, no fallbacks, 176 fault rows in 100 turns, led by money read from the model's die rather
   than the prose, people rebound between rows, creatures never filed, and jobs never filed.
   The second run (2026-10-25, docs/showcase/hermes-sonnet100-findings-2026-10-25.md; Sonnet agents as
-  the player, the creature fix merged): median turn 14.3 s, no fallbacks, 212 fault rows; money never
+  the player, the creature fix merged): median turn 14.3 s, no fallbacks, 212 fault rows (counts are not
+  comparable with the baseline: build and player changed at once; the families are); money never
   moved by a scene in 100 turns, jobs were filed and completed, creatures still got no row and two
   blows hit a bystander. Run it with `tools/harness_with_packs.py` (the Linux .venv has no llama_cpp;
   the wrapper puts the installed CUDA pack on the path) and watch at http://127.0.0.1:8790/.

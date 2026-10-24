@@ -62,6 +62,14 @@ T18, T32, T76, T82, T86, T91, T92 and a handful with one minor row.
 
 ## Against the baseline
 
+**Two things changed at once**: the build (the merged creature fix) and the player (Sonnet agents, who play and
+log differently from the baseline's players). So the raw counts (212 rows against 176) do not say the build got
+worse, and "jobs improved" may partly be Sonnet asking for pay more plainly. What holds whoever played: the
+turn records checked by the coordinator (coordinator-notes.md): money never moved by a scene, the merged fix
+fired on none of this run's three creatures, the moves ahead of the prose, the rule text in the prose. Treat the
+family-level findings as reliable and the counts as not comparable; a true measure of a merge keeps the same
+player model as the run before it.
+
 Same fault families as 2026-10-24, with these movements:
 
 - **Money is unchanged and is the whole of the state damage that matters to play.** It is the first job: the pre-draft transaction (CLAUDE.md 2026-10-25, TODO m0), then the currency set (m1).
