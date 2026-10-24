@@ -15636,6 +15636,7 @@ def _engine_prose_cleanups(
     final = _drop_player_overreach(trimmed, player_input, phase, trace, context)
     # The speech-memory drops come last; the player's words are checked once more after them.
     final = _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
+    final = _drop_text_not_story(final, player_input, phase, trace)
     return _close_open_quotes(_drop_fact_echo(final, context, phase, trace), phase, trace)
 
 
@@ -15698,6 +15699,7 @@ def _ensure_narration_quality(
         final = _drop_player_overreach(deeper, player_input, phase, trace, context, asks=asks)
     final = _drop_retold_paragraphs(final, asks, phase, trace)
     final = _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
+    final = _drop_text_not_story(final, player_input, phase, trace)
     return _close_open_quotes(_drop_fact_echo(final, context, phase, trace), phase, trace)
 
 
@@ -16148,6 +16150,144 @@ def _drop_retold_paragraphs(
     except Exception:
         pass
     return turn
+
+
+# A line of the prose that is only a note about the text's own length: "* 850
+# chars", "(about 900 characters)", "Word count: 212". This is a shape regex
+# for one class (a count of the text, which no story line is), not a phrasing:
+# stage1 T7 shipped "* 850 chars" as the narration's first line, copied from
+# the depth retry's "Target about 850 characters", and a 2026-10-23 run had
+# "* 1259 chars" from the same ask.
+_TEXT_NOTE_LINE_RE = re.compile(
+    r"^[\s*_#>\-•(\[]*(?:"
+    r"(?:length|word\s+count|char(?:acter)?\s+count)\s*[:=-]?\s*(?:about|approx\.?|approximately|around)?\s*~?\d[\d,.]*"
+    r"(?:\s*(?:chars?|characters?|words?|tokens?|letters?)\b)?"
+    r"|(?:(?:about|approx\.?|approximately|around)\s*)?~?\d[\d,.]*\s*(?:chars?|characters?|words?|tokens?|letters?)\b"
+    r")[\s.*_)\]]*$",
+    re.I,
+)
+
+
+def _drop_text_notes(turn: dict[str, Any], phase: str, trace: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """A line that counts the text (engine/prompt text, not story) goes from the prose, noted."""
+    if not isinstance(turn, dict):
+        return turn
+    text = str(turn.get("narration") or "")
+    lines = text.split("\n")
+    notes = [line.strip() for line in lines if _TEXT_NOTE_LINE_RE.match(line) and line.strip()]
+    if not notes:
+        return turn
+    kept = "\n".join(line for line in lines if not (_TEXT_NOTE_LINE_RE.match(line) and line.strip()))
+    kept = re.sub(r"\n\s*\n(?:\s*\n)+", "\n\n", kept).strip()
+    if not kept:
+        return turn
+    _rebuild_segments(turn, kept)
+    _append_trace(trace, {"phase": phase, "event": "text_note_dropped", "lines": notes[:4]})
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("prose", "text_note_dropped", lines=notes[:4])
+    except Exception:
+        pass
+    return turn
+
+
+# How much of a sentence must be the player's own line, and how much of the
+# line it must carry, to be the line pasted back rather than the scene going on.
+ECHO_SENTENCE_SHARE = 0.8
+ECHO_LINE_COVER = 0.6
+ECHO_MIN_STEMS = 4
+
+
+def echoed_player_line(text: str, player_input: str) -> tuple[str, list[str]]:
+    """Sentences that restate the player's own line in the second person, dropped once the scene has shown the act.
+
+    stage1 T7: the line "I wade further out toward the deep reeds, knife out,
+    and call out to see if anything answers." came back as the scene's last
+    sentence but one, "You wade further out toward the deep reeds, knife out,
+    and call out to see if anything answers.", after "You call out, "Hello?
+    ..."" had already shown it; T9 ended on "You thank him, then continue
+    following the tracks ..." after "You follow the tracks deeper into the
+    marsh". The player's words are theirs (CLAUDE.md): told back to them they
+    add nothing, and here they read as the player doing it a second time.
+
+    An echo, read against the line by its words, with no ask: the sentence has
+    a player clause whose verb is a word of the line; nearly all its content
+    words are the line's (ECHO_SENTENCE_SHARE) and it carries most of the
+    line's (ECHO_LINE_COVER); it holds no quotation (a line of speech is
+    someone's words, judged by the speech gates); and an earlier sentence of
+    the scene already has the player doing a word of the line (so the echo
+    retells it). The first telling of the act stays even when it is close to
+    the line ("You agree to patch the water trough ..." opening T3), and so
+    does every sentence that answers the act with the world ("The reeds close
+    behind you", "She eyes you warily before speaking."), which shares too
+    little of the line. Returns (text, dropped).
+    """
+    from app.narration_pipeline import content_stems, split_sentences
+
+    own = player_line_of(player_input)
+    if not own or str(player_input or "").startswith("__"):
+        return text, []
+    own_stems = content_stems(_SCENE_QUOTE_RE.sub(" ", own))
+    if len(own_stems) < ECHO_MIN_STEMS:
+        return text, []
+    dropped: list[str] = []
+    shown = False  # the player has done a word of the line in an earlier sentence
+    out: list[str] = []
+    for para in re.split(r"\n\s*\n", str(text or "")):
+        kept: list[str] = []
+        changed = False
+        for sentence in split_sentences(para):
+            quoted = bool(re.search(r'["“”]', sentence))
+            outside = _SCENE_QUOTE_RE.sub(" ", sentence)
+            verbs = _you_verbs(_you_clauses(outside))
+            acts_line = bool(verbs & own_stems)
+            if acts_line and shown and not quoted:
+                stems = content_stems(sentence)
+                shared = stems & own_stems
+                if (
+                    stems
+                    and len(shared) >= ECHO_SENTENCE_SHARE * len(stems)
+                    and len(shared) >= ECHO_LINE_COVER * len(own_stems)
+                ):
+                    dropped.append(sentence)
+                    changed = True
+                    continue
+            if acts_line:
+                shown = True
+            kept.append(sentence)
+        out.append(" ".join(kept) if changed else para.strip())
+    joined = "\n\n".join(p for p in out if p.strip())
+    if not dropped or not joined.strip():
+        return text, []
+    return joined, dropped
+
+
+def _drop_echoed_player_line(
+    turn: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """The player's own line pasted back as a "you" sentence goes (echoed_player_line), noted."""
+    if not isinstance(turn, dict):
+        return turn
+    kept, dropped = echoed_player_line(str(turn.get("narration") or ""), player_input)
+    if not dropped:
+        return turn
+    _rebuild_segments(turn, kept)
+    _append_trace(trace, {"phase": phase, "event": "player_line_echo_dropped", "sentences": [s[:160] for s in dropped[:4]]})
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("player_words", "player_line_echo_dropped", sentences=[s[:160] for s in dropped[:4]])
+    except Exception:
+        pass
+    return turn
+
+
+def _drop_text_not_story(
+    turn: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """Text that is not the story: a note about the text's length, and the player's line told back to them."""
+    return _drop_echoed_player_line(_drop_text_notes(turn, phase, trace), player_input, phase, trace)
 
 
 def _close_open_quotes(turn: dict[str, Any], phase: str, trace: list[dict[str, Any]] | None) -> dict[str, Any]:
