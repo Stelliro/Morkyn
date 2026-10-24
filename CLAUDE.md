@@ -311,7 +311,7 @@ belong to, with the date).
   `.closing()` block. tests/test_db_connections_close.py keeps bare blocks out of app/.
 - **Never touch the live `data/`** from tests, probes or servers. There is no single data-dir
   setting; use `tools/playtest_setup_presets.isolated_data_env(dir)` with absolute paths.
-- **Line endings are mixed.** CHANGELOG.md, README.md, docs/PLAYTEST_ISSUES.md, docs/TODO_NEXT.md,
+- **Line endings are mixed.** (CHANGELOG.md is LF as of 2026-10-25.) README.md, docs/PLAYTEST_ISSUES.md, docs/TODO_NEXT.md,
   app/world.py, app/llm.py, app/main.py, app/skill_checks.py, app/conversation.py,
   app/narration_pipeline.py, app/turn_dsl.py, app/prompts.py, app/player_resources.py,
   app/quest_parser.py, static/styles.css and static/index.html are CRLF (checked 2026-10-18);
