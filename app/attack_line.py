@@ -221,6 +221,15 @@ _MISHAP_POOLS: dict[str, list[str]] = {
 }
 
 
+def _limb_agrees(clause: str, limb: str) -> str:
+    """The clause's verb agreeing with a plural limb: "your own ribs take the hurt", not "takes" (stage1 T13)."""
+    from app.unnamed import is_plural
+
+    if not is_plural(limb):
+        return clause
+    return re.sub(rf"(\b{re.escape(limb)}\s+)takes\b", r"\1take", clause)
+
+
 def self_injury_of(check: dict[str, Any] | None) -> dict[str, Any] | None:
     """The check's applied self-injury (an unskilled mishap that hurt the player), or None."""
     injury = (check or {}).get("injury") if isinstance(check, dict) else None
@@ -239,7 +248,8 @@ def mishap_clause(check: dict[str, Any] | None, weapon: str = "", pick: random.R
     word = _weapon_word(weapon)
     pool = _MISHAP_POOLS[code if word and code in _MISHAP_POOLS else ""]
     rng = pick or random.Random(f"mishap|{code}|{word}|{injury.get('limb')}|{check.get('natural')}")
-    return rng.choice(pool).format(W=word, L=str(injury.get("limb")).strip())
+    limb = str(injury.get("limb")).strip()
+    return _limb_agrees(rng.choice(pool).format(W=word, L=limb), limb)
 
 
 def _weapon_word(weapon: str) -> str:
@@ -434,40 +444,48 @@ def _para_index(text: str, at: int) -> int:
     return len(re.findall(r"\n\s*\n", text[:at]))
 
 
-def _kind_word_re(row: dict[str, Any]) -> re.Pattern[str] | None:
-    from app.unnamed import numbered_name
+def _kind_words(row: dict[str, Any]) -> set[str]:
+    """The words a scene may call a figure by its kind: a numbered figure's kind, or a creature row's kind column
+    with "creature", "animal", "beast" (attack_intent._kinds_of: the Serpent of Saltmarrow, kind Serpent, is "the
+    creature", stage1 T12); none for a person under a name."""
+    from app.unnamed import _person_kind, numbered_name
 
     _name, kind = numbered_name(row)
-    if not kind:
-        return None
-    return re.compile(r"(?<![A-Za-z])" + re.escape(kind.lower()) + r"(?![A-Za-z])", re.I)
+    stored = str(row.get("kind") or "").strip() if isinstance(row, dict) else ""
+    if not kind and not (stored and not _person_kind(stored)):
+        return set()
+    from app.attack_intent import _kinds_of
+
+    return {w for w in _kinds_of(row) | ({kind.lower()} if kind else set()) if w}
 
 
-def _only_of_its_kind_here(row: dict[str, Any], records: dict[str, Any] | None, match: Any) -> bool:
-    """A numbered figure whose kind no other living figure at the player's place shares."""
+def _kind_words_used(text: str, row: dict[str, Any]) -> set[str]:
+    """The figure's kind words the text uses ("creature" in "the creature's snout")."""
+    return {w for w in _kind_words(row) if re.search(r"(?<![A-Za-z])" + re.escape(w) + r"(?![A-Za-z])", text, re.I)}
+
+
+def _shared_here(words: set[str], row: dict[str, Any], records: dict[str, Any] | None, match: Any) -> set[str]:
+    """Which of these kind words another living figure at the player's place has too."""
     from app.interpreter import is_dead
-    from app.unnamed import numbered_name
 
-    _name, kind = numbered_name(row)
-    if not kind:
-        return False
     here = int((records or {}).get("here_id") or 0)
+    code = str(row.get("code") or "").upper()
+    shared: set[str] = set()
     for other in getattr(match, "people", []) or []:
-        if other is row or is_dead(other):
+        if other is row or is_dead(other) or (code and str(other.get("code") or "").upper() == code):
             continue
         if here and int(other.get("location_id") or 0) and int(other.get("location_id") or 0) != here:
             continue
-        if numbered_name(other)[1].lower() == kind.lower():
-            return False
-    return True
+        shared |= _kind_words(other) & words
+    return shared
 
 
 def names_target(text: str, row: dict[str, Any], match: Any, records: dict[str, Any] | None = None) -> bool:
-    """The text names the target: its code, a name only it has, or its kind when it is the only living one of that kind here."""
+    """The text names the target: its code, a name only it has, or a kind word of it no other living figure here has."""
     if match.names(text, row):
         return True
-    pattern = _kind_word_re(row)
-    return bool(pattern and pattern.search(text) and _only_of_its_kind_here(row, records, match))
+    used = _kind_words_used(str(text or ""), row)
+    return bool(used and used - _shared_here(used, row, records, match))
 
 
 def _names_another(text: str, row: dict[str, Any], match: Any, records: dict[str, Any] | None) -> bool:
@@ -489,6 +507,10 @@ def _clauses(sentence: str) -> list[str]:
 def _subject_kind(clause: str, prev: str, weapon: str) -> str:
     """"attack" (the player, or what they sent), "other" (someone or something else), "none", or the clause carried on."""
     text = clause.strip().lstrip("\"“”'‘’ ")
+    # A clause the split left opening on its conjunction (", as your blow connects", stage1 T13):
+    # the subject is what follows it.
+    text = re.sub(r"^(?:and|but|then|as|while|when|before|after|until|so|because|though|although)\s+(?=\S)", "",
+                  text, flags=re.I)
     head = re.match(r"([A-Za-z’']+)(?:\s+([A-Za-z’'-]+))?", text)
     if not head:
         return prev

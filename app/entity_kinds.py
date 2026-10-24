@@ -256,6 +256,14 @@ def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True)
         if kind:
             npc["_unnamed_kind"] = kind
             turn_ledger.note("npc", "op_name_is_a_kind", name=name, kind=kind)
+            continue
+        # A proper name whose head noun the prose shows as a creature ("Serpent of Saltmarrow" over
+        # "a large serpent emerges ... it rears up", stage1 T11): a creature of that kind, filed under
+        # its name; the person-or-place ask is not made for it (it had no sentence naming it).
+        try:
+            unnamed.settle_op_creature(npc, narration, ask=ask, call=_call, trace=trace, usage=usage)
+        except Exception as exc:
+            turn_ledger.note("npc", "op_creature_settle_failed", name=name, error=f"{type(exc).__name__}: {exc}"[:160])
     op_people = [
         str(n.get("name") or "").strip() for n in result.get("npcs") or []
         if isinstance(n, dict) and str(n.get("name") or "").strip() and not str(n.get("code") or "").strip()
@@ -272,9 +280,10 @@ def settle_kinds(result: dict[str, Any], player_input: str, *, ask: bool = True)
         if _norm(name):
             introduced.append(name)
             questions.append((name, "prose"))
-    # 2. A new person the ops file (not one the roster already holds).
+    # 2. A new person the ops file (not one the roster already holds); a creature settled above is filed.
+    creatures = {_norm(n.get("name")) for n in result.get("npcs") or [] if isinstance(n, dict) and n.get("_creature_kind")}
     for name in op_people:
-        if _norm(name) and _norm(name) not in roster_keys:
+        if _norm(name) and _norm(name) not in roster_keys and _norm(name) not in creatures:
             questions.append((name, "op_person"))
     # 3. A new place the ops file under a roster person's name.
     for loc in result.get("locations") or []:

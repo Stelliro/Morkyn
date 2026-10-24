@@ -273,6 +273,8 @@ _PHRASE_END = frozenset({
     "who", "that", "which", "while", "before", "after", "until", "so", "if", "when", "where", "through",
     "toward", "towards", "against", "over", "under", "behind", "near", "beside", "about", "off", "up",
     "down", "out", "away", "back", "across", "along", "onto", "upon", "without", "because",
+    # Closed-class adverbs after the head: "I swing at the creature again" is about the creature (stage1 T13).
+    "again", "now", "once", "twice", "here", "there", "too", "still", "yet",
 })
 # Scenery the engine never takes for a person (world._NAME_SCENERY_RE: door, gate,
 # window, ...) and the two fixtures the live lines shot at ("the lock", "the sign").
@@ -821,9 +823,14 @@ def _is_fixture(noun: str) -> bool:
 
 
 def kind_figures(line: str, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The living numbered figures whose kind the line names as a thing ("the ghoul", "another ghoul"), lowest number first."""
+    """The living numbered figures whose kind the line names as a thing ("the ghoul", "another ghoul"), lowest number first.
+
+    A creature filed under a name keeps its kind column and is one of them
+    ("the creature", "the serpent" for the Serpent of Saltmarrow, kind
+    Serpent: stage1 T12); a person row under a name is never one.
+    """
     from app.interpreter import is_dead
-    from app.unnamed import numbered_name
+    from app.unnamed import _person_kind, numbered_name
 
     nouns = set(object_nouns(line))
     if not nouns:
@@ -833,10 +840,73 @@ def kind_figures(line: str, people: list[dict[str, Any]]) -> list[dict[str, Any]
         if not isinstance(person, dict) or is_dead(person):
             continue
         _name, kind = numbered_name(person)
+        if not kind:
+            stored = str(person.get("kind") or "").strip()
+            kind = stored if stored and not _person_kind(stored) else ""
         if kind and _kinds_of(person) & nouns:
             out.append(person)
     out.sort(key=lambda p: int(p.get("kind_number") or 0))
     return out
+
+
+def place_figures(context: dict[str, Any] | None, line: str) -> list[dict[str, Any]]:
+    """The living rows at the player's place the line's blow names, though the scene record does not hold them.
+
+    Positive evidence only: a creature row whose kind the line names ("the
+    creature", "the beast", "the serpent" for the Serpent of Saltmarrow,
+    kind Serpent: _kinds_of), or a row the line names by a word of its name
+    ("the serpent" for a Serpent of Saltmarrow whose kind was never read).
+    stage1 T12: the serpent was filed at the lair, but the sentence that
+    showed it was trimmed, so no scene record held it and the blow had no one.
+    """
+    ctx = context if isinstance(context, dict) else {}
+    text = str(line or "")
+    if not text.strip():
+        return []
+    try:
+        from app.skill_checks import _npc_pool_from_context
+
+        pool = [n for n in _npc_pool_from_context(ctx) if isinstance(n, dict)]
+    except Exception:
+        return []
+    from app.interpreter import is_dead
+    from app.unnamed import _person_kind
+
+    here = ctx.get("current_location") if isinstance(ctx.get("current_location"), dict) else {}
+    here_id = int(here.get("id") or 0) if str(here.get("id") or "").strip().isdigit() else 0
+    dead = {str(code).upper() for code in _dead_codes(ctx)}
+    nouns = set(object_nouns(" ".join(attack_clauses(text)) or text)) | set(object_nouns(text))
+    out: list[dict[str, Any]] = []
+    for npc in pool:
+        code = str(npc.get("code") or "").strip().upper()
+        if not code or code in dead or is_dead(npc) or not _clean(npc.get("name")):
+            continue
+        try:
+            at = int(npc.get("location_id") or 0)
+        except (TypeError, ValueError):
+            at = 0
+        if here_id and at and at != here_id:
+            continue
+        kind = str(npc.get("kind") or "").strip()
+        creature = bool(kind) and not _person_kind(kind)
+        from app.interpreter import line_names
+
+        # A word of the name the line uses, capitalised in the name ("Serpent", "Saltmarrow"; never
+        # the "of" or "the" of "Warden of the Marsh").
+        named = line_names(text, npc) or any(
+            w[:1].isupper() and re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text, re.I) for w in name_words(npc))
+        if (creature and _kinds_of(npc) & nouns) or named:
+            out.append({**npc, "code": code, "name": _clean(npc.get("name"))})
+    return out[:MAX_PEOPLE]
+
+
+def blow_noun(line: str) -> str:
+    """The thing the line's blow names, its head noun ("creature" in "I swing my fist at the creature as it comes out of the dark"), or ""."""
+    text = str(line or "")
+    for noun in [*object_nouns(" ".join(attack_clauses(text)) or text), *object_nouns(text)]:
+        if noun and not _is_fixture(noun):
+            return noun
+    return ""
 
 
 def unknown_creature(line: str, people: list[dict[str, Any]] | None, shown: set[str] | None) -> str:
@@ -1029,6 +1099,14 @@ def decide(
         line = player_line(model_input)
         people = people_here(context)
         ctx = context if isinstance(context, dict) else {}
+        report["attack_roll"] = bool(inferred and inferred.get("skill_code") in ATTACK_SKILLS)
+        if not people:
+            # No one in the scene record, but a creature at the player's place the blow names (stage1
+            # T12: "I swing my fist at the creature" with the serpent filed at the lair, its entrance
+            # sentence trimmed from the prose, so the scene never held it): it is whom the line can mean.
+            people = place_figures(context, line)
+            if people:
+                report["from_place"] = [p.get("code") for p in people]
         # The creatures shown attacking: by the last turn's prose, or by the player's own line.
         shown = shown_kinds(ctx.get("last_narration"), line, people=people)
         prose = str(ctx.get("last_narration") or "")
@@ -1080,11 +1158,40 @@ def decide(
         people = [*figures, *[p for p in people if line_may_target(line, p, people=here, places=places, shown=shown,
                                                                    prose=prose) and p not in figures]]
         report["people"] = [p.get("code") for p in people]
+        if report["attack_roll"] and figures and not (inferred or {}).get("social"):
+            # The trigger tables rolled a blow and it names a creature here by its kind ("the
+            # creature", "the serpent": stage1 T12-T13): it is the target, as a blow the tables
+            # aimed at someone the line cannot mean goes to the figure it names (above).
+            check = attack_check(figures[0], inferred, context)
+            check["replaces_inferred"] = True
+            report["target"] = check["attack"]
+            report["skill"] = check["skill_code"]
+            report["from"] = "kind"
+            return check, report
         if here and not people:
             # Everyone present is cleared of the blow: say what it named (attack_target_unknown_noun).
             noun = unknown_creature(line, here, shown) or unknown_body(line, here, prose)
             if noun:
                 report["unknown_noun"] = noun
+        elif not here and report["attack_roll"]:
+            # No one here at all: a creature the last prose (or the line) shows attacking is minted
+            # and aimed at, as with someone present; else the blow names a thing the engine has no
+            # row for, and the roll stands with no target (stage1 T12-T13: nothing was noted).
+            noun = unknown_creature(line, [], shown)
+            if noun and minter is not None:
+                minted = minter(noun)
+                if isinstance(minted, dict) and minted.get("code"):
+                    report["unknown_noun"] = noun
+                    check = attack_check(minted, inferred, context)
+                    check["replaces_inferred"] = True
+                    report["target"] = check["attack"]
+                    report["skill"] = check["skill_code"]
+                    report["from"] = "minted"
+                    return check, report
+            noun = noun or blow_noun(line)
+            if noun:
+                report["unknown_noun"] = noun
+            return None, report
         target = find_target(line, people, ask, report)
         if target is None:
             return None, report
