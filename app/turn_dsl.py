@@ -373,20 +373,81 @@ _PERSON_FIRST_OPS = frozenset(
 # a part that is not NAME's own ('LEAD: "NAME Yosef Rahman"', 'QUEST ...
 # "GIVER NAME Theo"'), and a name wrapped in single quotes inside the double
 # ones ('NPC_NEW: "NAME: \'Mohan Wong\'"'). Both are the op form, not the name.
-_NAME_LABEL_PREFIX_RE = re.compile(r"(?:(?i:name)\s*:\s*|NAME\s+)(?=\S)")
-_WRAPPED_SINGLE_RE = re.compile(r"'([^'\n]+)'")
+_NAME_LABEL_PREFIX_RE = re.compile(r"(?:(?i:name)\s*[:=]\s*|NAME\s+)(?=\S)")
+_WRAPPED_SINGLE_RE = re.compile(r"(['\"])([^'\"\n]+)\1")
+# F196 (sonnet100 T54): 'NPC_NEW: "NAME = Marcella; ROLE = peddler; LOC = [[L4]]"'
+# filed a person called "= Marcella" with the job "= peddler". The sign of a
+# KEY = value pair whose key was read is the op form, never a value's first
+# character.
+_PAIR_SIGN_RE = re.compile(r"^[=:]+\s*")
+# A field label standing alone as a token ("NAME=", "title:"); a one-letter
+# code with a colon ("A:") is not one.
+_BARE_LABEL_RE = re.compile(r"[A-Za-z_]{2,}[=:]")
 
 
 def _bare_value(text: str, *, name_label: bool = False) -> str:
-    """A part's text without the op form around it: wrapping single quotes and,
-    for a name or a person, a leading NAME label."""
-    value = str(text or "").strip()
+    """A part's text without the op form around it: a leading pair sign,
+    wrapping quotes and, for a name or a person, a leading NAME label."""
+    value = _PAIR_SIGN_RE.sub("", str(text or "").strip())
     if name_label:
         label = _NAME_LABEL_PREFIX_RE.match(value)
         if label:
             value = value[label.end():].strip()
     wrapped = _WRAPPED_SINGLE_RE.fullmatch(value)
-    return wrapped.group(1).strip() if wrapped else value
+    if wrapped:
+        value = _PAIR_SIGN_RE.sub("", wrapped.group(2).strip())
+    return value
+
+
+# F196 (sonnet100 T73, T88, T97): the first part of an op that names something
+# came out still carrying the op form. 'EVENT: "NAME: The Search for the Eel
+# Pool Creature"' filed an event with that title; 'SKILL: "name: Perception\n
+# delta: +1\nATTITUDE: improved"' rolled a skill gain tagged with all of it;
+# 'LOC_NEW: "NAME: The Eel Pool\nDESC: ..."' minted a place with the description
+# in its name; 'QUEST_DONE: "quest = 'Find Supplies'; accept"' asked after a job
+# called all of that. These ops open on a name, a title, a code or a claim (read
+# from the op list, like the tables above), and the one repair is here, where
+# the part is read, so every consumer (rows, titles, dice tags) gets the value
+# alone: a leading identity label (NAME, TITLE, the op's own word) with its ':'
+# or '=' is dropped, and the value ends where the next field starts (a field
+# word with ':' or '=', a bare capital field word, or a new line opening on any
+# "word:"); the fields after it are read as the op's flags, and a ';' after the
+# value separates the op's further parts.
+_IDENTITY_FIRST_OPS = _NAME_FIRST_OPS | _PERSON_FIRST_OPS | frozenset(
+    m.group(1)
+    for m in re.finditer(r"^([A-Z_]+): (?:the |a |an )?[\w' ]*?\b(?:name|title|code|claim)\b", DSL_SYSTEM_PROMPT, re.M)
+    if m.group(1) in OPCODES
+)
+_IDENTITY_LABELS = frozenset({"NAME", "TITLE"})
+_ALL_FIELD_KEYS = frozenset(_FLAG_KEYS) | frozenset(k for keys in _OPCODE_FLAG_KEYS.values() for k in keys)
+
+
+def _identity_part(value: str, own_op: str, own_fields: frozenset[str] | set[str]) -> tuple[str, list[tuple[str, str]], list[str]]:
+    """The identity in a quoted first part, the fields written after it and the
+    op's further ';'-separated parts: ("Perception", [("DELTA", "+1")], [])."""
+    text = _PAIR_SIGN_RE.sub("", str(value or "").strip())
+    labels = "|".join(sorted(_IDENTITY_LABELS | {own_op.split("_")[0]}, key=len, reverse=True))
+    head = re.match(rf"(?:(?i:{labels})\s*[:=]\s*|(?:{labels})\s+)(?=\S)", text)
+    if head:
+        text = text[head.end():]
+    keys = "|".join(sorted(_ALL_FIELD_KEYS | set(own_fields) | _IDENTITY_LABELS, key=len, reverse=True))
+    field_re = re.compile(rf"(?:(?:^|(?<=[\s,;]))(?:(?i:({keys}))\s*[:=]|({keys})(?=\s))|\n\s*(\w+)\s*[:=])\s*")
+    marks = list(field_re.finditer(text))
+    identity = text[: marks[0].start()] if marks else text
+    segments = [seg.strip() for seg in re.split(r"\s*;\s*", identity.strip())]
+    identity, more_parts = _bare_value(segments[0]), [seg for seg in segments[1:] if seg]
+    more_flags: list[tuple[str, str]] = []
+    for at, mark in enumerate(marks):
+        end = marks[at + 1].start() if at + 1 < len(marks) else len(text)
+        part = _bare_value(text[mark.end():end].split(";", 1)[0].strip().strip(",;"))
+        key = str(mark.group(1) or mark.group(2) or mark.group(3) or "").upper()
+        if part and key in _ALL_FIELD_KEYS | set(own_fields):
+            more_flags.append((key, part))
+    if not identity and more_flags and more_flags[0][0] not in own_fields:
+        # The identity written under a label the op does not have ('MOVE:
+        # "LOC: The Quay"'): the first such part is the identity.
+        identity = more_flags.pop(0)[1]
+    return identity, more_flags, more_parts
 
 
 # #163 (Hermes 3 8B, live/integ-r3 T1): every op on the list written, the ones
@@ -413,12 +474,13 @@ def _is_placeholder_op(op: str, positionals: list[str], flags: dict[str, str]) -
 def _labelled_parts(value: str, fields: frozenset[str] | set[str]) -> list[tuple[str, str]] | None:
     """A quoted value that opens on one of the op's own field labels, split at
     each of them: "NAME: Beth, ROLE: doctor" -> [(NAME, Beth), (ROLE, doctor)].
-    A label is the field word with a colon (any case), or the word in capitals
-    alone ("NAME Jonah Park"). None when the value does not open on a label."""
+    A label is the field word with a colon or an equals sign (any case), or the
+    word in capitals alone ("NAME Jonah Park"). None when the value does not
+    open on a label."""
     if not fields:
         return None
     words = "|".join(sorted(fields, key=len, reverse=True))
-    label_re = re.compile(rf"(?:^|(?<=[\s,;]))(?:(?i:({words}))\s*:|({words})(?=\s))")
+    label_re = re.compile(rf"(?:^|(?<=[\s,;]))(?:(?i:({words}))\s*[:=]|({words})(?=\s))")
     marks = [m for m in label_re.finditer(value)]
     if not marks or marks[0].start() != len(value) - len(value.lstrip()):
         return None
@@ -508,6 +570,34 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
     def _is_label(tok: str) -> bool:
         return (tok.endswith(":") and tok[:-1].upper() in own_fields) or tok in own_fields
 
+    def _is_field_word(tok: str) -> bool:
+        key, sep, _ = tok.partition("=")
+        return tok.upper() in flag_keys or bool(_BARE_LABEL_RE.fullmatch(tok)) or bool(sep and key.upper() in flag_keys)
+
+    # F196 (sonnet100 T88, T97): 'NPC_NEW: "Cully" ROLE="watchmen"', 'EVENT:
+    # title="The Tide" desc="..."', 'LOC_NEW: name="coast road" ...'. The quotes
+    # are pulled out first, so a KEY="value" pair is two tokens, 'ROLE=' and the
+    # string; ROLE= went into the name ("Cully ROLE="), title= became the
+    # event's title, name= the place's name. The label takes the next token as
+    # its value; a label the op list does not have (title=, QUOTE=) is dropped
+    # and its value is a part; a label with nothing after it is nothing.
+    joined: list[str] = parts[:1]
+    k = 1
+    while k < len(parts):
+        tok = parts[k]
+        bare_label = re.fullmatch(r"([A-Za-z_]+)=", tok)
+        if bare_label:
+            nxt = parts[k + 1] if k + 1 < len(parts) else ""
+            if nxt and not _is_field_word(nxt):
+                joined.append(f"{tok}{nxt}" if bare_label.group(1).upper() in flag_keys else nxt)
+                k += 2
+            else:
+                k += 1
+            continue
+        joined.append(tok)
+        k += 1
+    parts = joined
+
     if own_fields and not force_positional_remaining:
         # #163 (Hermes 3 8B, live/integ-r3 opening): each field label quoted as
         # its own part, 'NPC_NEW: "NAME" "Theo" "ROLE" "drifter" "LOC" "L1"',
@@ -528,7 +618,7 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
         token = parts[i]
         # 'SKILL: name: "perception", DELTA: ...' (#163) filed a skill called
         # "name:": the label of the name these ops open on, written bare.
-        if own_op in _NAME_FIRST_OPS and not positionals and token.lower() == "name:":
+        if own_op in _IDENTITY_FIRST_OPS and not positionals and token.lower() in ("name:", "title:"):
             i += 1
             continue
         # Playtest #28: "NAME: Beth ROLE: doctor", "REASON: starting conflict".
@@ -564,25 +654,21 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
                     flags.setdefault(key_u, _bare_value(text, name_label=key_u == "GIVER"))
                 i += 1
                 continue
-            # LOC_NEW "NAME: The Rusty Bar": the name these ops open on, labelled.
-            if own_op in _NAME_FIRST_OPS and not positionals:
-                named = re.match(r"(?i)\s*name\s*:\s*(\S.*)$", value, re.S)
-                if named:
-                    value = _bare_value(named.group(1))
-                # #163: 'GRANT: "Ripped Doctor Parts; QTY: 2; BAND: small"'
-                # stored all of it as the item's name. The name ends where one
-                # of the op's own labels starts.
-                tail = re.search(
-                    r"\s*[;,]\s*(?=(?i:%s)\s*:)" % "|".join(sorted(own_fields, key=len, reverse=True)), value
-                ) if own_fields else None
-                if tail and tail.start() > 0:
-                    for seg in re.split(r"\s*;\s*", value[tail.end():]):
-                        seg_label = re.match(r"(?i)\s*(\w+)\s*:\s*(\S.*)$", seg)
-                        if seg_label and seg_label.group(1).upper() in own_fields:
-                            flags.setdefault(seg_label.group(1).upper(), seg_label.group(2).strip())
-                    value = value[:tail.start()].strip()
-            elif own_op in _PERSON_FIRST_OPS and not positionals:
-                value = _bare_value(value, name_label=True)
+            # LOC_NEW "NAME: The Rusty Bar": the name these ops open on, labelled;
+            # 'GRANT: "Ripped Doctor Parts; QTY: 2; BAND: small"' (#163), the
+            # name with the op's own labels after it; 'LEAD: "NAME Yosef
+            # Rahman"', a person under the label. One reading (F196).
+            if own_op in _IDENTITY_FIRST_OPS and not positionals:
+                value, more_flags, more_parts = _identity_part(value, own_op, own_fields)
+                for key_u, text in more_flags:
+                    flags.setdefault(key_u, text)
+                if not value:
+                    i += 1
+                    continue
+                positionals.append(value)
+                positionals.extend(more_parts)
+                i += 1
+                continue
             positionals.append(value)
             if force_positional_remaining:
                 force_positional_remaining -= 1
@@ -632,6 +718,23 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
             continue
         positionals.append(_decode_arg_escapes(token))
         i += 1
+    # F196: no value opens on the sign of a KEY = value pair, and a bare field
+    # label left among the parts ("NAME=", "title:") is op form, not a part. The
+    # ops whose first parts are kinds (FOCUS, INDEX) keep their parts as written.
+    if opcode not in _LEADING_POSITIONALS:
+        cleaned: list[str] = []
+        for part in positionals:
+            if _BARE_LABEL_RE.fullmatch(part):
+                continue
+            cleaned.append(part if part == ":" else _PAIR_SIGN_RE.sub("", part))
+        positionals = [p for p in cleaned if p]
+        # The NAME flag on an op that opens on a name ('SKILL: name="perception"
+        # DELTA=success degree="barely"') names the thing; NPC_NEW reads its
+        # own NAME.
+        if own_op in _IDENTITY_FIRST_OPS and own_op != "NPC_NEW" and flags.get("NAME"):
+            positionals.insert(0, flags.pop("NAME"))
+    flags = {key: _PAIR_SIGN_RE.sub("", str(text)) for key, text in flags.items()}
+    flags = {key: text for key, text in flags.items() if text}
     return opcode, positionals, flags
 
 
@@ -888,6 +991,23 @@ def is_slot_token(value: Any) -> bool:
     return bool(text) and bool(_SLOT_TOKEN_RE.fullmatch(text))
 
 
+_LABEL_SHAPE_RE = re.compile(r"(?:^|\s)[A-Za-z_]{2,}\s*[=:]|^\s*[=:]")
+
+
+def _no_value(entry: dict[str, Any], what: str) -> None:
+    """The op's identity (a name, a title) is missing. When the line held a field
+    label or a pair sign where the value goes ('EVENT: title=', 'NPC_NEW:
+    "NAME="'), the model wrote the op form as the value (F196): the drop goes in
+    the ledger. Either way the line is skipped and the turn keeps the rest."""
+    raw = str(entry.get("raw") or "")
+    body = raw.split(" ", 1)[1] if " " in raw else ""
+    if _LABEL_SHAPE_RE.search(body):
+        from app import turn_ledger
+
+        turn_ledger.note("ops", "op_value_is_op_text", op=entry["op"], why="label_for_value", line=raw[:160])
+    raise TurnDslError(f"{entry['op']} requires {what} on line {entry['line']}")
+
+
 def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     """
     Apply one opcode to the turn under construction.
@@ -930,7 +1050,7 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             # "NAME Bo baker LOC L1": the bare words after the name are the job.
             positional["role"] = positional["name"]
         if not name:
-            raise TurnDslError(f"NPC_NEW requires NAME on line {entry['line']}")
+            _no_value(entry, "NAME")
         name = _strip_name_codes(name)
         note = ""
         role_arg = flags.get("ROLE") or positional["role"]
@@ -1032,7 +1152,7 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     elif op == "GRANT":
         name = args[0] if args else flags.get("NAME", "")
         if not name:
-            raise TurnDslError(f"GRANT requires item name on line {entry['line']}")
+            _no_value(entry, "item name")
         qty_token = flags.get("QTY")
         if qty_token in (None, "") and len(args) > 1:
             qty_token = args[1]
@@ -1128,19 +1248,24 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         turn["map_walk"] = {"direction": direction, "steps": steps}
     elif op == "LOC_NEW":
         name = args[0] if args else ""
-        summary = args[1] if len(args) > 1 else f"Discovered location: {name}"
         if not name:
-            raise TurnDslError(f"LOC_NEW requires name on line {entry['line']}")
+            _no_value(entry, "name")
+        # 'LOC_NEW: name="coast road" desc="..."' (F196): the description under
+        # its own label is the description.
+        summary = args[1] if len(args) > 1 else flags.get("DESC") or f"Discovered location: {name}"
         turn["locations"].append({"name": name[:120], "summary": summary[:500]})
     elif op == "EVENT":
-        title = args[0] if args else "Event"
+        title = args[0] if args else ""
+        if not title:
+            # 'EVENT: title=' (F196) used to file an event called "Event".
+            _no_value(entry, "a title")
         turn["events"].append(
             {
                 "code": None,
                 "title": title[:120],
                 "location_code": flags.get("LOC", ""),
                 "npc_code": flags.get("NPC", ""),
-                "summary": flags.get("SUMMARY") or title,
+                "summary": flags.get("SUMMARY") or flags.get("DESC") or title,
                 "status": "active",
                 "persistence": "temporary",
                 "disappear_chance": 70,
@@ -1179,7 +1304,7 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     elif op == "SKILL":
         name = args[0] if args else flags.get("NAME", "")
         if not name:
-            raise TurnDslError(f"SKILL requires name on line {entry['line']}")
+            _no_value(entry, "name")
         delta_token = flags.get("DELTA")
         if delta_token in (None, "") and len(args) > 1:
             delta_token = args[1]
@@ -1238,7 +1363,7 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     elif op == "QUEST":
         title = str(args[0] if args else flags.get("NAME", "")).strip()
         if not title:
-            raise TurnDslError(f"QUEST requires a title on line {entry['line']}")
+            _no_value(entry, "a title")
         step = flags.get("STEP") or (args[1] if len(args) > 1 else "")
         turn.setdefault("quest_marks", []).append(
             {
@@ -1556,7 +1681,33 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
     }
 
     malformed_ops: list[str] = []
+    # F196 (sonnet100 T88): every op on the list written, and the GM note filled
+    # with the QUEST step word for word ("Consider the options carefully before
+    # making a decision."), which then sat in gm_events as a note to nobody. A
+    # GM part that repeats another op's value is a filled slot, not a fact.
+    other_values: dict[str, set[str]] = {}
     for entry in ops:
+        if entry["op"] == "GM":
+            continue
+        for value in list(entry.get("args") or []) + list((entry.get("flags") or {}).values()):
+            key = re.sub(r"\W+", " ", str(value)).strip().lower()
+            if len(key.split()) >= 4:
+                other_values.setdefault(key, set()).add(entry["op"])
+    for entry in ops:
+        if entry["op"] == "GM":
+            repeated = [
+                (re.sub(r"\W+", " ", str(value)).strip().lower(), value) for value in entry.get("args") or []
+            ]
+            repeated = [(key, value) for key, value in repeated if key in other_values]
+            if repeated:
+                from app import turn_ledger
+
+                turn_ledger.note(
+                    "ops", "op_value_is_op_text", op="GM", why="repeats_" + "_".join(sorted(other_values[repeated[0][0]])),
+                    value=str(repeated[0][1])[:160], line=str(entry.get("raw") or "")[:160],
+                )
+                malformed_ops.append(f"GM repeats another op's text on line {entry['line']}")
+                continue
         try:
             _apply_op(turn, entry)
         except TurnDslError as exc:
