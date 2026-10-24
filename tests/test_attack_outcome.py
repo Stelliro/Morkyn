@@ -390,8 +390,10 @@ class TestTheOutcomeFollowsTheRoll(unittest.TestCase):
         event = out["events"][0]
         self.assertEqual((event["kind"], event["status"], event["reason"]), ("died", "refused", "attack roll failure"))
         text = out["narration"]
-        beat = "Beth [[B]] is still alive. You fail. The moment offers nothing useful."
+        # The beat is the fact alone; the check's flavor is engine rule text and never prose (F193).
+        beat = "Beth [[B]] is still alive."
         self.assertEqual(text.count(beat), 1)
+        self.assertNotIn("The moment offers nothing useful", text)
         for gone in ("Her entrails spill out", "The life has been ripped", "wide, dead eyes", "A sickening tear"):
             self.assertNotIn(gone, text)
         # The player's act as narrated is never cut, and the beat stands where the death was.
@@ -442,7 +444,8 @@ class TestTheOutcomeFollowsTheRoll(unittest.TestCase):
     def test_no_sentence_picked_adds_the_beat(self):
         out = I.run(T10, _records(), Prose(dead_sentences=("zzz",)), {"skill_checks": [_roll("failure")]})
         self.assertTrue(self._without_attack_line(out).startswith(T10))
-        self.assertTrue(out["narration"].endswith("Beth [[B]] is still alive. You fail. The moment offers nothing useful."))
+        self.assertTrue(out["narration"].endswith("Beth [[B]] is still alive."))
+        self.assertNotIn("The moment offers nothing useful", out["narration"])
 
     def test_never_below_the_floor(self):
         short = "Beth [[B]] falls dead. Beth [[B]] lies still on the floor."

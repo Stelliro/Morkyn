@@ -1171,6 +1171,15 @@ DEGREE_FLAVOR = {
 }
 
 
+# The engine's own mishap sentences (resolve_check builds them; the gate on
+# engine text in the prose, strip_rule_text, reads the same templates). They are
+# mechanics, shown in the dice chip and the journal, never prose (F193).
+_MISHAP_JOIN = "You are unskilled at wielding {tool} — you end up taking your own {limb} into the mess."
+_UNSKILLED_LABEL = "Unskilled with {tool}: you injure your own {limb}."
+_BOTCHED_HURT_LABEL = "Botched {skill}: you hurt your {limb}."
+_BOTCHED_LABEL = "Botched {skill}: {how}"
+
+
 def _pick_flavor(key: str, rng: random.Random) -> str:
     options = DEGREE_FLAVOR.get(key) or DEGREE_FLAVOR["failure"]
     return options[rng.randrange(len(options))]
@@ -1412,7 +1421,7 @@ def resolve_check(
             blunder = {
                 "kind": "social_blunder",
                 "severity": bool(fumble),
-                "summary": f"Botched {skill.get('name')}: {roller.choice(_BLUNDER_LINES)}",
+                "summary": _BOTCHED_LABEL.format(skill=skill.get("name"), how=roller.choice(_BLUNDER_LINES)),
             }
         else:
             limb = roller.choice(["leg", "arm", "hand", "side", "eye", "ribs"])
@@ -1423,9 +1432,9 @@ def resolve_check(
                 "lasting": lasting,
                 "health_delta": -roller.randint(2, 6) if fumble else -1,
                 "summary": (
-                    f"Unskilled with {tool or skill.get('name')}: you injure your own {limb}."
+                    _UNSKILLED_LABEL.format(tool=tool or skill.get("name"), limb=limb)
                     if tool or skill.get("category") == "combat"
-                    else f"Botched {skill.get('name')}: you hurt your {limb}."
+                    else _BOTCHED_HURT_LABEL.format(skill=skill.get("name"), limb=limb)
                 ),
                 "combat_penalty": {
                     "mobility": -2 if limb in {"leg"} else 0,
@@ -1440,8 +1449,7 @@ def resolve_check(
     flavor = _pick_flavor(degree if cfg.get("degree_flavor") else outcome, roller)
     if mishap and injury:
         flavor = (
-            f"{flavor} You are unskilled at wielding {tool or 'this'} — "
-            f"you end up taking your own {injury['limb']} into the mess. "
+            f"{flavor} {_MISHAP_JOIN.format(tool=tool or 'this', limb=injury['limb'])} "
             f"{injury['summary']}"
         )
     elif mishap and blunder:
@@ -2460,6 +2468,116 @@ def act_outcome(checks: Any) -> dict[str, Any] | None:
             out["blunder"] = str(blunder["summary"])[:160]
         return out
     return None
+
+
+# ---------------------------------------------------------------------------
+# The gate on engine text in the prose (CLAUDE.md: the one gate this allows)
+# ---------------------------------------------------------------------------
+
+
+def _template_re(template: str) -> re.Pattern[str]:
+    """One of the engine's own sentence templates as a whole-sentence pattern: each {slot} is a short wildcard."""
+    pattern = re.escape(template)
+    for slot, wild in (("tool", r"[^:.]{1,60}?"), ("skill", r"[^:.]{1,60}?"), ("limb", r"[a-z]+"), ("how", r".{3,160}")):
+        pattern = pattern.replace(re.escape("{" + slot + "}"), wild)
+    pattern = pattern.replace("—", "[-—–]")
+    return re.compile(rf"\s*{pattern}\s*", re.I)
+
+
+# The engine's labels and its mishap join, read from the templates resolve_check
+# builds them with (not phrasings collected from runs).
+_ENGINE_TEMPLATES = tuple(
+    _template_re(t) for t in (_MISHAP_JOIN, _UNSKILLED_LABEL, _BOTCHED_HURT_LABEL, _BOTCHED_LABEL)
+)
+# "weapon/tool" is the one engine word that no prose writes: a sentence carrying
+# it is a copy of DEGREE_FLAVOR (a marker, called that; the only literal here).
+_ENGINE_MARKER = "weapon/tool"
+
+
+def _rule_key(text: str) -> str:
+    value = re.sub(r"\s*\[\[[^\]]*\]\]", "", str(text or "")).lower()
+    value = value.replace("—", "-").replace("–", "-").replace("’", "'")
+    value = re.sub(r"[^a-z0-9' -]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _sentences(text: str) -> list[str]:
+    return [p for p in re.split(r"(?<=[.!?])\s+", str(text or "")) if p.strip()]
+
+
+def engine_check_sentences(checks: Any = None) -> set[str]:
+    """Every sentence of the engine's own check text, normalised: the flavor pools and this turn's check strings."""
+    out: set[str] = set()
+    for lines in DEGREE_FLAVOR.values():
+        for line in lines:
+            out.add(_rule_key(line))
+            out.update(_rule_key(p) for p in _sentences(line))
+    for check in checks if isinstance(checks, list) else []:
+        if not isinstance(check, dict):
+            continue
+        for field in ("injury", "injury_unshown", "blunder"):
+            record = check.get(field)
+            if isinstance(record, dict) and record.get("summary"):
+                out.add(_rule_key(record["summary"]))
+        for field in ("flavor", "guidance"):
+            out.update(_rule_key(p) for p in _sentences(check.get(field)))
+    # Too short to be the engine's own ("You fail.") is left to the prose.
+    return {k for k in out if len(k) >= 12}
+
+
+def is_rule_text(sentence: str, engine: set[str]) -> bool:
+    """Whether a sentence of the prose is one of the engine's check sentences, built from its templates, or holds one whole."""
+    key = _rule_key(sentence)
+    if not key:
+        return False
+    if key in engine or any(e in key for e in engine if len(e) >= 24):
+        return True
+    raw = " ".join(re.sub(r"\s*\[\[[^\]]*\]\]", "", str(sentence or "")).replace("’", "'").split())
+    if _ENGINE_MARKER in raw.lower():
+        return True
+    return any(t.fullmatch(raw) for t in _ENGINE_TEMPLATES)
+
+
+def strip_rule_text(narration: str, checks: Any = None) -> tuple[str, list[str]]:
+    """The prose with the engine's own check sentences taken out, and the sentences taken.
+
+    sonnet100 T42 (F193): the narration ended "Peregrine [[H]] is still alive.
+    Without training, the weapon/tool does as much harm to you as to the
+    world. You are unskilled at wielding this — you end up taking your own
+    hand into the mess. Unskilled with Melee: you injure your own hand."
+    Mechanics never reach the player as rule sentences: the hurt is the
+    engine's attack line (app/attack_line.py) and the dice chip. Only whole
+    sentences go; the rest of the reply stays; when nothing would be left the
+    prose is kept as it is. The caller notes each sentence in the ledger.
+    """
+    from app.interpreter import units
+
+    text = str(narration or "")
+    if not text.strip():
+        return text, []
+    engine = engine_check_sentences(checks)
+    every = [u for u in units(text) if u[2].strip()]
+    picked = [u for u in every if is_rule_text(u[2], engine)]
+    # A two-sentence flavor line pasted whole ("You fail. The moment offers
+    # nothing useful.") is one engine line split in two: both go.
+    for first, second in zip(every, every[1:]):
+        if _rule_key(f"{first[2]} {second[2]}") in engine:
+            picked.extend(u for u in (first, second) if u not in picked)
+    if not picked:
+        return text, []
+    picked.sort()
+    out = text
+    for start, end, _piece in sorted(picked, reverse=True):
+        head = out[:start].rstrip(" \t")
+        tail = out[end:].lstrip(" \t")
+        if head and not head.endswith("\n") and tail and not tail.startswith("\n"):
+            out = f"{head} {tail}"
+        else:
+            out = head + tail
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    if not out:
+        return text, []
+    return out, [" ".join(p.split()) for _s, _e, p in picked]
 
 
 # Any sign of a hurt in the prose: pain, a slip, blood, or the limb itself.

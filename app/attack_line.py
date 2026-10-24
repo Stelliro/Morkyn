@@ -209,6 +209,38 @@ _POOLS: dict[str, list[str]] = {
 }
 _BAND_LANDS = {"critical_success": HIT, "success": HIT, "partial": GRAZE, "failure": MISS, "critical_failure": MISS}
 
+# The unskilled mishap's own hurt, as a clause of the attack line (F193). {W}
+# is the weapon word, {L} the limb the check rolled. None of these words is an
+# outcome word (_OUTCOMES), so the line still reads as its own band when the
+# engine reads the scene again; none is a rule sentence (skill_checks.DEGREE_FLAVOR
+# and the injury summary stay engine data: ledger, dice audit, UI chip).
+_MISHAP_POOLS: dict[str, list[str]] = {
+    "melee": ["the {W} turns in your grip and bites your own {L}.", "the {W} comes back on your own {L}."],
+    "ranged": ["the {W} kicks back into your own {L}.", "the {W} bucks and jars your own {L}."],
+    "": ["your own {L} takes the hurt.", "you jar your own {L}."],
+}
+
+
+def self_injury_of(check: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The check's applied self-injury (an unskilled mishap that hurt the player), or None."""
+    injury = (check or {}).get("injury") if isinstance(check, dict) else None
+    if not isinstance(injury, dict) or injury.get("kind") != "self_injury" or not str(injury.get("limb") or "").strip():
+        return None
+    return injury
+
+
+def mishap_clause(check: dict[str, Any] | None, weapon: str = "", pick: random.Random | None = None) -> str:
+    """The clause the attack line carries for an applied self-injury: "the knife bites your own hand." ("" when none)."""
+    injury = self_injury_of(check)
+    if injury is None:
+        return ""
+    skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+    code = str(skill.get("code") or check.get("skill_code") or "")
+    word = _weapon_word(weapon)
+    pool = _MISHAP_POOLS[code if word and code in _MISHAP_POOLS else ""]
+    rng = pick or random.Random(f"mishap|{code}|{word}|{injury.get('limb')}|{check.get('natural')}")
+    return rng.choice(pool).format(W=word, L=str(injury.get("limb")).strip())
+
 
 def _weapon_word(weapon: str) -> str:
     text = re.sub(r"\s*\[\[[^\]]*\]\]", "", str(weapon or "")).strip(" .,;:")
@@ -232,7 +264,11 @@ def line_for(check: dict[str, Any] | None, label: str, weapon: str = "") -> str:
 
     The draw is seeded by the roll and the target, so the same roll reads the
     same on a replay and different rolls read differently. "" when it is no
-    rolled attack or there is no label.
+    rolled attack or there is no label. An unskilled mishap that hurt the
+    player (the check's applied self-injury) is the line's second clause:
+    "Your fist goes wide of Peregrine [[H]]; your own hand takes the hurt."
+    (F193: the penalty reaches the player through this line and the dice
+    chip, never as the engine's rule sentences.)
     """
     if not isinstance(check, dict) or check.get("natural") is None:
         return ""
@@ -244,7 +280,9 @@ def line_for(check: dict[str, Any] | None, label: str, weapon: str = "") -> str:
     code = str(skill.get("code") or check.get("skill_code") or "")
     pick = random.Random(f"{label}|{band}|{check.get('natural')}|{check.get('total')}|{code}")
     sent = pick.choice(senders(code, weapon))
-    return pick.choice(_POOLS[band]).format(N=sent, T=label)
+    line = pick.choice(_POOLS[band]).format(N=sent, T=label)
+    hurt = mishap_clause(check, weapon, pick)
+    return f"{line[:-1]}; {hurt}" if hurt else line
 
 
 def lands_of(check: dict[str, Any] | None) -> str:
