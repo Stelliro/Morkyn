@@ -55,8 +55,9 @@ someone the player attacked this turn unless an attack roll on them succeeded
 (app/attack_intent.py marks which roll attacked whom). The refused person
 stays alive, and reconcile_refused_death puts the prose back in line: the
 sentences that show the death (asked one at a time) give way to the engine's
-outcome beat ("Beth [[B]] is hurt, but still alive." and the check's own
-outcome line), with the same floor and the same never-cut rules as the hold.
+outcome beat ("Beth [[B]] is hurt, but still alive."; the attack's own result
+line is show_attacks's, app/attack_line.py, never the check's rule text), with
+the same floor and the same never-cut rules as the hold.
 
 Gold (#41, read_gold): whether money leaves or reaches the player, asked over
 the whole scene, each a positive question about one thing, and one check that
@@ -1013,14 +1014,20 @@ def ask_shows_death(name: str, paragraph: str, sentence: str) -> str:
 
 
 def outcome_beat(row: dict[str, Any], check: dict[str, Any] | None) -> str:
-    """The engine's line for a death the roll refused: the person lives, then the check's own outcome line."""
+    """The engine's line for a death the roll refused: the person lives.
+
+    Only that. The check's "flavor" is the engine's rule text (skill_checks.
+    DEGREE_FLAVOR and the injury summary: "Without training, the weapon/tool
+    does as much harm to you as to the world ... Unskilled with Melee: you
+    injure your own hand.") and it ended the prose of sonnet100 T42 (F193).
+    The attack's own result, hurt included, is the engine's attack line
+    (show_attacks, app/attack_line.py), which follows this beat.
+    """
     name = _opening(called(row, prose=True))
     code = str(row.get("code") or "").strip()
     label = f"{name} [[{code}]]" if name and code else (name or f"[[{code}]]")
     check = check if isinstance(check, dict) else {}
-    first = f"{label} is hurt, but still alive." if check.get("outcome") == "partial" else f"{label} is still alive."
-    flavor = " ".join(str(check.get("flavor") or "").split())
-    return f"{first} {flavor}".strip()
+    return f"{label} is hurt, but still alive." if check.get("outcome") == "partial" else f"{label} is still alive."
 
 
 def _append_beat(text: str, beat: str) -> str:

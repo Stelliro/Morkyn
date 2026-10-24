@@ -21714,6 +21714,31 @@ def drop_unshown_check_injuries(checks: list[Any], narration: str) -> list[Any]:
     return out
 
 
+def strip_rule_text_from_result(result: dict[str, Any]) -> list[str]:
+    """The engine's own check sentences taken out of the turn's prose, each noted in the ledger (F193).
+
+    sonnet100 T42: the narration ended with skill_checks' DEGREE_FLAVOR and
+    injury summary ("Without training, the weapon/tool does as much harm to
+    you as to the world ... Unskilled with Melee: you injure your own hand.").
+    The one gate this class allows (CLAUDE.md: engine text in the prose): whole
+    sentences that are the engine's check text (or built from its label
+    templates) go; the rest of
+    the reply stays. The strings themselves stay engine data (ledger, dice
+    audit, UI chip). Returns the sentences taken.
+    """
+    from app.skill_checks import strip_rule_text
+
+    text = _narration_text(result)
+    if not text.strip():
+        return []
+    cleaned, taken = strip_rule_text(text, result.get("skill_checks"))
+    if not taken:
+        return []
+    _set_narration_text(result, cleaned)
+    turn_ledger.note("check", "rule_text_stripped", sentences=[s[:200] for s in taken][:6], count=len(taken))
+    return taken
+
+
 _PACKET_KEY_ONLY_RE = re.compile(r"[a-z]+(?:_[a-z]+)+")
 
 
@@ -25211,6 +25236,12 @@ def apply_turn(
         except Exception:
             pass
 
+        # The engine's own check sentences never reach the player as prose (F193):
+        # before the summary and the interpreter read the scene.
+        try:
+            strip_rule_text_from_result(result)
+        except Exception as exc:
+            turn_ledger.note("check", "rule_text_gate_failed", error=f"{type(exc).__name__}: {exc}"[:200])
         narration = _narration_text(result)
         # Last-line defense: expand [[codes]] / fill blank subjects using live cast names
         try:
