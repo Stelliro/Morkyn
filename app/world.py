@@ -2417,7 +2417,7 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
     unnamed2 T3/T4 Carlos). A noun the engine knows nothing about ("the
     bastard") leaves the candidate as it was.
     """
-    from app.attack_intent import kind_figures, line_may_target
+    from app.attack_intent import kind_figures, line_may_target, shown_kinds
 
     local = _local_npcs_from_state(state)
     figures = kind_figures(player_input, local)
@@ -2426,8 +2426,15 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
     candidates = _combat_target_candidates(state, player_input, refs)
     if not candidates:
         return None
+    shown = shown_kinds(state.get("last_narration"), player_input, people=local)
     if refs.get("npcs"):
-        return candidates[0]
+        # A code the line names is the target when the blow is at them: "I shout at @E to get
+        # back, then stab at the dire wolf's neck" names E where it warns her (base100 T27).
+        if line_may_target(player_input, candidates[0], people=local, places=state.get("locations") or [], shown=shown):
+            return candidates[0]
+        turn_ledger.note("check", "combat_target_not_the_lines", code=str(candidates[0].get("code") or ""),
+                         name=str(candidates[0].get("name") or ""), line=str(player_input or "")[:200])
+        return None
     target = None
     query = _tokens(player_input)
     scored = [(_score_text(query, npc.get("code"), npc.get("name"), npc.get("summary"), npc.get("role")), npc) for npc in candidates]
@@ -2441,7 +2448,8 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
     if target is None:
         hostile = [npc for npc in candidates if str(npc.get("attitude") or "").lower() in {"hostile", "aggressive", "violent"}]
         target = hostile[0] if len(hostile) == 1 else None
-    if target is not None and not line_may_target(player_input, target, people=local, places=state.get("locations") or []):
+    if target is not None and not line_may_target(player_input, target, people=local, places=state.get("locations") or [],
+                                                  shown=shown):
         turn_ledger.note("check", "combat_target_not_the_lines", code=str(target.get("code") or ""),
                          name=str(target.get("name") or ""), line=str(player_input or "")[:200])
         return None
@@ -9619,6 +9627,12 @@ def ground_acquisitions(
             continue
         head = _held_head(name)
         if head and head in held_heads:
+            continue
+        # Eaten or drunk where the player stands is in no pack: "You take a glistening herring from
+        # the pile and pop it into your mouth" for "take the herring and eat it" put the fish in the
+        # pack (base100 T17), the same rule as the GRANT op's (_filter_inventory_changes).
+        if own and _consumed_in_line(own, re.findall(r"[a-z][a-z'’-]*", name)):
+            turn_ledger.note("inventory", "not_a_thing", item=name, why="ordered and eaten or drunk", by="prose")
             continue
         if names_held and not (head and head in own_words):
             # The player handled something they hold; the prose renamed it.
@@ -17174,6 +17188,13 @@ def _grant_shown_takes(
                 tokens = _item_name_tokens(phrase)
                 if not (takes_any or _sentence_mentions_item(line_l, phrase, tokens)):
                     continue
+                # Eaten or drunk where the player stands is in no pack, whatever name the prose gives
+                # it: "You take a glistening herring from the pile and pop it into your mouth" for
+                # "take the herring and eat it" (base100 T17); the GRANT op's own rule
+                # (_filter_inventory_changes), applied to the take the prose shows.
+                if _consumed_in_line(str(player_input or ""), tokens):
+                    turn_ledger.note("inventory", "not_a_thing", item=phrase, why="ordered and eaten or drunk", by="prose")
+                    continue
                 if covered(phrase, tokens, [c for c in changes + added if int(_float((c or {}).get("quantity_delta"), 0)) > 0]):
                     continue
                 if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "gain"]):
@@ -17266,6 +17287,9 @@ def _grant_shown_takes(
         for phrase, qty in _line_take_objects(line):
             tokens = _item_name_tokens(phrase)
             if any(word in _NOT_A_TAKEN_THING for word in phrase.split()):
+                continue
+            if _consumed_in_line(str(player_input or ""), tokens):
+                turn_ledger.note("inventory", "not_a_thing", item=phrase, why="ordered and eaten or drunk", by="prose")
                 continue
             # Named in this prose: the pass above already decided (kept, put back or refused).
             if _sentence_mentions_item(plain.lower(), phrase, tokens):
@@ -18004,8 +18028,10 @@ def _filter_inventory_changes(
         # Ordered and eaten or drunk at the table is consumed, not carried:
         # GRANT "ale" and "fish" for "I order the fish and a mug of ale, pay
         # Eldric for them" put both in the pack (8B run 148, T45).
+        consumed = False
         if grounded and _consumed_in_line(str(player_input or ""), tokens):
             grounded = False
+            consumed = True
             turn_ledger.note("inventory", "not_a_thing", item=name, why="ordered and eaten or drunk")
         handed = _prose_item_handed_over(final_text, name_l, tokens, owned=bool(existing))
         # The player's own thing under a shorter name is that thing (7B run 10,
@@ -18090,9 +18116,12 @@ def _filter_inventory_changes(
         if grounded:
             change = _one_of_a_named_thing(change, name_l, own_l, final_text)
             kept.append(_strip_unearned_dimensional(change))
-        elif same_as_owned or shown_for_sale:
-            # Nothing refused: the prose shows the player's own thing, or goods
-            # held out for sale, and stays as written (no trim).
+        elif same_as_owned or shown_for_sale or consumed:
+            # Nothing refused: the prose shows the player's own thing, goods
+            # held out for sale, or a thing the player's line ate or drank (the
+            # pack holds nothing and the prose is right: base100 T17 "take the
+            # herring and eat it" lost its sentence as a refused gain), and
+            # stays as written (no trim).
             continue
         else:
             if rejected is not None:
@@ -20157,6 +20186,14 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
             continue
         if any(start <= match.start() < start + len(h) for start, h, _n in found):
             continue  # "Guard says" is already a titled speaker
+        # A plural noun with its plural verb is a kind, not a name (grammar: agreement):
+        # "Seagulls call overhead" filed a person row D for the birds, and the fish-seller
+        # was bound to it (base100 T14, T18). A name takes the singular verb ("Mara calls").
+        from app import unnamed
+
+        verb = match.group(0).split()[-1].lower()
+        if unnamed.is_plural(word) and not verb.endswith("s"):
+            continue
         found.append((match.start(), match.group(0).strip(), ""))
     found.sort()
     # A vague shape the prose then says what it is ("a figure approaching ...
@@ -25795,16 +25832,28 @@ def apply_turn(
                 turn_ledger.note("interpreter", "combat_profiles_here_failed", error=f"{type(exc).__name__}: {exc}"[:200])
         if isinstance(pending, dict):
             try:
+                from app import unnamed
                 from app.interpreter import load_records
                 from app.llm import _model_timeout, _run_interpreter
 
+                records = load_records(conn)
+                # The creatures the last turn's prose, the player's line and this prose show
+                # attacking: a blow the line aims at one of them is at no bystander
+                # (attack_intent.line_may_target).
+                records["shown_kinds"] = sorted(unnamed.shown_kinds(
+                    str((prompt_context or {}).get("last_narration") or "") if isinstance(prompt_context, dict) else "",
+                    player_input if input_kind == "player" else "",
+                    narration,
+                    names=[w for p in records.get("people") or [] if isinstance(p, dict)
+                           for w in re.findall(r"[a-z]+", str(p.get("name") or "").lower())],
+                ))
                 result = _run_interpreter(
                     result,
                     player_input if input_kind == "player" else "",
                     usage=result.setdefault("_model_usage", []),
                     trace=result.setdefault("_model_trace", []),
                     timeout=_model_timeout(45, 120, "AI_RPG_INTERPRETER_TIMEOUT"),
-                    records=load_records(conn),
+                    records=records,
                     config=pending.get("config") or None,
                 )
                 narration = _narration_text(result)
@@ -27016,7 +27065,19 @@ def _attack_check_for_line(
     if not _attack_ask_enabled():
         return None
     chosen = ask or attack_intent.ASK_OVERRIDE[0] or _model_attack_ask(usage, trace)
-    check, report = attack_intent.decide(model_input, context, inferred, chosen)
+    # With a model (or a scripted ask) to answer the figure asks, a creature the last
+    # turn's prose shows is minted for the blow; a stub turn has none and mints nothing.
+    from app import entity_kinds
+
+    minter = _attack_creature_minter(context, trace, usage, attack_intent.player_line(model_input)) if (
+        chosen is not None or entity_kinds._ASK_OVERRIDE[0]) else None
+    check, report = attack_intent.decide(model_input, context, inferred, chosen, minter=minter)
+    if report.get("unknown_noun"):
+        # The blow names a creature the prose showed and the engine has no row for (base100
+        # T23): minted and aimed at when the asks agree, else the roll stands with no target.
+        turn_ledger.note("check", "attack_target_unknown_noun", noun=report.get("unknown_noun"),
+                         minted=bool(report.get("from") == "minted"), target=report.get("target"),
+                         not_the_lines=report.get("not_the_lines"))
     if report.get("asks") or report.get("target") or report.get("error"):
         turn_ledger.note(
             "check",
@@ -27030,6 +27091,41 @@ def _attack_check_for_line(
             seconds=report.get("seconds"),
         )
     return check
+
+
+def _attack_creature_minter(context: dict[str, Any], trace: list[dict[str, Any]], usage: list[dict[str, Any]],
+                            line: str = "") -> Any:
+    """The engine's hand for attack_intent.decide: file the creature the last turn's prose shows (unnamed.mint_shown).
+
+    Runs before the draft, like _ensure_combat_profiles_for_input: the row is
+    in the save when the roll is made, so the blow has a target, the hit lands
+    on it and the engine's line names it ("the dire wolf [[F]]"). The new row
+    gets its combat profile with the others here.
+    """
+    from app import unnamed
+    from app.entity_kinds import _call
+
+    def minter(kind: str) -> dict[str, Any] | None:
+        try:
+            here = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+            with connect().closing() as conn:
+                location_id = int(here.get("id") or 0)
+                if not location_id:
+                    row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+                    location_id = int(row["current_location_id"] or 0) if row else 0
+                shell = unnamed.mint_shown(conn, str(context.get("last_narration") or ""), kind, location_id,
+                                           call=_call, trace=trace, usage=usage, line=line)
+                if shell:
+                    _ensure_combat_profiles_here(conn)
+                    fresh = conn.execute("SELECT * FROM npcs WHERE id = ?", (int(shell["id"]),)).fetchone()
+                    if fresh is not None:
+                        shell = {key: fresh[key] for key in fresh.keys()}
+            return shell
+        except Exception as exc:
+            turn_ledger.note("check", "attack_creature_mint_failed", kind=kind, error=f"{type(exc).__name__}: {exc}"[:200])
+            return None
+
+    return minter
 
 
 def _rate_persuasion_asks(

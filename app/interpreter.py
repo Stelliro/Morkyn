@@ -1123,6 +1123,8 @@ def attacked_row(
 
     line = str((records or {}).get("player_line") or "")
     here = int((records or {}).get("here_id") or 0)
+    # The creatures the prose shows acting (world.apply_turn: the last turn's and this one's).
+    shown = {str(k) for k in (records or {}).get("shown_kinds") or () if str(k or "").strip()}
     living = [
         r for r in match.people
         if str(r.get("code") or "").strip() and not is_dead(r)
@@ -1137,7 +1139,7 @@ def attacked_row(
         if is_dead(row):
             _note("attack_target_dead", code=code, name=str(row.get("name") or ""))
             return None
-        if not line.strip() or line_may_target(line, row, people=living, places=match.places):
+        if not line.strip() or line_may_target(line, row, people=living, places=match.places, shown=shown):
             return row
         figures = kind_figures(line, living)
         if figures:
@@ -1161,7 +1163,7 @@ def attacked_row(
         return None
     opposition = check.get("opposition") if isinstance(check.get("opposition"), dict) else {}
     opposed = [r for r in living if _key(r) and _key(r) == _key({"name": clean_name(opposition.get("name"))})]
-    if len(opposed) == 1 and line_may_target(line, opposed[0], people=living, places=match.places):
+    if len(opposed) == 1 and line_may_target(line, opposed[0], people=living, places=match.places, shown=shown):
         return opposed[0]
     figures = kind_figures(line, living)
     return figures[0] if figures else None

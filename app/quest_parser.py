@@ -107,6 +107,10 @@ _JOB_RE = re.compile(
 # answered with an offer on T10, and nothing read it).
 _ASKS_WORK_RE = re.compile(
     r"\b(?:any|some|a|the|honest|paying|more) (?:work|jobs?|tasks?|errands?|employment)\b|"
+    # A contract asked for, in the asking shape ("a contract I could run", "any contracts going",
+    # base100 T11); the noun alone ("I tear up the contract", "I read the contract") asks for nothing.
+    r"\b(?:a|an|any|some) contracts?(?: (?:that|which))?(?: (?:i|we) (?:could|can|might|may|should)\b|"
+    r" (?:going|open|available|on offer)\b)|"
     # Asked of the other person: "do you need a hand", "you wanted an extra set
     # of hands" (T11). "I need a hand finding the inn" is not asking for work.
     r"\b(?:you|ya)\s+(?:\w+\s+)?(?:need|needs|want|wanted|use) (?:a |an |an extra |another |some |any )?"

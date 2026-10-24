@@ -869,14 +869,28 @@ class MoreAndReferredBack(unittest.TestCase):
         _play("One more ghoul drops from the roof onto you.", "i fight", _Asker())
         self.assertEqual(_names(), ["Ghoul 1", "Ghoul 2", "Ghoul 3", "Ghoul 4"])
 
-    def test_a_deathclaw_referred_back_to_mints_nothing_without_an_op(self):
+    def test_a_deathclaw_referred_back_to_is_minted_only_when_the_save_holds_none(self):
+        # base100 T22 reversed the old rule ("The dire wolf lunges" was the first wolf of the game and
+        # nothing was filed): a "the <kind>" acting on the player with no living one anywhere in the
+        # save introduces it; with one alive elsewhere it refers back (it may be following), as before.
         asker = _Asker(figures=("deathclaw",), hostile=("deathclaw",))
         _play("The deathclaw charges you, roaring.", "i brace", asker)
-        self.assertEqual(_names(), [])
+        self.assertEqual(_names(), ["Deathclaw 1"])
+        self.assertEqual(len(asker.asked("figure_kind")), 1)
+        from app import db
+
+        with db.connect().closing() as conn:
+            conn.execute("INSERT INTO locations (code, name) VALUES ('L99', 'The Ruins West')")
+            elsewhere = int(conn.execute("SELECT id FROM locations WHERE code = 'L99'").fetchone()[0])
+            conn.execute("UPDATE npcs SET location_id = ? WHERE kind = 'Deathclaw'", (elsewhere,))
+            conn.commit()
+        asker = _Asker(figures=("deathclaw",), hostile=("deathclaw",))
+        _play("The deathclaw charges you, roaring.", "i brace", asker)
+        self.assertEqual(_names(), ["Deathclaw 1"])
         self.assertEqual(asker.asked("figure_kind"), [])
         _play("The deathclaw charges you, roaring.", "i brace", asker,
               ops='SUMMARY: "A deathclaw charges."\nNPC_NEW NAME "Deathclaw" ROLE "monster" ATTITUDE hostile')
-        self.assertEqual(_names(), ["Deathclaw 1"])
+        self.assertEqual(_names(), ["Deathclaw 1", "Deathclaw 2"])
 
 
 # Live run unnamed2 T1 on Hermes 3 8B (turns/001.json), verbatim: the ghouls are what the player sees.

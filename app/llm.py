@@ -15863,12 +15863,153 @@ def _rebuild_segments(turn: dict[str, Any], text: str) -> None:
         turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in paragraphs] or [{"label": "paragraph", "text": text}]
 
 
+def player_verbs(own: str) -> set[str]:
+    """The stems of the acts the player's own line does now: "I hand her the coin, take the herring and eat it" -> hand, take, eat.
+
+    Read by grammar (app/act_clauses.acts_now, the engine's one reading of
+    which clauses are done now): speech, a plan or a promise ("I'll pay her
+    tomorrow"), a case, a report ("tell him I'll ..."), a question and a
+    denial ("I don't take the coin") are not acts now. Each act opens on its
+    verb (after "I", "I'll", "try to", "then" and any adverb), as
+    app/unnamed.player_objects reads the line. A verb of speech
+    (narration_pipeline._INDIRECT_SPEECH_RE, the set the engine reads whose
+    words are whose by: say, tell, ask, greet, reply ...) is talk, not an act:
+    the player's words are theirs word for word, so a sentence that puts
+    words in the player's mouth is never the act they asked for. Names,
+    objects and the rest of the clause are not verbs: "the wolf" in the line
+    makes no sentence about the wolf the player's act.
+    """
+    from app.act_clauses import acts_now
+    from app.narration_pipeline import _INDIRECT_SPEECH_RE, content_stems
+
+    flat = re.sub(r"[@#!&]\w+|\[\[[^\]]*\]\]", " ", acts_now(str(own or "")))
+    out: set[str] = set()
+    for clause in re.split(r"[,;:.!?]|\b(?:and|then)\b", flat, flags=re.I):
+        words = re.findall(r"[A-Za-z][\w'’-]*", clause)
+        while words and (words[0].lower() in {"i", "i'll", "i’ll", "we", "try", "to", "then", "quickly", "now"}
+                         or re.fullmatch(r"[a-z]+ly", words[0].lower())):
+            words.pop(0)
+        if not words:
+            continue
+        verb = words[0]
+        if verb[:1].isupper() or verb.lower() in {"the", "a", "an", "my", "it", "for", "at", "with", "if", "as"}:
+            continue
+        if _INDIRECT_SPEECH_RE.fullmatch(verb):
+            continue
+        out |= content_stems(verb)
+    return out
+
+
+def _you_clauses(outside: str) -> list[str]:
+    """The clauses of a sentence (quotes out) whose subject is the player: "as you eat", "You take a herring"."""
+    found: list[str] = []
+    for clause in re.split(r"[,;:]|\b(?:and|then|but|as|while|when|before|after|until)\b", str(outside or ""), flags=re.I):
+        words = re.findall(r"[A-Za-z][\w'’]*", clause)
+        while words and re.fullmatch(r"[a-z]+ly", words[0].lower()):
+            words.pop(0)
+        if words and words[0].lower() in {"you", "you'll", "you’ll", "you've", "you’ve"}:
+            found.append(clause)
+    return found
+
+
+def _you_verbs(clauses: list[str]) -> set[str]:
+    """The stems of what the player does in these player clauses: the clause's own verb ("You take a herring" ->
+    take; "You decide to head back" -> decide, not head)."""
+    from app.narration_pipeline import content_stems
+
+    out: set[str] = set()
+    for clause in clauses:
+        words = re.findall(r"[A-Za-z][\w'’]*", clause)
+        while words and (re.fullmatch(r"[a-z]+ly", words[0].lower())
+                         or words[0].lower() in {"you", "you'll", "you’ll", "you've", "you’ve"}):
+            words.pop(0)
+        while words and re.fullmatch(r"[a-z]+ly", words[0].lower()):
+            words.pop(0)
+        if words:
+            out |= content_stems(words[0])
+    return out
+
+
+def asked_act_cut(text: str, cut: int, player_input: str) -> tuple[int, str]:
+    """A scene cut moved past the sentences that perform the act the player's own line asked for.
+
+    CLAUDE.md: the player's own words and choices are theirs. The gate cuts
+    the prose where it answers for the player; base100 T17 cut "She pockets
+    the coin ... You take a glistening herring from the pile and pop it into
+    your mouth" (the player had typed "I hand her the coin, take the herring
+    and eat it") as the reply to an invented "you ask.", and T24 cut "you
+    slash at the wolf" after an invented decision. A sentence whose player
+    clause has one of the line's own verbs (player_verbs) as its verb performs
+    the act, when the kept part has not performed that verb already ("You
+    climb out of the hold" at the start, then "You climb aboard" after the
+    arrival, is a second act, 7B run 25; "You decide to head back" after "I
+    head out" is a decision, not the heading): the cut moves past the last
+    such sentence, keeping what stands between (the other party's half of the
+    act), and ends before the first later sentence where the player acts
+    without the line asking it. Two sentences are never the asked act: the
+    one the cut was decided on (the gate's own evidence: "Left or right? You
+    walk right" is a choice made for the player, whatever the line's verb),
+    and one whose player clause is speech, a quotation or a speech tag
+    (narration_pipeline._YOU_SAID_RE: '"I'm Will Tanaka," you say', "You tell
+    him you want to stay on"), since the player's words are theirs word for
+    word and only a physical act can be the one the line asked for. Returns
+    the cut and the last protected sentence ("" when nothing moved).
+    """
+    body = str(text or "")
+    if cut <= 0 or cut >= len(body):
+        return cut, ""
+    verbs = player_verbs(player_line_of(player_input))
+    if not verbs or str(player_input or "").startswith("__"):
+        return cut, ""
+    from app.narration_pipeline import _YOU_SAID_RE
+    from app.prose_state import sentence_spans
+
+    head = _SCENE_QUOTE_RE.sub(" ", body[:cut])
+    verbs -= _you_verbs([c for _s, _e, sentence in sentence_spans(head) for c in _you_clauses(sentence)])
+    if not verbs:
+        return cut, ""
+    tail = body[cut:]
+    last_sentence, in_act, stop = "", False, len(tail)
+    for index, (start, _end, sentence) in enumerate(sentence_spans(tail)):
+        if index == 0:
+            continue  # the sentence the cut was decided on: the gate's judgment stands
+        outside = _SCENE_QUOTE_RE.sub(" ", sentence)
+        clauses = _you_clauses(outside)
+        # The player's words are theirs word for word: a quotation or a speech tag is never the asked act.
+        speech = outside != sentence or bool(_YOU_SAID_RE.search(outside))
+        performs = bool(clauses) and not speech and bool(_you_verbs(clauses) & verbs)
+        if performs:
+            in_act, last_sentence = True, sentence.strip()
+        elif in_act and clauses:
+            # The player acting again, past the asked act: the scene ends before it. What came
+            # between (the world's answer to the act: "Your blade bites deep", "The wolf howls") stays.
+            stop = start
+            break
+    if not in_act:
+        return cut, ""
+    return cut + stop, last_sentence
+
+
+def _note_asked_act(decision: str, kept: str, cut_was: int, cut: int) -> None:
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("player_words", "asked_act_kept", family=decision, sentence=kept[:200],
+                         moved_chars=int(cut - cut_was))
+    except Exception:
+        pass
+
+
 def _end_scene_at(
     turn: dict[str, Any], cut: int, player_input: str, family: str, decision: str, phase: str,
     trace: list[dict[str, Any]] | None, **detail: Any,
 ) -> dict[str, Any]:
     """End the narration at ``cut``; the ops only the cut part held go with it (as the #75 cut)."""
     text = str(turn.get("narration") or "")
+    cut_was = cut
+    cut, kept = asked_act_cut(text, cut, player_input)
+    if kept:
+        _note_asked_act(decision, kept, cut_was, cut)
     head = text[:cut].rstrip()
     tail = text[cut:].strip()
     if not head or not tail:
@@ -16552,7 +16693,7 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
     from app.prose_state import player_trade_offer, stated_coin_amounts
 
     own = str(player_input or "")
-    asked_move = asked_take = asked_pay = False
+    asked_move = asked_take = asked_pay = asked_work = False
     if own:
         try:
             from app.world import _player_line, travel_intent
@@ -16564,6 +16705,14 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
             asked_move = False
         asked_take = player_take_intent(own)
         asked_pay = player_trade_offer(own) is not None
+        try:
+            from app.quest_parser import player_asks_for_work
+
+            # A job the player's line asked for is theirs (base100 T11: the QUEST op "Watch the
+            # North Docks" went with the tail that answered the invented "What kind of trouble?").
+            asked_work = player_asks_for_work(own)
+        except Exception:
+            asked_work = False
 
     # The cut part, kept for the engine: who a figure in the kept part was is
     # sometimes said only there (7B run 34, T2: 'A voice from the shore calls
@@ -16603,6 +16752,15 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
             if isinstance(row, dict) and row.get("op") != "QUEST_DONE":
                 text = " ".join(str(row.get(f) or "") for f in fields)
                 if text.strip() and tail_bound(text):
+                    if label == "QUEST" and asked_work:
+                        try:
+                            from app import turn_ledger
+
+                            turn_ledger.note("player_words", "asked_quest_kept", quest=text.strip()[:100])
+                        except Exception:
+                            pass
+                        kept_rows.append(row)
+                        continue
                     dropped.append(f"{label} {text.strip()[:100]}")
                     continue
             kept_rows.append(row)
@@ -16723,6 +16881,11 @@ def _cut_scene_at_invented_request(
     point = _scene_cut_point(text, player_input, earlier=earlier)
     if not point:
         return turn
+    # The act the player's own line asked for stays, whatever answered it.
+    moved, kept = asked_act_cut(text, point["cut"], player_input)
+    if kept:
+        _note_asked_act("scene_ended_on_line_to_player", kept, point["cut"], moved)
+        point["cut"] = moved
     # The player's own line asked to go somewhere: the prose has to show the
     # going. Cutting back to an earlier line kept the MOVE and lost the journey
     # (Saltmarrow run, T95: a whole crossing cut to Una's farewell, #111).
@@ -17129,6 +17292,10 @@ def _cut_scene_after_completed_act(turn: dict[str, Any], player_input: str, *, f
     point = _completion_cut_point(text, player_input)
     if not point:
         return turn
+    moved, kept = asked_act_cut(text, point["cut"], player_input)
+    if kept:
+        _note_asked_act("scene_ended_after_requested_act", kept, point["cut"], moved)
+        point["cut"] = moved
     head = text[: point["cut"]].rstrip()
     tail = text[point["cut"]:].strip()
     if not tail or len(head) < floor:
