@@ -291,12 +291,38 @@ def object_nouns(line: str) -> list[str]:
     gives ["ghoul", "raider"]; "at the sound, maybe ghouls" gives ["sound"]:
     the bare "ghouls" opens no phrase.
     """
+    return [p["head"] for p in noun_phrases(line)]
+
+
+# Where a phrase's description after its head ends: a clause, an infinitive, a condition (grammar).
+_DESCRIPTION_END = frozenset({"and", "then", "but", "or", "to", "so", "if", "while", "when", "because", "until",
+                              "before", "after", "as", "unless"})
+# What opens a description after the head: "the man in tattered robes", "the man with the scar"; a
+# possessive after it is the player's own thing ("with my knife"), never the target's look.
+_DESCRIPTION_OPENERS = frozenset({"in", "with", "by", "near", "at", "from", "on", "wearing", "under", "beside"})
+_OWN_THINGS = frozenset({"my", "our", "your", "mine"})
+_DESCRIPTION_MAX = 6
+_NOT_DESCRIPTION = frozenset({
+    "him", "her", "his", "hers", "them", "their", "its", "it", "me", "you", "us", "same", "other", "again",
+})
+
+
+def noun_phrases(line: str) -> list[dict[str, Any]]:
+    """The line's noun phrases as object_nouns reads them, each with what describes it.
+
+    {"head": singular noun, "description": the content words before the head
+    and in the phrase after it ("the robed man in the office doorway" ->
+    {"robed", "office", "doorway"}; "the black shape stirring in the Eel Pool"
+    -> {"black", "stirring", "eel", "pool"}; the parts of an "eel-thing"),
+    "start": token index}. Superlatives ("the nearest man") say where, not
+    who, and are no description.
+    """
     from app.interpreter import plain
     from app.unnamed import singular
 
     text = plain(line).lower()
     tokens = re.findall(r"[a-z0-9][a-z0-9'’-]*|[^\sa-z0-9]", text)
-    out: list[str] = []
+    out: list[dict[str, Any]] = []
     i = 0
     while i < len(tokens):
         if not _is_determiner(tokens[i]):
@@ -318,8 +344,39 @@ def object_nouns(line: str) -> list[str]:
         if words:
             noun = re.sub(r"['’]s?$", "", words[-1])
             if noun:
-                out.append(singular(noun))
+                head = singular(noun)
+                # An "eel-thing" is described by its own first part.
+                described = [*words[:-1], *noun.split("-")[:-1], *_described_after(tokens, j)]
+                out.append({"head": head, "start": i, "description": _content_words(described)})
         i = max(j, i + 1)
+    return out
+
+
+def _described_after(tokens: list[str], j: int) -> list[str]:
+    """The words after a head that describe it: a participle or a description opener and what follows, to the clause's end."""
+    if j >= len(tokens) or not re.fullmatch(r"[a-z][a-z'’-]*", tokens[j]):
+        return []
+    if not (_participle(tokens[j]) or tokens[j] in _DESCRIPTION_OPENERS):
+        return []
+    out: list[str] = []
+    for tok in tokens[j: j + _DESCRIPTION_MAX]:
+        if not re.fullmatch(r"[a-z][a-z'’-]*", tok) or tok in _DESCRIPTION_END or tok in _OWN_THINGS:
+            break
+        out.append(tok)
+    return out
+
+
+def _content_words(words: list[str]) -> set[str]:
+    """The words of a description that say what a thing looks like: no grammar word, determiner or superlative."""
+    from app.unnamed import singular
+
+    out: set[str] = set()
+    for word in words:
+        w = re.sub(r"['’]s?$", "", str(word or "").lower())
+        if (len(w) < 3 or w in _PHRASE_END or w in _NOT_DESCRIPTION or _is_determiner(w) or w in _DESCRIPTION_OPENERS
+                or (w.endswith("est") and len(w) > 5)):
+            continue
+        out.add(singular(w))
     return out
 
 
@@ -423,11 +480,18 @@ def _kind_of(person: dict[str, Any]) -> str:
 
 
 def _kinds_of(person: dict[str, Any]) -> set[str]:
-    """The kind column as the line may name it: its head and the whole ("wolf", "dire wolf")."""
-    from app.unnamed import singular
+    """The kind column as the line may name it: its head and the whole ("wolf", "dire wolf").
+
+    A creature row of any kind is also "the creature", "the animal", "the
+    beast" (unnamed.VAGUE_CREATURES): Creature 1 is "the snarling animal".
+    """
+    from app.unnamed import VAGUE_CREATURES, _person_kind, singular
 
     kind = str(person.get("kind") or "").strip().lower()
-    return {_kind_of(person), singular(kind) if kind else ""} - {""}
+    out = {_kind_of(person), singular(kind) if kind else ""} - {""}
+    if out and not _person_kind(kind):
+        out |= VAGUE_CREATURES
+    return out
 
 
 def shown_kinds(*texts: Any, people: list[dict[str, Any]] | None = None) -> set[str]:
@@ -504,6 +568,217 @@ def line_antecedents(line: str) -> set[str]:
     plural_words = {singular(w) for w in re.findall(r"[a-z]+", before.lower()) if is_plural(w)}
     out |= set(object_nouns(before)) & plural_words
     return out - {""}
+
+
+# ---------------------------------------------------------------------------
+# A body that is no one present (F192: sonnet100 T74, T93-T94)
+# ---------------------------------------------------------------------------
+#
+# Filing a creature needs it shown closing on someone (unnamed.shown_kinds:
+# it keeps the fog and the weather out). Clearing a person present of a blow
+# needs less: that the thing the blow names is a body, and no word for them.
+# "stab at the eel-thing" with Delphine the herb gatherer here (T74: the eel
+# was only shown diving), "the man in tattered robes ... ready to stab him"
+# and "the robed man in the office doorway ... stab at him" with Elric the
+# reeve's deputy here (T93-T94) all hit the one person present: the noun was
+# one the engine knew nothing about, and 4833150 gives such a noun to the
+# person. A hit on a person present is the worse error, so a body the line
+# describes, or a creature the prose or the line shows, is evidence that the
+# blow is not at them when nothing the engine has for them (their name, job,
+# kind, record, the prose's sentences naming them) is in it. A bare "the
+# bastard", "the thing", "the man" is still no evidence (4833150).
+
+_SINGULAR_PRONOUN_RE = re.compile(r"\b(?:him|her|his|hers)\b", re.I)
+_CODE_RE = re.compile(r"(?:@|\[\[)([A-Z]{1,3})\b")
+
+
+def generic_body(noun: str) -> str:
+    """"person" for a word that says only that it is someone ("man", "figure", "stranger"), "creature" for one that
+    says only that it is a creature ("creature", "animal", "thing", an "eel-thing"), else ""."""
+    from app.unnamed import VAGUE_CREATURES, _vague_words
+
+    low = str(noun or "").lower()
+    last = low.rsplit("-", 1)[-1]
+    if low in VAGUE_CREATURES or low == "thing" or ("-" in low and (last in VAGUE_CREATURES or last == "thing")):
+        return "creature"
+    if low in _vague_words():
+        return "person"
+    return ""
+
+
+def _words_for(person: dict[str, Any]) -> set[str]:
+    """The thing-nouns that are a word for this person: their kind, their job and its family, their name's words."""
+    from app.unnamed import singular
+
+    return (_kinds_of(person) | _role_words(person)[1] | _role_family(person)
+            | {singular(w.lower()) for w in name_words(person)}) - {""}
+
+
+def _record_words(person: dict[str, Any], prose: str) -> set[str]:
+    """Every word the engine has about this person: the row's own fields and the prose's sentences that name them.
+
+    What they say is not what they are: quoted speech is left out ("'The Eel
+    Pool,' Delphine says" does not make her an eel, T74).
+    """
+    from app.unnamed import singular
+
+    fields = ("name", "role", "summary", "description", "appearance", "personality", "kind", "race", "notes")
+    text = " ".join(str(person.get(k) or "") for k in fields)
+    unquoted = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", str(prose or ""))
+    for sentence in re.split(r"(?<=[.!?])\s+", unquoted):
+        if sentence and line_names_person(sentence, person):
+            text += " " + sentence
+    return {singular(w) for w in re.findall(r"[a-z]+", text.lower()) if len(w) >= 3}
+
+
+def _creature_shown(*texts: Any) -> bool:
+    """A body these texts show as only "a creature" doing something or seen ("The creature growls", "the creature dove")."""
+    from app.unnamed import mentions
+
+    for text in texts:
+        if not str(text or "").strip():
+            continue
+        try:
+            found = mentions(str(text))
+        except Exception:
+            continue
+        if any((m["subject"] or m["seen"]) and generic_body(m["kind"]) == "creature" for m in found):
+            return True
+    return False
+
+
+def _sex_of_word(noun: str) -> str:
+    """"male" for "man", "fellow"; "female" for "woman", "crone"; "" for "figure", "stranger" (world._hint_sex)."""
+    try:
+        from app.world import _hint_sex
+
+        return _hint_sex(f"a {noun}", "")
+    except Exception:
+        return ""
+
+
+def _sex_conflict(person: dict[str, Any], noun: str) -> bool:
+    """The row's own sex says the word is not them: "the man" for a woman on record."""
+    sex = str(person.get("sex") or "").strip().lower()
+    word = _sex_of_word(noun)
+    return bool(sex in {"male", "female"} and word and sex != word)
+
+
+def bodies_not(person: dict[str, Any], line: str, prose: str = "",
+               people: list[dict[str, Any]] | None = None) -> set[str]:
+    """The thing-nouns of the line that are a body and no word for this person: positive evidence the blow is not at them.
+
+    A body is a word that says only that it is someone or a creature
+    (generic_body: "man", "shape", "creature", "eel-thing") and is no word
+    for this person (_words_for: a creature row is "the creature").
+
+    A creature word is not a person when the line says anything of it ("the
+    eel-thing", T74; "the snarling creature", T48), or the last turn's prose
+    or the line shows a creature doing something.
+
+    A word for someone ("the man in tattered robes", T93; "the robed man in
+    the office doorway", T94) is not this person when the line names them
+    elsewhere ("this time ignoring Elric": they are not called "the man"),
+    when their row's sex is not the word's, or when it is ambiguous: another
+    living person here fits it as well (CLAUDE.md, rosters: an ambiguous
+    match resolves to nothing). A description in the line that is in some
+    rows' records (_record_words) fits those rows only.
+
+    None for "the bastard", a bare "the thing" with no creature shown, or
+    "the old man" with one person here (4833150).
+    """
+    if not isinstance(person, dict):
+        return set()
+    own = _words_for(person)
+    code = str(person.get("code") or "").strip().upper()
+    others = [o for o in people or [] if isinstance(o, dict) and str(o.get("code") or "").strip().upper() != code
+              and not _is_dead_row(o)]
+    records: dict[int, set[str]] = {}
+
+    def record(row: dict[str, Any]) -> set[str]:
+        key = id(row)
+        if key not in records:
+            records[key] = _record_words(row, prose)
+        return records[key]
+
+    shown: bool | None = None
+    out: set[str] = set()
+    for phrase in noun_phrases(line):
+        head = phrase["head"]
+        generic = generic_body(head)
+        if not generic or head in own:
+            continue
+        described = phrase["description"]
+        if generic == "creature":
+            if described:
+                out.add(head)
+                continue
+            if shown is None:
+                shown = _creature_shown(prose, line)
+            if shown:
+                out.add(head)
+            continue
+        # A word for someone.
+        if line_names_person(line, person) or _sex_conflict(person, head):
+            out.add(head)
+            continue
+        if any(head in _words_for(other) for other in others):
+            out.add(head)
+            continue
+        fit_others = [other for other in others if not _sex_conflict(other, head)]
+        if described:
+            matched = [row for row in [person, *fit_others] if described & record(row)]
+            if matched:
+                if person not in matched:
+                    out.add(head)
+                continue
+        if fit_others:
+            out.add(head)
+    return out
+
+
+def _is_dead_row(row: dict[str, Any]) -> bool:
+    try:
+        from app.interpreter import is_dead
+
+        return bool(is_dead(row))
+    except Exception:
+        return False
+
+
+def pronoun_reads(line: str, person: dict[str, Any], people: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Each him / her / his / hers in the line and whether it may be this person.
+
+    A pronoun is the line's own antecedent when the line gave it one: "shout
+    at the man in tattered robes to let go of @R, ready to stab him" (T93)
+    has "him" for the man (or Edmund), never for Elric. It may be this person
+    when the line names them or a word for them before it, or names no one
+    and no body before it (cc87dd29 T5: "i snap her neck"). Each: {"at":
+    offset in the plain line, "may": bool, "antecedents": the body nouns
+    before it that are not them}.
+    """
+    from app.interpreter import plain
+
+    text = plain(line)
+    own = _words_for(person) if isinstance(person, dict) else set()
+    code = str((person or {}).get("code") or "").strip().upper()
+    out: list[dict[str, Any]] = []
+    for hit in _SINGULAR_PRONOUN_RE.finditer(text):
+        before = text[: hit.start()]
+        heads = [p["head"] for p in noun_phrases(before)]
+        if line_names_person(before, person) or any(h in own for h in heads):
+            out.append({"at": hit.start(), "may": True, "antecedents": set()})
+            continue
+        others = {h for h in heads if generic_body(h)}
+        for other in people or []:
+            if not isinstance(other, dict) or str(other.get("code") or "").strip().upper() == code:
+                continue
+            others |= {h for h in heads if h in _words_for(other)}
+        named_other = any(c.upper() != code for c in _CODE_RE.findall(before)) or any(
+            isinstance(o, dict) and str(o.get("code") or "").strip().upper() != code and line_names_person(before, o)
+            for o in people or [])
+        out.append({"at": hit.start(), "may": not (others or named_other), "antecedents": others})
+    return out
 
 
 def _role_words(person: dict[str, Any]) -> tuple[str, set[str]]:
@@ -584,12 +859,35 @@ def unknown_creature(line: str, people: list[dict[str, Any]] | None, shown: set[
     return ""
 
 
+def unknown_body(line: str, people: list[dict[str, Any]] | None, prose: str = "") -> str:
+    """The body the line's blow names that is no one here (bodies_not for each person present): "eel-thing", or "".
+
+    sonnet100 T74 "stab at the eel-thing", T93-T94 "the man in tattered
+    robes ... stab him": the blow is at something the engine has no row for,
+    and no person present takes it. The blow's own clauses first, then the
+    line, then a him / her's antecedent there.
+    """
+    text = str(line or "")
+    here = [p for p in people or [] if isinstance(p, dict)]
+    if not text.strip() or not here:
+        return ""
+    focus = " ".join(attack_clauses(text)) or text
+    antecedents: list[str] = []
+    for read in pronoun_reads(text, here[0], here):
+        antecedents += sorted(read["antecedents"])
+    for noun in [*object_nouns(focus), *object_nouns(text), *antecedents]:
+        if all(noun in bodies_not(p, text, prose, here) for p in here):
+            return noun
+    return ""
+
+
 def line_may_target(
     line: str,
     person: dict[str, Any],
     people: list[dict[str, Any]] | None = None,
     places: list[dict[str, Any]] | None = None,
     shown: set[str] | None = None,
+    prose: str = "",
 ) -> bool:
     """Whether the player's line can mean this person as the one attacked.
 
@@ -614,6 +912,12 @@ def line_may_target(
     the man). Anything else, a person pronoun, no thing at all, or a noun
     the engine knows nothing about ("the bastard", "the creep", "the doc",
     "the merc"), leaves them a possible target, as the trigger tables aimed it.
+
+    Also no on a body the blow names that is no word for them (bodies_not,
+    over the line and ``prose``, the last turn's: "the eel-thing", "the man
+    in tattered robes", "the creature" after "The creature growls"; F192),
+    and a him / her the line gave its own antecedent ("the man ... stab him")
+    is that antecedent, not them (pronoun_reads).
     """
     text = str(line or "")
     if not text.strip() or not isinstance(person, dict):
@@ -635,21 +939,33 @@ def line_may_target(
         elsewhere |= _kinds_of(other)
         elsewhere |= _role_words(other)[1]
     elsewhere.discard("")
-    evidence = (elsewhere | creature_evidence(shown, [person, *(people or [])])) - own
+    evidence = (elsewhere | creature_evidence(shown, [person, *(people or [])]) | bodies_not(person, text, prose, people)) - own
     scenery = _place_heads(places)
     antecedents = line_antecedents(text)
-    focus = " ".join(attack_clauses(text))
+    clauses = attack_clauses(text)
+    focus = " ".join(clauses)
+    # him / her / his / hers: whether each may be this person, and the bodies the line gave them.
+    from app.interpreter import plain
+
+    reads = pronoun_reads(text, person, people)
+    plain_text = plain(text)
+    spans = [(plain_text.find(c), plain_text.find(c) + len(c)) for c in clauses if plain_text.find(c) >= 0]
+    in_focus = [r for r in reads if any(a <= r["at"] < b for a, b in spans)]
+    them_re = r"\b(?:them|their|theirs)\b"
     if focus:
         # The blow is one act of several. Named or meant by a pronoun only in another act ("I ignore
         # Orabel and ...", "I shout at @E to get back, then stab at ..."), while the blow itself is at
         # a thing the engine knows is not them: not whom it is at. A thing it knows nothing about
         # ("I turn to Orabel and stab the bastard", "I push past Mira and stab the doc") decides
         # nothing, as in one act.
-        in_blow = line_names_person(focus, person) or _PERSON_PRONOUN_RE.search(focus)
-        aside = line_names_person(text, person) or _PERSON_PRONOUN_RE.search(text)
+        in_blow = line_names_person(focus, person) or re.search(them_re, focus, re.I) or any(
+            r["may"] for r in in_focus)
+        aside = line_names_person(text, person) or re.search(them_re, text, re.I) or any(r["may"] for r in reads)
         blow_nouns = set(object_nouns(focus))
         if re.search(r"\b(?:them|they|their|theirs)\b", focus, re.I):
             blow_nouns |= antecedents
+        for r in in_focus:
+            blow_nouns |= r["antecedents"]
         blow_nouns -= own
         if aside and not in_blow and blow_nouns and (
             blow_nouns & evidence or all(n in scenery or _is_fixture(n) for n in blow_nouns)
@@ -658,6 +974,8 @@ def line_may_target(
     if line_names_person(text, person):
         return True
     nouns = set(object_nouns(text)) | antecedents
+    for r in reads:
+        nouns |= r["antecedents"]
     if not nouns:
         return True
     if nouns & own or (" " in phrase and re.search(rf"\b{re.escape(phrase)}s?\b", text, re.I)):
@@ -665,9 +983,9 @@ def line_may_target(
     # A person pronoun means someone here, whatever else the line goes on to name ("i snap her neck
     # and burn the clinic", cc87dd29 T5); "it" / "its" is a creature's or a thing's and decides
     # nothing, and a "them" the line's own earlier plural answers for is that plural ("Marsh rats
-    # come at me out of the reeds; I kick and slash at them", base100 T60).
-    pronouns = {m.group(0).lower() for m in _PERSON_PRONOUN_RE.finditer(text)}
-    if pronouns - ({"them", "their", "theirs"} if antecedents else set()):
+    # come at me out of the reeds; I kick and slash at them", base100 T60). A him / her the line
+    # gave its own body ("the man in tattered robes ... ready to stab him", T93) is that body.
+    if (re.search(them_re, text, re.I) and not antecedents) or any(r["may"] for r in reads):
         return True
     if nouns & evidence:
         return False
@@ -713,13 +1031,14 @@ def decide(
         ctx = context if isinstance(context, dict) else {}
         # The creatures shown attacking: by the last turn's prose, or by the player's own line.
         shown = shown_kinds(ctx.get("last_narration"), line, people=people)
+        prose = str(ctx.get("last_narration") or "")
         if inferred and inferred.get("skill_code") in ATTACK_SKILLS:
             ref = inferred.get("npc_ref") if isinstance(inferred.get("npc_ref"), dict) else {}
             if ref.get("code"):
                 person = next(
                     (p for p in people if str(p.get("code") or "").upper() == str(ref.get("code")).upper()), None
                 ) or {**ref, "name": _clean(ref.get("name"))}
-                if line_may_target(line, person, people=people, places=_places_here(context), shown=shown):
+                if line_may_target(line, person, people=people, places=_places_here(context), shown=shown, prose=prose):
                     inferred["attack"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
                     report["target"] = inferred["attack"]
                     report["from"] = "trigger"
@@ -736,7 +1055,9 @@ def decide(
                     report["skill"] = check["skill_code"]
                     report["from"] = "kind"
                     return check, report
-                noun = unknown_creature(line, people, shown)
+                # A creature shown attacking, else a body the line or the prose shows that is no one here
+                # (F192: "the eel-thing", "the man in tattered robes"); minted only when shown attacking.
+                noun = unknown_creature(line, people, shown) or unknown_body(line, people, prose)
                 if noun:
                     report["unknown_noun"] = noun
                     minted = minter(noun) if minter is not None else None
@@ -755,9 +1076,15 @@ def decide(
         # The people the line can mean, the figures of the kind it names first.
         figures = kind_figures(line, people)
         places = _places_here(context)
-        people = [*figures, *[p for p in people if line_may_target(line, p, people=people, places=places, shown=shown)
-                              and p not in figures]]
+        here = people
+        people = [*figures, *[p for p in people if line_may_target(line, p, people=here, places=places, shown=shown,
+                                                                   prose=prose) and p not in figures]]
         report["people"] = [p.get("code") for p in people]
+        if here and not people:
+            # Everyone present is cleared of the blow: say what it named (attack_target_unknown_noun).
+            noun = unknown_creature(line, here, shown) or unknown_body(line, here, prose)
+            if noun:
+                report["unknown_noun"] = noun
         target = find_target(line, people, ask, report)
         if target is None:
             return None, report
