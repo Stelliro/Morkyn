@@ -26143,7 +26143,14 @@ def apply_turn(
                 except Exception as exc:
                     engine_row["error"] = f"{type(exc).__name__}: {exc}"[:200]
             engine_quest_rows.append(engine_row)
-        if (quest_changes or quest_marks) and _play_system_enabled(conn, "quests_enabled", True):
+        try:
+            from app.quest_parser import done_word_said as _done_word_said
+
+            # Someone saying a job is done is read even with no proposal (F195).
+            quest_said_done = _done_word_said(_narration_text(result) or narration)
+        except Exception:
+            quest_said_done = False
+        if (quest_changes or quest_marks or quest_said_done) and _play_system_enabled(conn, "quests_enabled", True):
             try:
                 from app.quest_parser import apply_quest_changes, merge_marks
 
@@ -26172,9 +26179,17 @@ def apply_turn(
                     str(n.get("name") or "") for n in (result.get("npcs") or [])
                     if isinstance(n, dict) and n.get("_bound_hint")
                 ]
+                # Where the player got to this turn: a trip's job that names
+                # another place is not finished by the walk (F195, sonnet100 T79).
+                moved_to = ""
+                here_now = whereabouts.here_id(conn)
+                if here_now and here_now != here_at_start:
+                    row = conn.execute("SELECT name FROM locations WHERE id = ?", (here_now,)).fetchone()
+                    moved_to = str((row["name"] if row else "") or "")
                 quest_report = apply_quest_changes(
                     conn, changes, narration=_narration_text(result) or narration, player_input=player_input, turn=turn,
                     settled_ids=settled_quest_ids, passive=quest_passive, shown_unnamed=shown_unnamed,
+                    moved_to=moved_to,
                 )
             except Exception as exc:
                 quest_report = {"status": "error", "error": str(exc)[:300], "created": [], "updated": [], "rejected": []}

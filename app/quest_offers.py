@@ -54,6 +54,8 @@ from app import quest_parser as qp
 FILL_PHASE = "quest_fill"
 CHECK_PHASE = "quest_check"
 PROGRESS_PHASE = "quest_progress_check"
+DEED_PHASE = "quest_deed"
+DEED_MAX_TOKENS = 40
 FILL_MAX_TOKENS = 260
 CHECK_MAX_TOKENS = 90
 CANDIDATE_CAP = 3
@@ -362,6 +364,8 @@ _PROGRESS_SYSTEM = (
     "You check whether a passage of story shows a piece of work finished, for a game engine. "
     "Answer yes or no from the passage alone. Return JSON only, one object."
 )
+# F195: the work a not-finished job got this turn, as a few words. One question.
+_DEED_SYSTEM = "You name work done in a passage of story, for a game engine. Return JSON only, one object."
 
 # No yes/no in the fill: whether the line offers the work is the check's
 # "offered" question, asked against the passage. The fill's own offers_work
@@ -911,7 +915,9 @@ def find_progress_candidates(
             continue
         for sentence in qp._SENTENCE_SPLIT.split(text):
             flat = re.sub(r"\s+", " ", sentence).strip()
-            if not flat or flat.endswith("?"):
+            # A question inside its closing quote is still one: 'Who wants
+            # what, and what it pays?"' was logged as work (sonnet100 T22).
+            if not flat or flat.rstrip("\"'”’ ").endswith("?"):
                 continue
             if any(q[:40] in flat.lower() for q in own_quotes):
                 continue
@@ -985,6 +991,51 @@ def build_progress_prompt(candidate: dict[str, Any], narration: str, player_inpu
     return _PROGRESS_SYSTEM, json.dumps(payload, ensure_ascii=True)
 
 
+def build_deed_prompt(candidate: dict[str, Any], narration: str, player_input: str = "") -> tuple[str, str]:
+    import json
+
+    payload = {
+        "passage": _paragraph_of(narration, candidate["sentence"])[:900],
+        "player_did": qp._player_own_line(str(player_input or ""))[:300],
+        "job": candidate["title"],
+        "question": "What work on this job did the player do here? A few words starting with the verb, or none.",
+        "return": {"work": "a few words, or none"},
+    }
+    return _DEED_SYSTEM, json.dumps(payload, ensure_ascii=True)
+
+
+def ask_deed(
+    candidate: dict[str, Any], narration: str, player_input: str = "", *, ask: Ask | None = None
+) -> tuple[str, str, str]:
+    """The work a not-finished job got, as a task phrase: (phrase, refusal, raw answer).
+
+    The engine found the sentence (find_progress_candidates); one small ask
+    names the work in a few words; the engine keeps the phrase only when it is
+    one (quest_parser.task_phrase_problem: no question, not the player's voice,
+    no sentence about the scene, words the text holds). sonnet100: the found
+    sentence itself was the step ("He looks at you, his eyes glinting in the
+    candlelight.", T37).
+    """
+    if ask is None:
+        return "", "no_ask", ""
+    system, user = build_deed_prompt(candidate, narration, player_input)
+    try:
+        raw = ask(system, user, max_tokens=DEED_MAX_TOKENS, phase=DEED_PHASE)
+    except Exception as exc:
+        return "", f"ask_failed:{exc.__class__.__name__}", ""
+    data = raw if isinstance(raw, dict) else None
+    if data is None:
+        try:
+            data = qp._loads_loose(str(raw or ""))
+        except Exception:
+            data = None
+    answer = str((data or {}).get("work") or "").strip() if isinstance(data, dict) else ""
+    problem = qp.task_phrase_problem(answer, narration, player_input, quest=candidate.get("quest"))
+    if problem:
+        return "", problem, answer[:200]
+    return qp.task_phrase(answer), "", answer[:200]
+
+
 def run_progress_pass(
     narration: str,
     player_input: str = "",
@@ -995,8 +1046,10 @@ def run_progress_pass(
     """Find, check. Returns {"updates": [{"quest", "action": "step_done", "evidence"}], "worked", "candidates", "checks"}.
 
     ``worked``: work on a job the prose shows and the check found not yet
-    finished, as {"quest", "evidence"}; the engine writes it into a from-play
-    job's steps (quest_parser.log_worked). No extra ask.
+    finished, as {"quest", "evidence", "deed"}; the engine writes the deed (a
+    task phrase from ask_deed, one small ask) into a from-play job's steps
+    (quest_parser.log_worked). A deed refused as no task phrase is noted and
+    nothing is written: the job keeps its open task (F195).
     """
     candidates = find_progress_candidates(narration, player_input, active=active)
     report: dict[str, Any] = {
@@ -1026,9 +1079,19 @@ def run_progress_pass(
         quest = candidate["quest"]
         if not finished:
             if isinstance(data, dict):
+                deed, problem, answer = ask_deed(candidate, narration, player_input, ask=ask)
+                report["checks"][-1]["deed"] = deed or ""
+                if problem:
+                    from app import turn_ledger
+
+                    report["checks"][-1]["deed_refused"] = problem
+                    turn_ledger.note("quest", "deed_not_a_task_phrase", title=candidate["title"], why=problem,
+                                     answer=answer, sentence=candidate["sentence"][:200])
+                    continue
                 report["worked"].append({
                     "quest": str(quest.get("code") or (f"Q{quest['id']}" if quest.get("id") else candidate["title"])),
                     "evidence": candidate["sentence"][:300],
+                    "deed": deed,
                 })
             continue
         report["updates"].append(

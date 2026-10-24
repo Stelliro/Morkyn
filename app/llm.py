@@ -18357,7 +18357,9 @@ def _run_quest_parser(
             parsed = {"new": offers["new"], "updates": [*typed, *progress["updates"]], "worked": progress.get("worked") or []}
             record["offers"] = {k: offers.get(k) for k in ("candidates", "dropped", "fills", "checks")}
             record["progress"] = {k: progress.get(k) for k in ("candidates", "checks", "worked")}
-            record["asks"] = len(offers["fills"]) + len(offers["checks"]) + len(progress["checks"])
+            record["asks"] = len(offers["fills"]) + len(offers["checks"]) + len(progress["checks"]) + sum(
+                1 for c in progress["checks"] if isinstance(c, dict) and "deed" in c
+            )
             record["event"] = "checked" if (offers["candidates"] or progress["candidates"]) else "no_candidates"
             # QUEST marks were read as hints above; only the narrator's
             # QUEST_DONE / QUEST_UPDATE marks still merge, and validate_quest_changes
