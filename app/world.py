@@ -2427,10 +2427,12 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
     if not candidates:
         return None
     shown = shown_kinds(state.get("last_narration"), player_input, people=local)
+    prose = str(state.get("last_narration") or "")
     if refs.get("npcs"):
         # A code the line names is the target when the blow is at them: "I shout at @E to get
         # back, then stab at the dire wolf's neck" names E where it warns her (base100 T27).
-        if line_may_target(player_input, candidates[0], people=local, places=state.get("locations") or [], shown=shown):
+        if line_may_target(player_input, candidates[0], people=local, places=state.get("locations") or [], shown=shown,
+                           prose=prose):
             return candidates[0]
         turn_ledger.note("check", "combat_target_not_the_lines", code=str(candidates[0].get("code") or ""),
                          name=str(candidates[0].get("name") or ""), line=str(player_input or "")[:200])
@@ -2449,7 +2451,7 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
         hostile = [npc for npc in candidates if str(npc.get("attitude") or "").lower() in {"hostile", "aggressive", "violent"}]
         target = hostile[0] if len(hostile) == 1 else None
     if target is not None and not line_may_target(player_input, target, people=local, places=state.get("locations") or [],
-                                                  shown=shown):
+                                                  shown=shown, prose=prose):
         turn_ledger.note("check", "combat_target_not_the_lines", code=str(target.get("code") or ""),
                          name=str(target.get("name") or ""), line=str(player_input or "")[:200])
         return None
@@ -25847,6 +25849,9 @@ def apply_turn(
                     names=[w for p in records.get("people") or [] if isinstance(p, dict)
                            for w in re.findall(r"[a-z]+", str(p.get("name") or "").lower())],
                 ))
+                # The last turn's prose, for the bodies it shows (attack_intent.bodies_not, F192).
+                records["prose_before"] = (str((prompt_context or {}).get("last_narration") or "")
+                                           if isinstance(prompt_context, dict) else "")
                 result = _run_interpreter(
                     result,
                     player_input if input_kind == "player" else "",

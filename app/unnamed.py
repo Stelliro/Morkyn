@@ -163,6 +163,13 @@ _CLOSED = frozenset({
     "upon", "within", "outside", "until", "because", "though", "although", "since", "once",
 })
 _BE_HAVE = frozenset({"is", "was", "are", "were", "has", "have", "had"})
+# The words for a body that say only that it is a creature, the way world._VAGUE_FIGURES say only
+# that it is someone (sonnet100 T47: "A single dark form ... It is a dog or a wolf ... The creature
+# growls ... circles you ... The animal bares its fangs"). In one text they are one body, so every
+# mention of them is kind CREATURE_KIND: one row, "Creature 1", never a Creature 1 and an Animal 1.
+# A creature row of any kind here is "the creature" (_here; attack_intent._kinds_of).
+VAGUE_CREATURES = frozenset({"creature", "animal", "beast"})
+CREATURE_KIND = "creature"
 # The mention forms that can file a new figure (a "the" refers back to one met).
 _MINTING_FORMS = frozenset({"count", "another", "more", "ordinal"})
 # Irregular English plurals (morphology, not meaning).
@@ -461,6 +468,8 @@ def mentions(text: str, objects: Any = (), names: Any = ()) -> list[dict[str, An
                 i = end
                 continue
             found["sentence"] = sentence
+            if found["kind"] in VAGUE_CREATURES:
+                found["kind"] = CREATURE_KIND
             found["subject"] = bool(subject)
             found["seen"] = bool(seen and not subject)
             # The player's own act on it, or the player seeing it, has the player in it.
@@ -799,15 +808,24 @@ def _head_at(toks: list[str], i: int, j: int, form: str, count: int, ordinal: in
 
 
 def _verb_phrase(toks: list[str], verb_at: int) -> str:
-    """The verb the phrase is the subject of and the words after it in its clause, lower: "lunges at you"."""
+    """The verb the phrase is the subject of and the words after it in its clause, lower: "lunges at you".
+
+    The whole chain of its verbs to the clause's end: "The creature growls low
+    in its throat and circles you warily" (sonnet100 T47) is the creature
+    circling the player; six words stopped at "and". A subordinator opens a
+    clause with its own subject ("beats down as you loiter") and ends it.
+    """
     if not 0 <= verb_at < len(toks):
         return ""
     words: list[str] = []
-    for tok in toks[verb_at: verb_at + 6]:
-        if tok in _CLAUSE_MARKS:
+    for k, tok in enumerate(toks[verb_at: verb_at + _VERB_PHRASE_MAX]):
+        if tok in _CLAUSE_MARKS or (k and tok.lower() in _SUBORDINATORS):
             break
         words.append(tok.lower())
     return " ".join(words)
+
+
+_VERB_PHRASE_MAX = 14
 
 
 def _verb_after_phrase(toks: list[str], at: int, plural: bool) -> int:
@@ -1175,11 +1193,20 @@ def _here(conn, location_id: int, kind: str) -> list[Any]:
         stored = str(row["kind"] or "").strip().lower()
         if stored and (stored == kind or kind_head(stored) == kind):
             out.append(row)
+        elif kind == CREATURE_KIND and stored and not _person_kind(stored):
+            # "The creature lunges" with Dire Wolf 1 here is the wolf.
+            out.append(row)
         elif kind not in _vague_words() and any(
             singular(w) == kind for w in re.findall(r"[a-z]+", str(row["role"] or "").lower())
         ):
             out.append(row)
     return out
+
+
+def _person_kind(kind: Any) -> bool:
+    """A numbered kind that is someone, not a creature: "Man", "Guard", "Patron" (the figure hints' person words)."""
+    head = kind_head(kind)
+    return bool(head) and (head in _person_words() or head in _vague_words())
 
 
 def _latest_turn(conn) -> int:
