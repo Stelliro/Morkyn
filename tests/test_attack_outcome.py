@@ -416,27 +416,45 @@ class TestTheOutcomeFollowsTheRoll(unittest.TestCase):
         self.assertEqual(out["narration"], T10)
         self.assertNotIn(I.PHASE_REFUSED_DEATH, [p for p, _ in model.calls])
 
+    def _without_attack_line(self, out: dict) -> str:
+        """The narration with the engine's attack line (app/attack_line.py, no ask) taken back out."""
+        text = out["narration"]
+        for entry in out["report"].get("attack_beats") or []:
+            text = text.replace(" " + entry["beat"], "", 1)
+        return text
+
     def test_a_yes_biased_model_changes_nothing(self):
+        # The asks change nothing; the failed roll's own line goes in, by the engine's reading alone.
         out = I.run(T10, _records(), Prose(always="Yes"), {"skill_checks": [_roll("failure")]})
         self.assertEqual(out["events"], [])
-        self.assertEqual(out["narration"], T10)
+        self.assertEqual(self._without_attack_line(out), T10)
+        # No clause of the player's attack states an outcome (the kill is told in Beth's own
+        # sentences), so the line goes in as not shown; the death itself is the refused-death path's.
+        self.assertEqual(out["report"]["attack_beats"][0]["state"], "unshown")
 
     def test_a_no_biased_model_changes_nothing(self):
+        yes = I.run(T10, _records(), Prose(always="Yes"), {"skill_checks": [_roll("failure")]})
         out = I.run(T10, _records(), Prose(always="No."), {"skill_checks": [_roll("failure")]})
         self.assertEqual(out["events"], [])
-        self.assertEqual(out["narration"], T10)
+        self.assertEqual(self._without_attack_line(out), T10)
+        self.assertEqual(out["narration"], yes["narration"])
 
     def test_no_sentence_picked_adds_the_beat(self):
         out = I.run(T10, _records(), Prose(dead_sentences=("zzz",)), {"skill_checks": [_roll("failure")]})
-        self.assertTrue(out["narration"].startswith(T10))
+        self.assertTrue(self._without_attack_line(out).startswith(T10))
         self.assertTrue(out["narration"].endswith("Beth [[B]] is still alive. You fail. The moment offers nothing useful."))
 
     def test_never_below_the_floor(self):
         short = "Beth [[B]] falls dead. Beth [[B]] lies still on the floor."
         out = I.run(short, _records(), Prose(dead_sentences=("Beth falls", "Beth lies")), {"skill_checks": [_roll("failure")]})
-        self.assertTrue(out["narration"].startswith(short))
         self.assertIn("is still alive", out["narration"])
         self.assertEqual(out["report"]["refused_deaths"][0]["action"], "kept_floor_beat_added")
+        # The death refusal keeps the prose (the floor). The scene shows no attack sentence, so the
+        # engine's attack line goes in after the first sentence naming her and nothing is dropped.
+        entry = out["report"]["attack_beats"][0]
+        self.assertEqual((entry["state"], entry["where"]), ("unshown", "target"))
+        self.assertEqual(self._without_attack_line(out)[: len(short)], short)
+        self.assertTrue(out["narration"].startswith(f"Beth [[B]] falls dead. {entry['beat']} Beth [[B]] lies still"))
 
     def test_the_players_quoted_words_are_never_cut(self):
         text = T10.replace("The life has been ripped from her,", '"Rest now," you whisper as the life leaves her,')

@@ -17944,6 +17944,10 @@ def _run_interpreter(
                 turn["_shown_with_player"] = list(out["with_player"])
             record.update(out["report"])
             record["event"] = "read"
+            # An untargeted attack roll resolved against the row found after the draft (F186):
+            # the combat block the engine applies (world.apply_turn), so the line has its hit.
+            if isinstance(out["report"].get("combat_after_draft"), dict):
+                turn["_deterministic_combat"] = out["report"]["combat_after_draft"]
             if out["narration"] != narration:
                 narration = out["narration"]
                 turn["narration"] = narration
@@ -17960,7 +17964,7 @@ def _run_interpreter(
     # contradicted the prose on the 8B, #157 a).
     try:
         record["model_summary"] = str(turn.get("turn_summary") or "")[:700]
-        built = interpreter.summary(events, narration, player_quotes=quotes)
+        built = interpreter.summary(events, narration, player_quotes=quotes, attack_beats=record.get("attack_beats"))
         if built:
             turn["turn_summary"] = built
             record["summary"] = built
