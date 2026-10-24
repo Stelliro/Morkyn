@@ -195,7 +195,7 @@ class AWalkToAPersonMakesNoPlace(unittest.TestCase):
 
 
 class APlaceNameIsMatchedBeforeItIsMinted(unittest.TestCase):
-    def test_t6_the_marshes_with_no_marsh_on_record_mints_nothing(self):
+    def test_t6_the_marshes_with_no_marsh_on_record_is_the_ground_here(self):
 
         _world("The Shore", "")
         before = _place_names()
@@ -205,7 +205,21 @@ class APlaceNameIsMatchedBeforeItIsMinted(unittest.TestCase):
             _apply(result, T6_LINE)
         self.assertEqual(_place_names(), before)
         self.assertEqual(_here(), "The Shore")
-        self.assertIn("place_common_noun_dropped", [n.get("decision") for n in ledger.notes])
+        ground = [n for n in ledger.notes if n.get("decision") == "place_is_the_ground_here"]
+        self.assertEqual(len(ground), 1)
+        self.assertEqual(ground[0]["name"], "The marshes")
+        self.assertEqual(ground[0]["here"], "The Shore")
+
+    def test_a_lower_case_place_that_is_not_ground_still_files(self):
+        # The same turn shape with a building named in passing: "the old mill" is a place to go later.
+        _world("The Shore", "")
+        prose = T6_PROSE + " Beyond the reeds you glimpse the old mill, its wheel long still."
+        result = {"narration": prose, "player": {}, "locations": [{"name": "the old mill", "summary": ""}]}
+        with _notes() as ledger:
+            _apply(result, T6_LINE)
+        self.assertIn("the old mill", [n.lower() for n in _place_names()])
+        self.assertEqual(_here(), "The Shore")
+        self.assertNotIn("place_is_the_ground_here", [n.get("decision") for n in ledger.notes])
 
     def test_t6_the_marshes_beside_a_marsh_on_record_is_that_marsh(self):
         from app import world

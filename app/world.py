@@ -10549,10 +10549,12 @@ def _new_place_against_roster(conn, name: str, result: dict[str, Any], narration
     None lets it go on to the usual rules. Otherwise it is not minted and the
     reason is noted: ``matched`` (its words are an existing place's at this spot,
     by head noun and plural: "The Marshes" beside "The Deep Marsh"),
-    ``ambiguous`` (two such places: resolves to nothing), ``common`` (stage1 T6:
-    "The marshes." while the player crouched in the reeds at The Shore: a common
-    noun the draft and the prose both write in lower case, on a turn that does
-    not go there, is the ground here, not a named place).
+    ``ambiguous`` (two such places: resolves to nothing), ``ground`` (stage1 T6:
+    "The marshes." while the player crouched in the reeds at The Shore: a name the
+    draft and the prose both write in lower case, whose head noun is a word for
+    ground or terrain (_GROUND_WORDS), on a turn that does not go there, is the
+    ground the player stands on and resolves to the current place). Any other
+    lower-case name ("the old mill") files as a place as before.
     """
     if _match_location_by_name(conn, name) is not None:
         return None
@@ -10577,11 +10579,14 @@ def _new_place_against_roster(conn, name: str, result: dict[str, Any], narration
         if len(found) > 1:
             turn_ledger.note("place", "place_near_duplicate_dropped", name=name, known=found[:4])
             return "ambiguous"
-    if bare and not any(ch.isupper() for ch in bare):
+    if bare and words and not any(ch.isupper() for ch in bare) and words[-1] in _GROUND_HEADS:
         titled = " ".join(w[:1].upper() + w[1:] for w in bare.split())
         if not re.search(rf"\b{re.escape(titled)}\b", _unspoken(narration or "")):
-            turn_ledger.note("place", "place_common_noun_dropped", name=name)
-            return "common"
+            row = conn.execute(
+                "SELECT l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+            ).fetchone()
+            turn_ledger.note("place", "place_is_the_ground_here", name=name, here=str(row[0] or "") if row else "")
+            return "ground"
     return None
 
 
@@ -11963,6 +11968,17 @@ _OUTDOOR_AREA_WORDS = (
     "square", "market", "marketplace", "green", "beach", "shore", "shoreline", "strand", "pier", "jetty",
     "causeway", "marsh", "marshes", "saltmarsh", "breakwater", "seawall", "sea wall", "mole", "slipway",
 )
+# Words for the ground or terrain a player stands on, not a place by name: a
+# lower-case LOC_NEW headed by one, on a turn that does not go there, is the
+# ground here (stage1 T6: "The marshes." among the reeds at The Shore). Held as
+# singular heads (_singular_word), so "marshes", "fields" and "woods" match.
+_GROUND_WORDS = (
+    "marsh", "saltmarsh", "reed", "mud", "mudflat", "flat", "shore", "shoreline", "strand", "beach", "sand",
+    "dune", "field", "meadow", "grass", "grassland", "heath", "moor", "bog", "fen", "swamp", "road", "path",
+    "track", "trail", "wood", "tree", "forest", "hill", "slope", "water", "river", "stream", "bank", "yard",
+    "ground", "earth", "rock", "stone", "cliff", "wild", "wilderness",
+)
+_GROUND_HEADS = frozenset(_singular_word(w) for w in _GROUND_WORDS)
 _OUTDOOR_AREA_RE = re.compile(
     r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|come|get|"
     r"cross\w*|wander\w*|march\w*|step\w*|climb\w*)\s+(?:(?:back|over|down|up|across|out|along|straight|onto|on)\s+){0,2}"
