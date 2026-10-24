@@ -55,18 +55,10 @@ belong to, with the date).
 
 - **Commit tested work every turn** without asking (2026-10-05). **Push, tag and release only on
   an explicit ask.** Commit messages end with the Co-Authored-By line from the session.
-- **Changelog:** entries go under `## [Unreleased]` in CHANGELOG.md. Versions (2026-10-22):
-  "we should be working on the newer build 0.11.0 and later changelogs would be 0.11.1^". The
-  dev.N series ended at `0.10.0-dev.15`; the current batch is `0.11.0` (APP_VERSION is already
-  set to it so local builds say so), and each pushed batch after it is the next patch,
-  `0.11.1`, `0.11.2` and on. On a push: rename the section with date and a `>` summary, set
-  `APP_VERSION` in app/main.py, the two README version spots and the changelogs/ "Latest"
-  line, tag `v0.11.N`, push main and the tag. The number only goes up.
-  Stell (2026-10-23) asked to get "0.10.2" ready and, asked which, chose 0.11.0 as recorded
-  here: a 0.10.x number now would sort below the 0.11.0 builds already made. The 0.11.0
-  section, README, `changelogs/0.11.md` and CHANGELOGS.md are written; the tag and push wait
-  for the ask. The Linux `qt-window` (PySide6) and fixed Linux CUDA packs were uploaded by hand
-  on 2026-10-23 (sha256 checked against the release); the packs workflow no longer builds Piper.
+- **Changelog and releases:** entries go under `## [Unreleased]` in CHANGELOG.md; the current batch
+  is 0.11.x and the number only goes up. The full numbering, bump, tag and push procedure is the
+  `release` skill (.claude/skills/release/SKILL.md): load it before touching CHANGELOG.md,
+  APP_VERSION or a tag. Push, tag and release only on an explicit ask.
 - **Playtests: log only.** While Stell is playtesting, log each reported issue in
   docs/PLAYTEST_ISSUES.md (where, what, evidence, first guess at cause) and acknowledge. No fixes
   until Stell says testing is done (2026-10-05).
@@ -283,24 +275,12 @@ belong to, with the date).
 - **Typical model faults** (handle them with the guiding rule above): acting or speaking for the
   player, prose and ops disagreeing (moves, places, people, items, gold), stock phrases, codes
   or op text in the prose, voice slipping to first or third person, retry prompts echoed back.
-- **The full test suite** (`tools/run_suite.py` in .venv) has 14 known failures as of
-  2026-10-18 (3593 tests): batch5 x2 (unshown name bound to the one figure, role in the figure
-  sentence), prompt_context_reachability x2 (cited world_state keys, packet keys), quest_live
-  (paid request and assignment), quest_parser x2 (unknown giver vs board, accept then complete
-  pays), op_list asks for a code or quoted name, layout and look stay in their files, town_ui x3
-  (cell walk-out x2, arrow with no road), and the test_bare_assert_files and test_tts loader
-  errors (httpx not installed). quest_pipeline's unready-parser test passes again since the
-  hook rewrite. Anything beyond those is new, except the known flake
-  `test_dice_rolls_mirror_applied_turns.test_the_check_is_in_the_dice_audit_for_its_turn`, which
-  sometimes fails in the full run and passes alone (seen 2026-10-14 twice).
+- **The full test suite** has 14 known failures and one known flake (as of 2026-10-18); the list and
+  how to run it (`tools/run_suite.py`, never a bare `-m unittest`) are in the `run-suite` skill
+  (.claude/skills/run-suite/SKILL.md). Anything beyond that list is new.
 - **Evidence lives in model traces** (`data/model_traces/turn-*.json`): read them before the code.
   The model side is in `model_trace`; what the engine did is in `engine.ledger` (`delta` first,
   then `writes[i].at` for the code, `swallowed` for hidden failures).
-- **Running the suite:** `.venv\Scripts\python.exe tools\run_suite.py [--out FILE]` (2026-10-14).
-  It runs `unittest discover` in tests/ (no `__init__.py`, so a bare `-m unittest` from the root
-  finds 0 tests) with TEMP pointed at `<drive>:\morkyn-suite-tmp` and deletes that folder after.
-  Test modules never remove their `mkdtemp` dirs; in C:\%TEMP% they reached 14,000+ folders and
-  about 20 GB and filled C: mid-run. Stell OK'd clearing old `morkyn-*` test dirs from %TEMP%.
 
 ## Environment rules that have bitten before
 
