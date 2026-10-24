@@ -428,7 +428,9 @@ class TestTheOutcomeFollowsTheRoll(unittest.TestCase):
         out = I.run(T10, _records(), Prose(always="Yes"), {"skill_checks": [_roll("failure")]})
         self.assertEqual(out["events"], [])
         self.assertEqual(self._without_attack_line(out), T10)
-        self.assertEqual(out["report"]["attack_beats"][0]["state"], "contradicted")
+        # No clause of the player's attack states an outcome (the kill is told in Beth's own
+        # sentences), so the line goes in as not shown; the death itself is the refused-death path's.
+        self.assertEqual(out["report"]["attack_beats"][0]["state"], "unshown")
 
     def test_a_no_biased_model_changes_nothing(self):
         yes = I.run(T10, _records(), Prose(always="Yes"), {"skill_checks": [_roll("failure")]})

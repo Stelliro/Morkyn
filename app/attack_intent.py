@@ -233,6 +233,122 @@ def attack_check(person: dict[str, Any], inferred: dict[str, Any] | None, contex
     }
 
 
+# ---------------------------------------------------------------------------
+# Whom the player's line can mean (the candidate list; unnamed T3, unnamed2 T3/T4)
+# ---------------------------------------------------------------------------
+#
+# 'i shoot the nearest ghoul' was aimed at Tunde Iqbal, the one named person
+# here, and 'i shoot the closest ghoul' at Carlos Khan, a companion: the engine
+# took the only person present as the target of any attack line. The line's
+# own words decide instead. A named person is the target only when the line
+# names them, or describes them (their job: "the doctor"; a person word: "the
+# man", "the stranger"), or names no one ("i shoot him", "i attack"). A thing
+# the line names that is none of these ("the ghoul") is a figure of that kind
+# when one is here (app/unnamed.py: numbered rows), else nobody known.
+
+# What opens a noun phrase the line acts on. Possessives are left out: "my
+# crowbar" is the player's own thing, never the target.
+_DETERMINERS = r"the|a|an|another|that|this|those|these|each|every|some|one|two|three|four|five|six|\d+"
+# Grammar words that end a noun phrase ("the ghoul with my crowbar" -> "the ghoul").
+_PHRASE_END = frozenset({
+    "with", "at", "in", "on", "of", "to", "and", "or", "but", "for", "from", "into", "by", "as", "then",
+    "who", "that", "which", "while", "before", "after", "until", "so", "if", "when", "where", "through",
+    "toward", "towards", "against", "over", "under", "behind", "near", "beside", "about", "off", "up",
+    "down", "out", "away", "back", "across", "along", "onto", "upon", "without", "because",
+})
+# A pronoun in the line means someone here: "i snap her neck", "i put a bullet in his head".
+_PRONOUN_RE = re.compile(r"\b(?:him|her|his|hers|them|their|theirs|it|its)\b", re.I)
+# Words that mean whoever is meant, beside world._FIGURE_NOUNS (the engine's person words).
+_ANYONE_WORDS = frozenset({"guy", "gal", "lad", "lass", "bloke", "kid", "chap", "foe", "enemy", "attacker", "target"})
+_PRONOUN_OBJECTS = frozenset({"him", "her", "them", "it", "himself", "herself", "itself", "themselves"})
+
+
+def object_nouns(line: str) -> list[str]:
+    """The head nouns of the line's noun phrases, singular: 'i shoot the nearest ghoul with my crowbar' -> ['ghoul'].
+
+    A phrase opens on a determiner or a count and ends at a grammar word or
+    punctuation; its last word is the noun. "at the sound, maybe ghouls" gives
+    ["sound"]: the bare "ghouls" opens no phrase.
+    """
+    from app.interpreter import plain
+    from app.unnamed import singular
+
+    text = plain(line).lower()
+    out: list[str] = []
+    for match in re.finditer(rf"\b(?:{_DETERMINERS})\s+([a-z][a-z'’-]*(?:\s+[a-z][a-z'’-]*)*)", text):
+        words: list[str] = []
+        for word in match.group(1).split():
+            if word in _PHRASE_END:
+                break
+            words.append(word)
+        if words:
+            noun = re.sub(r"['’]s?$", "", words[-1])
+            if noun:
+                out.append(singular(noun))
+    return out
+
+
+def _is_person_word(noun: str) -> bool:
+    if noun in _ANYONE_WORDS:
+        return True
+    try:
+        from app.world import _FIGURE_NOUNS
+
+        return re.fullmatch(_FIGURE_NOUNS, noun, re.I) is not None
+    except Exception:
+        return False
+
+
+def kind_figures(line: str, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The living numbered figures whose kind the line names as a thing ("the ghoul", "another ghoul"), lowest number first."""
+    from app.interpreter import is_dead
+    from app.unnamed import numbered_name, singular
+
+    nouns = set(object_nouns(line))
+    if not nouns:
+        return []
+    out: list[dict[str, Any]] = []
+    for person in people:
+        if not isinstance(person, dict) or is_dead(person):
+            continue
+        _name, kind = numbered_name(person)
+        if kind and singular(kind.lower()) in nouns:
+            out.append(person)
+    out.sort(key=lambda p: int(p.get("kind_number") or 0))
+    return out
+
+
+def line_may_target(line: str, person: dict[str, Any]) -> bool:
+    """Whether the player's line can mean this person as the one attacked.
+
+    Yes when the line names them (code, full name, or first name as a word),
+    names no thing at all ("i shoot him", "i attack"), or names a thing that
+    is them: a numbered figure's kind ("the ghoul"), a named person's job
+    ("the doctor"), a word of their name, or a person word ("the man"). No
+    when every thing the line names is something else ("the nearest ghoul"
+    with only Tunde the hunter here).
+    """
+    from app.interpreter import line_names
+    from app.unnamed import numbered_name, singular
+
+    text = str(line or "")
+    if not text.strip() or not isinstance(person, dict):
+        return False
+    if line_names(text, person):
+        return True
+    first = str(person.get("name") or "").split()[0] if str(person.get("name") or "").strip() else ""
+    if len(first) >= 3 and re.search(rf"(?<!\w){re.escape(first)}(?!\w)", text, re.I):
+        return True
+    nouns = object_nouns(text)
+    if not nouns or _PRONOUN_RE.search(text):
+        return True
+    _numbered, kind = numbered_name(person)
+    if kind:
+        return singular(kind.lower()) in nouns
+    described = {singular(w) for w in re.findall(r"[a-z]+", f"{person.get('role') or ''} {person.get('name') or ''}".lower()) if len(w) >= 3}
+    return any(noun in described or _is_person_word(noun) for noun in nouns)
+
+
 def decide(
     model_input: str,
     context: dict[str, Any] | None,
@@ -243,27 +359,50 @@ def decide(
 
     A blow the trigger tables already aimed at a person (an "attack" key, or a
     melee / ranged check with that person as its npc_ref) is not asked about
-    again: it is marked as the attack on that person. Otherwise each person
-    here is asked about, and a confirmed target gets an attack check: the
-    inferred melee / ranged check aimed at them when there was one (returned
-    with "replaces_inferred"), else a new one.
+    again: it is marked as the attack on that person, when the line can mean
+    them (line_may_target). When it cannot ('i shoot the nearest ghoul' aimed
+    at the one named person here), the figure of the kind the line names is
+    the target instead, and with none here the blow has no target from the
+    trigger. Otherwise each person here the line can mean is asked about, and
+    a confirmed target gets an attack check: the inferred melee / ranged check
+    aimed at them when there was one (returned with "replaces_inferred"), else
+    a new one.
     """
     started = time.time()
     report: dict[str, Any] = {"asks": [], "unconfirmed": [], "target": None}
     inferred = inferred if isinstance(inferred, dict) else None
     try:
+        line = player_line(model_input)
+        people = people_here(context)
         if inferred and inferred.get("skill_code") in ATTACK_SKILLS:
             ref = inferred.get("npc_ref") if isinstance(inferred.get("npc_ref"), dict) else {}
             if ref.get("code"):
-                inferred["attack"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
-                report["target"] = inferred["attack"]
-                report["from"] = "trigger"
-                return None, report
+                person = next(
+                    (p for p in people if str(p.get("code") or "").upper() == str(ref.get("code")).upper()), None
+                ) or {**ref, "name": _clean(ref.get("name"))}
+                if line_may_target(line, person):
+                    inferred["attack"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
+                    report["target"] = inferred["attack"]
+                    report["from"] = "trigger"
+                    return None, report
+                # The one named person here is not whom the line shoots at.
+                report["not_the_lines"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
+                inferred["npc_ref"] = None
+                inferred["opposition"] = None
+                figures = kind_figures(line, people)
+                if figures:
+                    check = attack_check(figures[0], inferred, context)
+                    check["replaces_inferred"] = True
+                    report["target"] = check["attack"]
+                    report["skill"] = check["skill_code"]
+                    report["from"] = "kind"
+                    return check, report
         if ask is None:
             report["skipped"] = "no_model"
             return None, report
-        line = player_line(model_input)
-        people = people_here(context)
+        # The people the line can mean, the figures of the kind it names first.
+        figures = kind_figures(line, people)
+        people = [*figures, *[p for p in people if line_may_target(line, p) and p not in figures]]
         report["people"] = [p.get("code") for p in people]
         target = find_target(line, people, ask, report)
         if target is None:

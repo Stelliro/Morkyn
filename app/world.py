@@ -2406,22 +2406,42 @@ def _combat_target_candidates(state: dict[str, Any], player_input: str, refs: di
 
 
 def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[str, list[str]]) -> dict[str, Any] | None:
+    """The one person the attack line is at, by the engine's records and the line's own words, or None.
+
+    The living figure of the kind the line names ("the ghoul") comes first
+    (app/attack_intent.kind_figures). Otherwise the referenced, best-scored
+    or only candidate, when the line can mean them (attack_intent.line_may_target):
+    'i shoot the nearest ghoul' with only Tunde the hunter here aimed at him,
+    and the combat math hurt him (unnamed T3; unnamed2 T3/T4 Carlos).
+    """
+    from app.attack_intent import kind_figures, line_may_target
+
+    figures = kind_figures(player_input, _local_npcs_from_state(state))
+    if figures:
+        return figures[0]
     candidates = _combat_target_candidates(state, player_input, refs)
     if not candidates:
         return None
     if refs.get("npcs"):
         return candidates[0]
+    target = None
     query = _tokens(player_input)
     scored = [(_score_text(query, npc.get("code"), npc.get("name"), npc.get("summary"), npc.get("role")), npc) for npc in candidates]
     scored = [item for item in scored if item[0] > 0]
     if scored:
         scored.sort(key=lambda item: item[0], reverse=True)
         if len(scored) == 1 or scored[0][0] > scored[1][0]:
-            return scored[0][1]
-    if len(candidates) == 1:
-        return candidates[0]
-    hostile = [npc for npc in candidates if str(npc.get("attitude") or "").lower() in {"hostile", "aggressive", "violent"}]
-    return hostile[0] if len(hostile) == 1 else None
+            target = scored[0][1]
+    if target is None and len(candidates) == 1:
+        target = candidates[0]
+    if target is None:
+        hostile = [npc for npc in candidates if str(npc.get("attitude") or "").lower() in {"hostile", "aggressive", "violent"}]
+        target = hostile[0] if len(hostile) == 1 else None
+    if target is not None and not line_may_target(player_input, target):
+        turn_ledger.note("check", "combat_target_not_the_lines", code=str(target.get("code") or ""),
+                         name=str(target.get("name") or ""), line=str(player_input or "")[:200])
+        return None
+    return target
 
 
 def _ensure_combat_profiles_for_input(state: dict[str, Any], player_input: str) -> bool:
@@ -2457,6 +2477,42 @@ def _ensure_combat_profiles_for_input(state: dict[str, Any], player_input: str) 
             )
             changed = True
     return changed
+
+
+def _ensure_combat_profiles_here(conn) -> list[str]:
+    """The living people at the player's place get a combat profile when they have none; the codes written.
+
+    For an attack roll with no target (the combat block says needs_target):
+    a figure filed this turn (the ghouls of merge1 T4, F186) can be the row
+    the interpreter resolves that roll against after the draft, and the
+    damage needs health to come off. Derived as _ensure_combat_profiles_for_input does.
+    """
+    try:
+        here = int((conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone() or [0])[0] or 0)
+    except Exception:
+        here = 0
+    if not here:
+        return []
+    player = row_to_dict(conn.execute("SELECT * FROM player WHERE id = 1").fetchone()) or {}
+    state = {"settings": _settings(conn), "player": player}
+    try:
+        rows = conn.execute("SELECT * FROM npcs WHERE location_id = ? AND COALESCE(died_turn, 0) = 0", (here,)).fetchall()
+    except Exception:
+        rows = conn.execute("SELECT * FROM npcs WHERE location_id = ?", (here,)).fetchall()
+    written: list[str] = []
+    for row in rows:
+        npc = row_to_dict(row) or {}
+        combat = _combat_profile_from_npc(npc)
+        if combat["max_health"] > 0 and combat["attack_max"] > 0:
+            continue
+        derived = _derive_npc_combat_profile(npc, state)
+        conn.execute(
+            "UPDATE npcs SET health = ?, max_health = ?, attack_min = ?, attack_max = ?, defense = ?, dodge = ? WHERE id = ?",
+            (derived["health"], derived["max_health"], derived["attack_min"], derived["attack_max"], derived["defense"],
+             derived["dodge"], npc.get("id")),
+        )
+        written.append(str(npc.get("code") or ""))
+    return written
 
 
 def _equipped_items_by_slot(inventory: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -25682,6 +25738,16 @@ def apply_turn(
             conn, turn, max_npc_before, narration, result.get("npcs"), here_at_start=here_at_start
         )
         pending = result.pop("_interpreter_pending", None)
+        # An attack roll with no target (F186): the people here have health to
+        # lose before the interpreter matches the roll to one of them.
+        combat_before = result.get("_deterministic_combat") if isinstance(result.get("_deterministic_combat"), dict) else {}
+        if isinstance(pending, dict) and combat_before.get("status") == "needs_target" and combat_before.get("action_kind") == "player_attack":
+            try:
+                written = _ensure_combat_profiles_here(conn)
+                if written:
+                    turn_ledger.note("interpreter", "combat_profiles_here", codes=written)
+            except Exception as exc:
+                turn_ledger.note("interpreter", "combat_profiles_here_failed", error=f"{type(exc).__name__}: {exc}"[:200])
         if isinstance(pending, dict):
             try:
                 from app.interpreter import load_records
@@ -25699,6 +25765,22 @@ def apply_turn(
                 narration = _narration_text(result)
             except Exception as exc:
                 turn_ledger.note("interpreter", "run_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        # The untargeted roll the interpreter matched after the draft: the combat
+        # math followed the check on that row (attack_line.resolve); apply it, so
+        # the line the prose carries has its hit (no hit line without the hit).
+        combat_after = result.get("_deterministic_combat") if isinstance(result.get("_deterministic_combat"), dict) else {}
+        if combat_after.get("resolved_after_draft") and not combat_after.get("applied_after_draft"):
+            try:
+                _apply_deterministic_combat(conn, combat_after, turn)
+                combat_after["applied_after_draft"] = True
+                turn_ledger.note(
+                    "interpreter", "combat_applied_after_draft",
+                    code=str((combat_after.get("target") or {}).get("code") or ""),
+                    outcome=str((combat_after.get("resolution") or {}).get("outcome") or ""),
+                    damage=(combat_after.get("resolution") or {}).get("damage"),
+                )
+            except Exception as exc:
+                turn_ledger.note("interpreter", "combat_after_draft_failed", error=f"{type(exc).__name__}: {exc}"[:200])
         if result.get("interpreted_events"):
             try:
                 from app.interpreter import apply_events, without_refused
