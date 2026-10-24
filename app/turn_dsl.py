@@ -464,6 +464,9 @@ _PLACEHOLDER_VALUES = frozenset({
     "no change", "none needed", "empty",
 })
 _BAND_OPS = frozenset({"GOLD", "XP", "HP", "KARMA"})
+# The item ops: a name in quotes, then QTY and a band (F194: the band's own
+# label, BAND, written out is a field of these two).
+_ITEM_OPS = frozenset({"GRANT", "TAKE"})
 
 
 def _is_placeholder_op(op: str, positionals: list[str], flags: dict[str, str]) -> bool:
@@ -568,6 +571,12 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
     force_positional_remaining = _LEADING_POSITIONALS.get(opcode, 0)
     own_op = normalize_opcode(opcode)
     own_fields = _OP_FIELDS.get(own_op, frozenset())
+    # F194 (sonnet100 T13): 'TAKE: "BAND: small"' on a line of its own filed an
+    # item called "BAND: small". The op list says "QTY and a band"; the band's
+    # label written out is this field of GRANT and TAKE, never the name.
+    if own_op in _ITEM_OPS:
+        own_fields = own_fields | {"BAND"}
+        flag_keys = flag_keys | {"BAND"}
 
     def _is_label(tok: str) -> bool:
         return (tok.endswith(":") and tok[:-1].upper() in own_fields) or tok in own_fields
@@ -640,6 +649,16 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
                 i += 1
             if words:
                 flags.setdefault(key_u, " ".join(words))
+            continue
+        # F194 (sonnet100 T14): "QTY:1", "BAND:small"; one of this op's own
+        # field labels glued to its value by the colon is that field, not a
+        # word of the item's name.
+        glued = re.fullmatch(r"([A-Za-z]+):(\S+)", token) if not force_positional_remaining else None
+        if glued and glued.group(1).upper() in own_fields:
+            glued_value = glued.group(2)
+            glued_str = re.fullmatch(r"__STR(\d+)__", glued_value)
+            flags.setdefault(glued.group(1).upper(), strings[int(glued_str.group(1))] if glued_str else _decode_arg_escapes(glued_value))
+            i += 1
             continue
         upper = token.upper()
         str_match = re.fullmatch(r"__STR(\d+)__", token)
@@ -1160,6 +1179,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         qty_token = flags.get("QTY")
         if qty_token in (None, "") and len(args) > 1:
             qty_token = args[1]
+        if qty_token in (None, ""):
+            qty_token = flags.get("BAND")
         amount: dict[str, Any] = {}
         _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token)
         if not amount:
@@ -1192,6 +1213,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         qty_token = flags.get("QTY")
         if qty_token in (None, "") and len(args) > 1:
             qty_token = args[1]
+        if qty_token in (None, ""):
+            qty_token = flags.get("BAND")
         amount = {}
         _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token, negate=True)
         if not amount:
@@ -1744,6 +1767,14 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         # to answer them, 27-36 s a turn that fixed no fact (playtest #43).
         # They stay in _dsl, which the trace keeps and the verifier never sees.
         turn["_dsl"]["malformed_op_notes"] = malformed_ops[:6]
+        # A dropped line is a refusal: on the ledger too (F194, sonnet100 T13:
+        # 'TAKE: "BAND: small"' is the band field alone, no item name).
+        try:
+            from app import turn_ledger
+
+            turn_ledger.note("ops", "malformed_op_dropped", errors=malformed_ops[:6])
+        except Exception:
+            pass
         turn["self_check"]["corrections_made"].append(
             f"Skipped {len(malformed_ops)} malformed op line(s); kept the rest."
         )
