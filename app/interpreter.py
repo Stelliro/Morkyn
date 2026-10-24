@@ -1227,6 +1227,10 @@ def show_attacks(
     for check in rolled:
         row = attacked_row(check, records, match)
         code = str((row or {}).get("code") or "").strip().upper()
+        if not row and "" not in done:
+            # A rolled attack at a thing no row is (stage1 T12-T13, "the creature"): the miss is still the engine's line.
+            done.add("")
+            text = _show_untargeted_attack(text, check, turn_result, records, report)
         if not row or not code or code in done:
             continue
         landed = attack_line.lands_of(check)
@@ -1296,6 +1300,79 @@ def show_attacks(
             entry["where"] = "end"
             _note("attack_not_in_prose", code=code, outcome=outcome, beat=beat, where="end")
         report.setdefault("attack_beats", []).append(entry)
+    return text
+
+
+class _NounMatch:
+    """attack_line.read's matcher for a blow at a thing with no row: the text names it when it uses the noun."""
+
+    people: list[dict[str, Any]] = []
+    places: list[dict[str, Any]] = []
+
+    def __init__(self, noun: str) -> None:
+        self._re = re.compile(rf"(?<![A-Za-z]){re.escape(noun)}(?:s|es)?(?![A-Za-z])", re.I)
+
+    def names(self, text: str, row: dict[str, Any]) -> bool:
+        return bool(self._re.search(str(text or "")))
+
+
+def _show_untargeted_attack(
+    text: str,
+    check: dict[str, Any],
+    turn_result: dict[str, Any] | None,
+    records: dict[str, Any] | None,
+    report: dict[str, Any],
+) -> str:
+    """The engine's line for a rolled attack with no row to aim at, when the roll missed.
+
+    stage1 T12: "I swing my fist at the creature" rolled a melee failure with
+    no row for the creature; the draft wrote "Your fist connects with the
+    creature's snout" and nothing corrected it. A miss changes no state, so
+    its line needs no row: "Your fist misses the creature; your own side
+    takes the hurt." (the noun from the player's line, the mishap's injury as
+    the second clause, F193). It goes in only after a passage that shows a
+    hit, the draft contradicting the roll; the draft's words stay. A draft
+    that shows the miss or no outcome gets no line (with no row there is no
+    better name to give it: "i shoot at the sound"), and a hit or graze on
+    no row is not written (no hit without the hit applied). Every decision
+    is a ledger note.
+    """
+    from app import attack_line
+    from app.attack_intent import blow_noun
+
+    skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+    if str(skill.get("code") or check.get("skill_code") or "") not in COMBAT_SKILLS:
+        return text
+    landed = attack_line.lands_of(check)
+    if not landed:
+        return text
+    outcome = str(check.get("outcome") or "")
+    noun = blow_noun(str((records or {}).get("player_line") or ""))
+    if landed != attack_line.MISS or not noun:
+        _note("attack_untargeted_no_line", outcome=outcome, noun=noun,
+              why="no row for the blow to land on" if noun else "the line names no thing")
+        return text
+    weapon = attack_weapon(check, turn_result)
+    label = f"the {noun}"
+    beat = attack_line.line_for(check, label, weapon)
+    if not beat:
+        return text
+    row = {"code": "", "name": noun}
+    seen = attack_line.read(text, row, landed, _NounMatch(noun), records, 1, weapon)
+    entry = {"code": "", "noun": noun, "outcome": outcome, "beat": beat, "state": seen["state"], "aimed": False,
+             "action": seen.get("action") or "none"}
+    if seen["state"] != "contradicted":
+        # A draft that shows the miss, or no outcome at all ("You fire into the dark. Nothing answers"),
+        # says nothing against the roll: with no row, there is nothing for a line to name better.
+        _note("attack_untargeted_no_line", outcome=outcome, noun=noun, why=f"draft {seen['state']}",
+              sentence=str(seen.get("sentence") or "")[:300])
+        return text
+    text = attack_line.insert_after(text, seen["after"], beat)
+    entry["where"] = seen.get("where") or "passage"
+    entry["kept"] = seen.get("sentences") or []
+    _note("attack_contradiction_line_added", code="", noun=noun, outcome=outcome, beat=beat, where=entry["where"],
+          kept=[str(s)[:200] for s in entry["kept"]])
+    report.setdefault("attack_beats", []).append(entry)
     return text
 
 

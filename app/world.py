@@ -2493,26 +2493,38 @@ def _ensure_combat_profiles_for_input(state: dict[str, Any], player_input: str) 
     return changed
 
 
-def _ensure_combat_profiles_here(conn) -> list[str]:
+def _ensure_combat_profiles_here(conn, ids: list[int] | None = None) -> list[str]:
     """The living people at the player's place get a combat profile when they have none; the codes written.
 
     For an attack roll with no target (the combat block says needs_target):
     a figure filed this turn (the ghouls of merge1 T4, F186) can be the row
     the interpreter resolves that roll against after the draft, and the
     damage needs health to come off. Derived as _ensure_combat_profiles_for_input does.
+    ``ids``: only these rows, wherever they are (a creature an op filed this
+    turn, unnamed.file_op_creature).
     """
-    try:
-        here = int((conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone() or [0])[0] or 0)
-    except Exception:
+    if ids is not None:
+        wanted = [int(i) for i in ids if i]
+        if not wanted:
+            return []
+        rows = conn.execute(
+            f"SELECT * FROM npcs WHERE id IN ({','.join('?' * len(wanted))}) AND COALESCE(died_turn, 0) = 0", wanted
+        ).fetchall()
         here = 0
-    if not here:
-        return []
+    else:
+        try:
+            here = int((conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone() or [0])[0] or 0)
+        except Exception:
+            here = 0
+        if not here:
+            return []
     player = row_to_dict(conn.execute("SELECT * FROM player WHERE id = 1").fetchone()) or {}
     state = {"settings": _settings(conn), "player": player}
-    try:
-        rows = conn.execute("SELECT * FROM npcs WHERE location_id = ? AND COALESCE(died_turn, 0) = 0", (here,)).fetchall()
-    except Exception:
-        rows = conn.execute("SELECT * FROM npcs WHERE location_id = ?", (here,)).fetchall()
+    if ids is None:
+        try:
+            rows = conn.execute("SELECT * FROM npcs WHERE location_id = ? AND COALESCE(died_turn, 0) = 0", (here,)).fetchall()
+        except Exception:
+            rows = conn.execute("SELECT * FROM npcs WHERE location_id = ?", (here,)).fetchall()
     written: list[str] = []
     for row in rows:
         npc = row_to_dict(row) or {}
@@ -2702,6 +2714,55 @@ def _combat_follows_attack_check(combat: Any, checks: Any) -> dict[str, Any] | N
         "check", "combat_follows_attack_check", code=code, check_outcome=str(check.get("outcome") or ""),
         was=str(resolution.get("outcome") or ""), now=landed, damage=damage,
     )
+    return out
+
+
+def _combat_for_aimed_check(state: dict[str, Any], player_input: str, combat: Any, checks: Any) -> dict[str, Any] | None:
+    """The combat block for a rolled attack aimed at a row when the intent reader built none, or None.
+
+    _build_mechanics_context builds the fight only when _turn_intent reads
+    the line as combat; "I swing my fist at the creature as it comes out of
+    the dark" (stage1 T12) is "general" there, yet the trigger tables rolled
+    melee and the attack reader aimed it at the serpent. Without a combat
+    block the hit has no damage and the row no health change, so the block
+    is made here for the roll's own target, as _build_mechanics_context does
+    for a target it found (_resolve_player_attack), and the check's band
+    then decides it (_combat_follows_attack_check). Noted in the ledger.
+    """
+    status = str((combat or {}).get("status") or "") if isinstance(combat, dict) else ""
+    if status not in {"", "not_combat"}:
+        return None
+    if not _setup_flag_enabled(_playthrough_options(state), "fighting_enabled", True):
+        return None
+    from app.attack_intent import attack_target, lands
+
+    check = next((c for c in (checks if isinstance(checks, list) else []) if isinstance(c, dict)
+                  and attack_target(c) and lands(c)), None)
+    if check is None:
+        return None
+    code = attack_target(check)
+    target = next((n for n in _local_npcs_from_state(state) if str(n.get("code") or "").upper() == code), None)
+    if target is None:
+        # A row filed after the context was read (a creature minted for the blow, a place figure profiled).
+        try:
+            with connect().closing() as conn:
+                target = row_to_dict(conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone())
+        except Exception:
+            target = None
+    if not target:
+        return None
+    refs = _explicit_turn_references(player_input)
+    attack = _player_attack_profile(state, player_input, refs)
+    out: dict[str, Any] = {
+        "status": "resolved_player_attack",
+        "action_kind": "player_attack",
+        "player_attack": attack,
+        "target_candidates": [_combat_target_summary(target)],
+        "target": _combat_target_summary(target),
+        "resolution": _resolve_player_attack(state, player_input, target, attack),
+        "from_attack_check": True,
+    }
+    turn_ledger.note("check", "combat_for_aimed_check", code=code, was=status or "none")
     return out
 
 
@@ -24876,6 +24937,38 @@ def _retells_players_line(sentence: str, own_line: str) -> bool:
     return sum(1 for w in words if w in own_words) * 4 >= len(words) * 3
 
 
+def _pronoun_is_subjects(sentence: str) -> bool:
+    """The sentence opens on a noun phrase of its own with a verb, and its first "it" / "them" comes before any "you": the pronoun is that subject's.
+
+    "The shadowy form of a large serpent emerges from the darkness, its
+    yellow eyes glinting ... as it rears up to regard you" (stage1 T11) is
+    the serpent's sentence; "You pull it free", "It's a small piece", "The
+    merchant smiles as you pocket it", "The old man nods and hands it over"
+    (the pronoun an object) and "A moment later it slips from your fingers"
+    (no verb before the pronoun) are still the refused thing's. Grammar
+    only: a determiner opens the sentence, a verb follows before the
+    pronoun, the player is not in between, and the pronoun is the subject
+    of a verb of its own.
+    """
+    from app.unnamed import _TOKEN_RE, _verb_shaped
+
+    text = re.sub(r"\s*\[\[[^\]]*\]\]", "", str(sentence or "")).strip()
+    if not re.match(r"\W*(?:the|a|an|another)\s", text, re.I):
+        return False
+    first = _PRONOUN_CARRY_RE.search(text)
+    if not first:
+        return False
+    before = text[: first.start()]
+    if re.search(r"\b(?:you|your|yours|yourself|i|my|me)\b", before, re.I):
+        return False
+    toks = [m.group(0) for m in _TOKEN_RE.finditer(before)]
+    if not any(_verb_shaped(tok, False) for tok in toks[2:]):
+        return False
+    # The pronoun is itself a subject ("as it rears"), not an object ("hands it over", "pocket it").
+    after = [m.group(0) for m in _TOKEN_RE.finditer(text[first.end():])]
+    return bool(after) and _verb_shaped(after[0], first.group(0).lower() == "them")
+
+
 def _reconcile_prose_with_state(
     conn,
     result: dict[str, Any],
@@ -24964,6 +25057,14 @@ def _reconcile_prose_with_state(
                 # Short name for the refused thing going into the pack: "the tool".
                 about = any(len(t) > 3 and re.search(rf"\b{re.escape(t)}", lower) for t in tokens)
             pronoun = carry["on"] and bool(_PRONOUN_CARRY_RE.search(lower))
+            if pronoun and not about and _pronoun_is_subjects(sentence):
+                # "The shadowy form of a large serpent emerges from the darkness, its yellow eyes ...
+                # as it rears up" (stage1 T11): the "it" is the serpent's, the sentence's own subject;
+                # another figure's entrance is no next beat of the refused amulet.
+                turn_ledger.note("prose", "refused_gain_follow_on_kept", item=name_l, sentence=sentence[:160],
+                                 why="the pronoun is the sentence's own subject's")
+                carry["on"] = carry["dropped"] = False
+                return False
             if not about and not pronoun:
                 carry["on"] = carry["dropped"] = False
                 return False
@@ -25721,6 +25822,16 @@ def apply_turn(
         for npc in collected_npcs:
             upserted_id = _upsert_npc(conn, npc)
             _store_figure_aliases(conn, npc, upserted_id)
+            if isinstance(npc, dict) and npc.get("_creature_kind"):
+                # A creature an op named (stage1 T11, "Serpent of Saltmarrow" over "a large serpent
+                # emerges"): the row carries its kind, is in the scene, and can take a blow.
+                try:
+                    from app import unnamed as _unnamed_op
+
+                    _unnamed_op.file_op_creature(conn, npc, upserted_id, result)
+                except Exception as exc:
+                    turn_ledger.note("npc", "op_creature_file_failed", name=str(npc.get("name") or ""),
+                                     error=f"{type(exc).__name__}: {exc}"[:160])
             if upserted_id:
                 touched_npc_ids.add(int(upserted_id))
                 if isinstance(npc, dict) and str(npc.get("_bound_hint") or "").strip():
@@ -27409,17 +27520,30 @@ def _attack_check_for_line(
         turn_ledger.note("check", "attack_target_unknown_noun", noun=report.get("unknown_noun"),
                          minted=bool(report.get("from") == "minted"), target=report.get("target"),
                          not_the_lines=report.get("not_the_lines"))
-    if report.get("asks") or report.get("target") or report.get("error"):
+    if report.get("from_place") and report.get("target"):
+        # A creature at the player's place the scene record did not hold (stage1 T12): the blow
+        # needs its health to come off.
+        try:
+            code = str((report.get("target") or {}).get("code") or "")
+            with connect().closing() as conn:
+                row = conn.execute("SELECT id FROM npcs WHERE code = ?", (code,)).fetchone()
+                if row is not None:
+                    _ensure_combat_profiles_here(conn, ids=[int(row["id"])])
+        except Exception as exc:
+            turn_ledger.note("check", "attack_profile_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+    # Every rolled attack is noted, the one with no one to ask about too (stage1 T12-T13 noted nothing).
+    if report.get("asks") or report.get("target") or report.get("error") or report.get("attack_roll"):
         turn_ledger.note(
             "check",
             "attack_found" if report.get("target") else "attack_not_found",
             target=report.get("target"),
-            source=report.get("from") or "ask",
+            source=report.get("from") or ("place" if report.get("from_place") else "ask"),
             skill=report.get("skill") or "",
             asks=report.get("asks") or [],
             unconfirmed=report.get("unconfirmed") or [],
             error=report.get("error") or "",
             seconds=report.get("seconds"),
+            people=report.get("people") or [],
         )
     return check
 
@@ -28211,6 +28335,13 @@ def play_turn(
             if skill_check_results:
                 mechanics_context = dict(mechanics_context or {})
                 mechanics_context["resolved_checks"] = skill_check_results
+                # A blow the engine aimed at a row in words the intent reader does not
+                # take for a fight ("I swing my fist at the creature", stage1 T12) has
+                # its combat math all the same: the roll's target is the fight's.
+                aimed_combat = _combat_for_aimed_check(context, model_input, mechanics_context.get("combat"),
+                                                       skill_check_results)
+                if aimed_combat is not None:
+                    mechanics_context["combat"] = aimed_combat
                 # One roll decides an attack (#129): the combat math's hit or
                 # miss follows the attack check on the same person.
                 followed = _combat_follows_attack_check(mechanics_context.get("combat"), skill_check_results)

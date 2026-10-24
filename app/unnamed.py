@@ -883,6 +883,147 @@ def op_kind(name: Any, narration: str) -> str:
     return kind_title(base)
 
 
+_ITS_RE = re.compile(r"\b(?:it|its|itself)\b", re.I)
+# A name's own head: the words before "of" / "the" / a comma ("Serpent of Saltmarrow" -> "Serpent").
+_NAME_HEAD_SPLIT_RE = re.compile(r"\s+(?:of|the|from|in|at|under|beneath|below)\s+|\s*[,(]", re.I)
+
+
+def op_creature_kind(name: Any, narration: str) -> dict[str, Any] | None:
+    """The creature kind an op's proper name carries, read from the prose that shows it: {"kind", "phrase", "sentence", "verb_phrase"}.
+
+    stage1 T11: NPC_NEW "Serpent of Saltmarrow" over "The shadowy form of a
+    large serpent emerges from the darkness, its yellow eyes glinting ... as
+    it rears up to regard you". The name is a proper name (op_kind leaves it,
+    and the person-or-place ask had no sentence naming it and answered "A
+    place."), but its head noun is the common noun the prose shows acting.
+    Read by grammar, no list of creature words: the name's head ("Serpent",
+    the last word before "of" / "the") is in the prose in lower case after a
+    determiner (two describing words at most) with a verb after it ("a large
+    serpent emerges"), and the sentence speaks of it as "it" / "its" and
+    never as he or she. A person word the figure hints know, a job (the
+    shift templates), a title and scenery are never a creature kind ("Warden
+    of the Marsh" over "the warden nods" stays a person). None otherwise.
+    """
+    from app.world import _NAME_SCENERY_RE
+
+    raw = re.sub(r"\s*\[\[[^\]]*\]\]", "", str(name or "")).strip()
+    if not raw:
+        return None
+    head_part = _NAME_HEAD_SPLIT_RE.split(raw, maxsplit=1)[0].strip()
+    words = head_part.split()
+    if not words or len(words) > 3:
+        return None
+    head = words[-1]
+    if not _word(head) or not head[:1].isupper():
+        return None
+    base = singular(head)
+    if len(base) < 3 or base in _person_words() or base in _vague_words() or _NAME_SCENERY_RE.fullmatch(base):
+        return None
+    try:
+        from app.attack_intent import _title_words
+        from app.shifts import job_words
+
+        if base in _title_words() or job_words(base):
+            return None
+    except Exception:
+        return None
+    for sentence in _sentences(narration):
+        toks = [m.group(0) for m in _TOKEN_RE.finditer(sentence)]
+        for i, tok in enumerate(toks):
+            # Lower case: the common noun, not the name itself.
+            if tok != tok.lower() or singular(tok) != base:
+                continue
+            start = None
+            for back in range(i - 1, max(-1, i - 4), -1):
+                low = toks[back].lower()
+                if low in {"a", "an", "the", "another"} or _count_of(low):
+                    start = back
+                    break
+                if not _word(toks[back]) or low in _CLOSED or low in _PREPOSITIONS:
+                    break
+            if start is None or i + 1 >= len(toks) or not _verb_shaped(toks[i + 1], is_plural(tok)):
+                continue
+            phrase = " ".join(toks[start: i + 1])
+            rest = sentence[sentence.find(phrase) + len(phrase):] if phrase in sentence else sentence
+            if _HE_SHE_RE.search(rest) or not _ITS_RE.search(rest):
+                continue
+            return {"kind": kind_title(base), "phrase": phrase, "sentence": sentence,
+                    "verb_phrase": _verb_phrase(toks, i + 1)}
+    return None
+
+
+def settle_op_creature(npc: dict[str, Any], narration: str, *, ask: bool, call, trace=None, usage=None) -> bool:
+    """Mark an op's named figure as a creature of its kind when op_creature_kind reads one (before apply_turn).
+
+    Sets ``npc["_creature_kind"]`` (the kind column apply_turn writes) and,
+    with no hostile ATTITUDE on the op, ``npc["_creature_hostile"]`` from the
+    engine's own reading of the verb (attack_line.hostile_act) or, failing
+    that, the measured hostility ask unnamed.settle uses. True when marked.
+    """
+    if not isinstance(npc, dict) or str(npc.get("code") or "").strip() or npc.get("_unnamed_kind"):
+        return False
+    read = op_creature_kind(npc.get("name"), narration)
+    if not read:
+        return False
+    from app.attack_line import hostile_act
+
+    npc["_creature_kind"] = read["kind"]
+    attitude = str(npc.get("attitude") or "").strip().lower()
+    hostile: bool | None = None
+    by = "op"
+    if attitude in {"", "neutral"}:
+        if hostile_act(read.get("verb_phrase") or ""):
+            hostile, by = True, "verb"
+        elif ask:
+            hostile = _ask_yes_no(call, YES_NO_SYSTEM, hostile_prompt(read["sentence"], read["phrase"]), HOSTILE_PHASE,
+                                  read["kind"].lower(), trace, usage)
+            by = "ask"
+        if hostile:
+            npc["_creature_hostile"] = True
+    turn_ledger.note("npc", "op_name_is_a_creature", name=str(npc.get("name") or ""), kind=read["kind"],
+                     phrase=read["phrase"], hostile=hostile if attitude in {"", "neutral"} else attitude, by=by,
+                     sentence=read["sentence"][:160])
+    return True
+
+
+def file_op_creature(conn, npc: dict[str, Any], row_id: int | None, result: dict[str, Any] | None = None) -> bool:
+    """Write the creature kind settle_op_creature read onto the row the op filed: kind, race, hostility, in the scene.
+
+    The name stays the op's ("Serpent of Saltmarrow" keeps its name and is
+    no numbered figure), but the row is a creature of its kind ("Serpent"),
+    so "the creature", "the beast" and "the serpent" reach it
+    (attack_intent._kinds_of), it is in the scene (an attack candidate next
+    turn) and it has a combat profile for a blow to take health off.
+    """
+    kind = str((npc or {}).get("_creature_kind") or "").strip() if isinstance(npc, dict) else ""
+    if not kind or not row_id:
+        return False
+    row = conn.execute("SELECT * FROM npcs WHERE id = ?", (int(row_id),)).fetchone()
+    if row is None or str(row["kind"] or "").strip():
+        return False
+    updates: dict[str, Any] = {"kind": kind}
+    if str(row["race"] or "").strip().lower() in {"", "human"}:
+        updates["race"] = "unknown"
+    if npc.get("_creature_hostile") and str(row["attitude"] or "").strip().lower() in {"", "neutral"}:
+        updates["attitude"] = "hostile"
+    conn.execute(f"UPDATE npcs SET {', '.join(k + ' = ?' for k in updates)} WHERE id = ?",
+                 (*updates.values(), int(row_id)))
+    if isinstance(result, dict):
+        _mark_present(result, str(row["code"] or ""))
+    profiled: list[str] = []
+    try:
+        from app import world
+
+        profiled = world._ensure_combat_profiles_here(conn, ids=[int(row_id)])
+    except Exception as exc:
+        turn_ledger.note("npc", "creature_profile_failed", code=str(row["code"] or ""),
+                         error=f"{type(exc).__name__}: {exc}"[:160])
+    turn_ledger.note("npc", "op_creature_filed", name=str(row["name"] or ""), code=str(row["code"] or ""), kind=kind,
+                     attitude=updates.get("attitude") or str(row["attitude"] or "neutral"),
+                     profiled=bool(profiled))
+    return True
+
+
 def take_op_figures(npcs: list[Any], result: dict[str, Any] | None) -> list[Any]:
     """Op people settle marked as kinds are not filed by name: their kind and attitude go to file_figures."""
     if not isinstance(result, dict):
