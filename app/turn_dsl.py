@@ -419,7 +419,9 @@ _IDENTITY_FIRST_OPS = _NAME_FIRST_OPS | _PERSON_FIRST_OPS | frozenset(
     if m.group(1) in OPCODES
 )
 _IDENTITY_LABELS = frozenset({"NAME", "TITLE"})
-_ALL_FIELD_KEYS = frozenset(_FLAG_KEYS) | frozenset(k for keys in _OPCODE_FLAG_KEYS.values() for k in keys)
+# The field words read on any op line; another op's own words (QUEST's AT,
+# LEAD's TO) are text on this one ('NPC_NEW: "AT: the gate"').
+_ALL_FIELD_KEYS = frozenset(_FLAG_KEYS)
 
 
 def _identity_part(value: str, own_op: str, own_fields: frozenset[str] | set[str]) -> tuple[str, list[tuple[str, str]], list[str]]:
@@ -719,12 +721,14 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
         positionals.append(_decode_arg_escapes(token))
         i += 1
     # F196: no value opens on the sign of a KEY = value pair, and a bare field
-    # label left among the parts ("NAME=", "title:") is op form, not a part. The
-    # ops whose first parts are kinds (FOCUS, INDEX) keep their parts as written.
+    # label left among the parts with no value after it ("NAME=", "title=", a
+    # last "title:") is op form, not a part. A "Role:" inside free text
+    # ("SUMMARY: You meet Beth. Role: doctor.") has its words after it and stays.
+    # The ops whose first parts are kinds (FOCUS, INDEX) keep their parts as written.
     if opcode not in _LEADING_POSITIONALS:
         cleaned: list[str] = []
-        for part in positionals:
-            if _BARE_LABEL_RE.fullmatch(part):
+        for at, part in enumerate(positionals):
+            if _BARE_LABEL_RE.fullmatch(part) and (part.endswith("=") or at == len(positionals) - 1):
                 continue
             cleaned.append(part if part == ":" else _PAIR_SIGN_RE.sub("", part))
         positionals = [p for p in cleaned if p]
@@ -991,7 +995,7 @@ def is_slot_token(value: Any) -> bool:
     return bool(text) and bool(_SLOT_TOKEN_RE.fullmatch(text))
 
 
-_LABEL_SHAPE_RE = re.compile(r"(?:^|\s)[A-Za-z_]{2,}\s*[=:]|^\s*[=:]")
+_LABEL_SHAPE_RE = re.compile(r"(?:^|[\s\"'])[A-Za-z_]{2,}\s*[=:]|^[\s\"']*[=:]")
 
 
 def _no_value(entry: dict[str, Any], what: str) -> None:
@@ -1378,6 +1382,13 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         )
     elif op == "QUEST_DONE":
         quest = str(args[0] if args else "").strip()
+        if len(args) == 1:
+            # F196 (sonnet100 T73): 'QUEST_DONE: "quest:Q2 accept"', the action
+            # inside the quotes with the code; the last word is the next part.
+            head, _, last = quest.rpartition(" ")
+            if head and last.lower().replace("-", "_") in QUEST_DONE_ACTIONS:
+                args = [head.strip(), last]
+                quest = args[0]
         action = str(args[1] if len(args) > 1 else "step_done").strip().lower().replace("-", "_")
         if action == "done":
             action = "step_done"
