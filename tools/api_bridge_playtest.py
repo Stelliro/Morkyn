@@ -225,6 +225,11 @@ def main() -> int:
         serve(run, args.port)
 
     if args.viewer_port:
+        # The viewer's startup runs init_db too; migrate the save here first so the two never
+        # add the same column at once (sonnet100 launch 1: 'duplicate column name: body').
+        from app.db import init_db as _init_db
+
+        _init_db()
         # Same process, same isolated save: the page only reads (MORKYN_SPECTATE).
         os.environ["MORKYN_SPECTATE"] = "1"
         import uvicorn

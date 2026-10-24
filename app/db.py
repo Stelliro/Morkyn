@@ -692,7 +692,16 @@ def init_db() -> None:
             """
         )
 
-        _migrate_columns(conn)
+        try:
+            _migrate_columns(conn)
+        except sqlite3.OperationalError as exc:
+            # Two connections migrate one save at once (the game and its read-only viewer
+            # thread, a second window): the other added the column between this one's read
+            # of the table and its ALTER. The column exists, which is what was wanted; read
+            # the tables again and add only what is still missing.
+            if "duplicate column" not in str(exc).lower():
+                raise
+            _migrate_columns(conn)
         _seed_tile_catalog(conn)
 
         start = conn.execute("SELECT id FROM locations WHERE name = ?", ("Mosswake Gate",)).fetchone()
