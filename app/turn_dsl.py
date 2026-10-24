@@ -446,22 +446,6 @@ def _ends_multiword(token: str, flag_keys: set[str]) -> bool:
     return bool(_LOCATION_CODE_RE.match(token)) or token.lower() in _NPC_ATTITUDES
 
 
-def _ends_item_name(token: str, keys: set[str] | frozenset[str]) -> bool:
-    """A token that is not part of an unquoted item name (F194, sonnet100 T14:
-    "GRANT: brass medallion QTY:1 BAND:small" kept "brass" as the name and read
-    "medallion" as its amount): a label, a glued label, a quoted part, a band or
-    a number."""
-    if _ends_multiword(token, set(keys)):
-        return True
-    if token.endswith(":") and token[:-1].upper() in keys:
-        return True
-    glued = re.fullmatch(r"([A-Za-z]+):(\S+)", token)
-    if glued and glued.group(1).upper() in keys:
-        return True
-    band, number = _amount(token)
-    return band is not None or number is not None
-
-
 def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
     """
     Tokenize an opcode line into:
@@ -575,7 +559,8 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
                 flags.setdefault(key_u, " ".join(words))
             continue
         # F194 (sonnet100 T14): "QTY:1", "BAND:small"; one of this op's own
-        # field labels glued to its value by the colon is that field.
+        # field labels glued to its value by the colon is that field, not a
+        # word of the item's name.
         glued = re.fullmatch(r"([A-Za-z]+):(\S+)", token) if not force_positional_remaining else None
         if glued and glued.group(1).upper() in own_fields:
             glued_value = glued.group(2)
@@ -663,17 +648,6 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
                     words.append(_decode_arg_escapes(parts[i]))
                     i += 1
                 flags[upper] = " ".join(words)
-            continue
-        # F194 (sonnet100 T14): "GRANT: brass medallion QTY:1" kept "brass" as
-        # the name and read "medallion" as its amount. An unquoted item name
-        # runs to the next label, band, number or quoted part.
-        if own_op in _ITEM_OPS and not positionals and not force_positional_remaining:
-            words = [_decode_arg_escapes(token)]
-            i += 1
-            while i < len(parts) and len(words) < 5 and not _ends_item_name(parts[i], flag_keys | own_fields):
-                words.append(_decode_arg_escapes(parts[i]))
-                i += 1
-            positionals.append(" ".join(words))
             continue
         positionals.append(_decode_arg_escapes(token))
         i += 1
@@ -1631,6 +1605,14 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         # to answer them, 27-36 s a turn that fixed no fact (playtest #43).
         # They stay in _dsl, which the trace keeps and the verifier never sees.
         turn["_dsl"]["malformed_op_notes"] = malformed_ops[:6]
+        # A dropped line is a refusal: on the ledger too (F194, sonnet100 T13:
+        # 'TAKE: "BAND: small"' is the band field alone, no item name).
+        try:
+            from app import turn_ledger
+
+            turn_ledger.note("ops", "malformed_op_dropped", errors=malformed_ops[:6])
+        except Exception:
+            pass
         turn["self_check"]["corrections_made"].append(
             f"Skipped {len(malformed_ops)} malformed op line(s); kept the rest."
         )

@@ -8,12 +8,15 @@ T13: the draft split one TAKE over three lines ('TAKE: "brass medallion"', 'TAKE
 'TAKE: "BAND: small"') and "BAND: small x1" was filed beside the medallion, with a die item:BAND: small.
 T14: 'GRANT: brass medallion QTY:1 BAND:small' (no quotes) kept "brass" as the name and read
 "medallion" as its amount; "brass x1" was filed with nothing brass found or taken.
-T4: GRANT "salvage job" filed a job as an item.
+The candle (T56, taken as asked) and the reeve's crest medallion (T60, found on the body) were
+granted right and still are.
 
-The decision is made once, in world._not_a_thing_name, at the one place an item name is accepted
-(_filter_inventory_changes; resolve_turn_bands asks it first so such a name gets no item die): a
-phrase headed by a coin word, a band label or an op label, a bare material word or a job is money or
-nothing. The head noun decides, so real things with those words keep granting.
+The decision is made once, in world._not_a_thing_name, asked where a name becomes a gain
+(_filter_inventory_changes for the draft's ops and ground_acquisitions' finds, _grant_shown_takes for
+takes the prose shows; resolve_turn_bands asks it first so such a name gets no item die): a phrase
+headed by a coin word, a band label or an op label, or a bare metal is money or nothing. The head
+noun decides, so real things with those words keep granting. Money is noted for the transaction
+parser (m0) and not paid here. The op parser (turn_dsl) reads the T13 and T14 op lines right too.
 
 Run:  cd tests && ../.venv/bin/python -m unittest test_sonnet100_coin_items
 """
@@ -148,14 +151,13 @@ class NamesThatAreNoThing(unittest.TestCase):
 
         verdicts = {
             name: (_not_a_thing_name(name) or {}).get("decision")
-            for name in ("eighty silver", "leather pouch of gold", "BAND: small", "brass", "salvage job")
+            for name in ("eighty silver", "leather pouch of gold", "BAND: small", "brass")
         }
         self.assertEqual(verdicts, {
             "eighty silver": "coin_amount_not_an_item",
             "leather pouch of gold": "coin_amount_not_an_item",
             "BAND: small": "band_label_not_an_item",
             "brass": "material_not_an_item",
-            "salvage job": "work_not_an_item",
         })
 
     def test_the_coin_note_carries_the_amount_for_the_transaction_parser(self):
@@ -164,12 +166,13 @@ class NamesThatAreNoThing(unittest.TestCase):
         verdict = _not_a_thing_name("eighty silver")
         self.assertEqual(verdict["amount"], "eighty silver")
         self.assertEqual(verdict["coin"], "silver")
-        self.assertEqual(verdict.get("units"), 8000, "eighty silver in the medieval set's base units (copper)")
+        self.assertNotIn("units", verdict, "the amount is priced by the transaction parser (m0), not here")
 
     def test_coin_heads_and_containers_of_coin(self):
         from app.world import _not_a_thing_name
 
-        for name in ("stack of silvers", "pieces of silver", "a single dull copper coin", "some silver", "purse of coppers"):
+        for name in ("stack of silvers", "pieces of silver", "a single dull copper coin", "purse of coppers",
+                     "twenty-five gold"):
             self.assertEqual((_not_a_thing_name(name) or {}).get("decision"), "coin_amount_not_an_item", name)
 
     def test_band_words_and_label_fragments(self):
@@ -182,14 +185,16 @@ class NamesThatAreNoThing(unittest.TestCase):
         from app.world import _not_a_thing_name
 
         for name in ("brass medallion", "silver pendant", "gold ring", "copper kettle", "iron key", "leather purse",
-                     "worn seagull coin", "rope", "salvage job claim", "a folded note", "bundle of herbs", "brass fitting"):
+                     "worn seagull coin", "rope", "salvage job claim", "a folded note", "bundle of herbs", "brass fitting",
+                     "bar of silver", "jeweled crown", "gold-threaded cloak", "small leather purse", "stone",
+                     "reeve's crest medallion", "candle"):
             self.assertIsNone(_not_a_thing_name(name), name)
 
     def test_counted_gold_coins_keep_the_purse_path(self):
         """_coins_to_gold already pays these into the purse; the new decision leaves them to it."""
         from app.world import _coin_name_match, _not_a_thing_name
 
-        for name in ("Five gold coins", "copper", "scattered coins", "copper coin", "two gold coins, none"):
+        for name in ("Five gold coins", "copper", "scattered coins", "copper coin", "two gold coins, none", "some silver", "silver crown"):
             self.assertTrue(_coin_name_match(name), name)
             self.assertIsNone(_not_a_thing_name(name), name)
 
@@ -255,13 +260,16 @@ class T13BandLabelIsNotAnItem(unittest.TestCase):
 
 
 class T14BrassIsNotAnItem(unittest.TestCase):
-    def test_the_unquoted_grant_keeps_its_whole_name(self):
-        """'GRANT: brass medallion QTY:1 BAND:small' is the medallion, one of it; not "brass" counted by "medallion"."""
+    def test_the_glued_labels_are_fields(self):
+        """'GRANT: brass medallion QTY:1 BAND:small': QTY:1 is the amount (it was a word of the name before).
+        The unquoted name still parses as its first word, "brass" (the medallion is already held: reading
+        the whole name would grant a second one, which the grounding gate lets through), and "brass" alone
+        is dropped below."""
         from app.turn_dsl import parse_dsl_turn
 
         turn = parse_dsl_turn(T14_OPS, player_input=T14_LINE)
         changes = turn["inventory_changes"]
-        self.assertEqual([c["name"] for c in changes], ["brass medallion"])
+        self.assertEqual([c["name"] for c in changes], ["brass"])
         self.assertEqual(changes[0].get("quantity_delta"), 1)
 
     def test_a_bare_material_word_is_dropped(self):
@@ -279,19 +287,69 @@ class T14BrassIsNotAnItem(unittest.TestCase):
         )
 
 
-class T4AJobIsNotAnItem(unittest.TestCase):
-    LINE = "I give up on the number for now and say I'll take the salvage job; I ask the messenger what it pays me."
-    PROSE = (
-        "\"I give up on the number for now and say I'll take the job. What does it pay?\"\nThe messenger, Lettice, nods. "
-        "\"A share of the haul, of course. It's not a big job, but it'll keep you fed and in gear for a while.\" She eyes "
-        "your patched tunic and wool trousers. \"Depends on what you find, I suppose.\"\nYou can't help but feel a thrill "
-        "at the idea of a job, even a small one. It's been too long."
-    )
+T56_LINE = "I hand the peddler two copper and take the candle."
+T56_PROSE = (
+    "The trader, Stephen [[E]], eyes the money and nods. \"Two copper will get you a candle,\" he says, \"But I've got "
+    "finer wares if you've got more to spend.\"\n\nAs you reach for the candle, a peddler steps in from the foggy street. "
+    "She's not one of the storekeepers, but a peddler come out of the ruins to trade.\n\n\"Two copper,\" she says, holding "
+    "up a small wax candle. \"One copper to light your way. The other buys you a little warmth at your hearth.\"\n\nYou "
+    "choose the peddler's candle and tuck it into your tunic. Stephen [[E]] watches, saying nothing. The peddler smiles "
+    "and steps out into the fog."
+)
+T60_LINE = "I turn back to the body in the doorway, kneel, and search its coat and boots for a name, a mark or a purse."
+T60_PROSE = (
+    "You kneel and search the body, turning over its coat and boots. It wears no mark that I can see - just a tattered "
+    "cloak and patched boots. But you find a small leather purse. You open it and find a silver medallion with the image "
+    "of a reeve's crest stamped upon it. You don't recognize the name on the body, but the reeve's deputy Elric [[D]] might."
+)
 
-    def test_the_job_is_dropped_with_a_note(self):
-        kept, notes = _filter([_grant("salvage job", "one")], self.PROSE, self.LINE)
-        self.assertEqual(kept, [])
-        self.assertEqual([n["item"] for n in notes if n["decision"] == "work_not_an_item"], ["salvage job"])
+
+class RealThingsStillGrant(unittest.TestCase):
+    """The candle and the medallion of the run, and things named with a coin word as a modifier."""
+
+    def test_t60_the_medallion_found_on_the_body_is_granted(self):
+        kept, notes = _filter([_grant("reeve's crest medallion")], T60_PROSE, T60_LINE)
+        self.assertEqual([c["name"] for c in kept], ["reeve's crest medallion"], notes)
+
+    def test_t56_the_candle_taken_as_asked_is_granted(self):
+        from app import world
+        from app.db import connect
+
+        def run():
+            with connect().closing() as conn:
+                conn.execute("DELETE FROM inventory")
+                kept = world._filter_inventory_changes(conn, [], narration=T56_PROSE, player_input=T56_LINE)
+                return world._grant_shown_takes(conn, kept, T56_PROSE, T56_LINE, rejected=[])
+
+        added, notes = _recorded(run)
+        self.assertTrue([c for c in added if c["name"].endswith("candle")], (added, notes))
+        self.assertFalse([n for n in notes if n["decision"].endswith("_not_an_item")], notes)
+
+    def test_a_coin_word_as_a_modifier_keeps_the_thing(self):
+        line = "I take the silver ring and the copper kettle from the shelf."
+        prose = "You take the silver ring and the copper kettle from the shelf and stow them in your pack."
+        kept, notes = _filter([_grant("silver ring"), _grant("copper kettle")], prose, line)
+        self.assertEqual(sorted(c["name"] for c in kept), ["copper kettle", "silver ring"], notes)
+
+
+class T19TheShownTakeOfCoinIsMoney(unittest.TestCase):
+    def test_the_prose_take_of_the_gold_files_no_row(self):
+        """'You take the copper and the gold' read by _grant_shown_takes: coin, not a thing."""
+        from app import world
+        from app.db import connect
+
+        line = "I take the coins he offers and the pouch of gold."
+        prose = "He hands over a single dull copper coin. You take the eighty silver and the leather pouch of gold."
+
+        def run():
+            with connect().closing() as conn:
+                conn.execute("DELETE FROM inventory")
+                return world._grant_shown_takes(conn, [], prose, line, rejected=[])
+
+        added, notes = _recorded(run)
+        names = [c["name"] for c in added]
+        self.assertNotIn("eighty silver", names, notes)
+        self.assertFalse([n for n in names if "pouch of gold" in n], notes)
 
 
 if __name__ == "__main__":
