@@ -10513,6 +10513,83 @@ def _same_place_name(a: str, b: str) -> bool:
     return len(small) >= 2 and small <= big
 
 
+def _singular_word(word: str) -> str:
+    """"marshes" -> "marsh", "docks" -> "dock", "flats" -> "flat"; "pass" stays."""
+    w = str(word or "").lower()
+    if len(w) > 4 and w.endswith("es") and re.search(r"(?:sh|ch|x|s|z)es$", w):
+        return w[:-2]
+    if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        return w[:-1]
+    return w
+
+
+def _clean_place_name(name: str) -> str:
+    """A place name without the sentence around it: no closing stop or quote marks, one space between words."""
+    text = " ".join(str(name or "").split())
+    return re.sub(r"^[\"'“‘\s]+|[\s\"'”’.,;:!?]+$", "", text)
+
+
+def _place_family_ids(conn) -> set[int]:
+    """The place the player stands in, its parent, its children and its siblings: one spot on the map."""
+    row = conn.execute(
+        "SELECT l.id, l.parent_id FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+    ).fetchone()
+    if row is None:
+        return set()
+    here, parent = int(row["id"]), int(row["parent_id"] or 0)
+    ids = {here} | ({parent} if parent else set())
+    for pid in {here, parent} - {0}:
+        ids |= {int(r["id"]) for r in conn.execute("SELECT id FROM locations WHERE parent_id = ?", (pid,)).fetchall()}
+    return ids
+
+
+def _new_place_against_roster(conn, name: str, result: dict[str, Any], narration: str) -> str | None:
+    """Check a draft's new place (LOC_NEW) against the places on record before it is minted.
+
+    None lets it go on to the usual rules. Otherwise it is not minted and the
+    reason is noted: ``matched`` (its words are an existing place's at this spot,
+    by head noun and plural: "The Marshes" beside "The Deep Marsh"),
+    ``ambiguous`` (two such places: resolves to nothing), ``ground`` (stage1 T6:
+    "The marshes." while the player crouched in the reeds at The Shore: a name the
+    draft and the prose both write in lower case, whose head noun is a word for
+    ground or terrain (_GROUND_WORDS), on a turn that does not go there, is the
+    ground the player stands on and resolves to the current place). Any other
+    lower-case name ("the old mill") files as a place as before.
+    """
+    if _match_location_by_name(conn, name) is not None:
+        return None
+    bare = re.sub(r"^(?:the|a|an)\s+", "", name, flags=re.I)
+    patch = result.get("player") if isinstance(result.get("player"), dict) else {}
+    move = _clean_place_name(str(patch.get("move_to_location") or "")).lower()
+    if move and move in {name.lower(), bare.lower(), f"the {bare.lower()}"}:
+        return None  # the turn goes there: the movement rules own it
+    words = [_singular_word(w) for w in _place_words(name)]
+    if words:
+        family = _place_family_ids(conn)
+        found = []
+        for row in conn.execute("SELECT id, name FROM locations").fetchall():
+            if int(row["id"]) not in family:
+                continue
+            known = [_singular_word(w) for w in _place_words(str(row["name"] or ""))]
+            if known and known[-1] == words[-1] and set(words) <= set(known):
+                found.append(str(row["name"] or ""))
+        if len(found) == 1:
+            turn_ledger.note("place", "place_matched_existing", name=name, known=found[0])
+            return "matched"
+        if len(found) > 1:
+            turn_ledger.note("place", "place_near_duplicate_dropped", name=name, known=found[:4])
+            return "ambiguous"
+    if bare and words and not any(ch.isupper() for ch in bare) and words[-1] in _GROUND_HEADS:
+        titled = " ".join(w[:1].upper() + w[1:] for w in bare.split())
+        if not re.search(rf"\b{re.escape(titled)}\b", _unspoken(narration or "")):
+            row = conn.execute(
+                "SELECT l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+            ).fetchone()
+            turn_ledger.note("place", "place_is_the_ground_here", name=name, here=str(row[0] or "") if row else "")
+            return "ground"
+    return None
+
+
 _AT_PLACE_RE = re.compile(
     r"\b(?:at|inside|in)\s+(?:the\s+)?(?P<place>[A-Z][\w'’-]*(?:\s+(?:of\s+the\s+|of\s+)?[A-Z][\w'’-]*){0,4})"
     r"(?=\s*(?:[,.;:!?]|$)|\s+(?:that|and|to|for|about|whether|if|where|what|who|how|with|before|after|so)\b)",
@@ -11054,7 +11131,52 @@ def _movement_intent(conn, player_input: str) -> str:
     return primary
 
 
+# The turn resolve_movement is reading, so the place-request readers below can
+# tell a person this turn settled or filed from a place (stage1 T4: "I walk back
+# to Dale" made a place "The Dale" while the kind ask had settled Dale as the
+# swineherd the prose shows). Set only for the length of one resolve_movement.
+_MOVEMENT_TURN: ContextVar[dict[str, Any] | None] = ContextVar("_MOVEMENT_TURN", default=None)
+
+
 def resolve_movement(
+    conn,
+    result: dict[str, Any],
+    player_input: str,
+    *,
+    intent: str,
+    narration: str,
+) -> dict[str, Any]:
+    """Fill in a MOVE the model forgot (see _resolve_movement), with this turn's result in reach of the place readers."""
+    token = _MOVEMENT_TURN.set(result if isinstance(result, dict) else None)
+    try:
+        return _resolve_movement(conn, result, player_input, intent=intent, narration=narration)
+    finally:
+        _MOVEMENT_TURN.reset(token)
+
+
+def _destination_is_a_person(conn, name: str) -> bool:
+    """A destination read from the player's line names a person: on the roster (whole name or first name), or
+    settled as a person / filed as a new person by this turn (the kind ask, the draft's people)."""
+    key = re.sub(r"^(?:the|a|an)\s+", "", " ".join(str(name or "").split()).strip(" .,;:!?"), flags=re.I).lower()
+    if not key:
+        return False
+    names = {str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
+    turn = _MOVEMENT_TURN.get()
+    if isinstance(turn, dict):
+        from app import entity_kinds
+
+        if entity_kinds.settled_person(turn, key) or entity_kinds.settled_person(turn, name):
+            return True
+        names |= {
+            str(p.get("name") or "").lower()
+            for p in turn.get("npcs") or []
+            if isinstance(p, dict) and str(p.get("name") or "").strip()
+        }
+    names.discard("")
+    return key in names or key in {n.split()[0] for n in names}
+
+
+def _resolve_movement(
     conn,
     result: dict[str, Any],
     player_input: str,
@@ -11846,6 +11968,17 @@ _OUTDOOR_AREA_WORDS = (
     "square", "market", "marketplace", "green", "beach", "shore", "shoreline", "strand", "pier", "jetty",
     "causeway", "marsh", "marshes", "saltmarsh", "breakwater", "seawall", "sea wall", "mole", "slipway",
 )
+# Words for the ground or terrain a player stands on, not a place by name: a
+# lower-case LOC_NEW headed by one, on a turn that does not go there, is the
+# ground here (stage1 T6: "The marshes." among the reeds at The Shore). Held as
+# singular heads (_singular_word), so "marshes", "fields" and "woods" match.
+_GROUND_WORDS = (
+    "marsh", "saltmarsh", "reed", "mud", "mudflat", "flat", "shore", "shoreline", "strand", "beach", "sand",
+    "dune", "field", "meadow", "grass", "grassland", "heath", "moor", "bog", "fen", "swamp", "road", "path",
+    "track", "trail", "wood", "tree", "forest", "hill", "slope", "water", "river", "stream", "bank", "yard",
+    "ground", "earth", "rock", "stone", "cliff", "wild", "wilderness",
+)
+_GROUND_HEADS = frozenset(_singular_word(w) for w in _GROUND_WORDS)
 _OUTDOOR_AREA_RE = re.compile(
     r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|come|get|"
     r"cross\w*|wander\w*|march\w*|step\w*|climb\w*)\s+(?:(?:back|over|down|up|across|out|along|straight|onto|on)\s+){0,2}"
@@ -11932,7 +12065,9 @@ def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -
     rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
     for row in rows:
         words = re.findall(r"[a-z]+", humanize_place_name(str(row["name"] or "")).lower())
-        if words and (words[-1] == head or words[-1].rstrip("s") == head.rstrip("s")) and not str(row["kind"] or ""):
+        # By the head noun, plural or not: "marshes" is "marsh" (stage1 T6).
+        if words and (words[-1] == head or words[-1].rstrip("s") == head.rstrip("s")
+                      or _singular_word(words[-1]) == _singular_word(head)) and not str(row["kind"] or ""):
             turn_ledger.note("movement", "outdoor_area_requested", place=str(row["name"] or ""), made=False)
             return str(row["name"] or "")
     # "the dockworkers" among the pilings names the docks (8B run 13, T3).
@@ -12035,9 +12170,10 @@ def _named_building_requested(conn, parent_id: int, wanted: str, narration: str)
     tail = re.match(rf"\s+({words})s?\b", wanted[match.end(1):], re.I)
     if tail:
         proper = f"{proper} {' '.join(w[:1].upper() + w[1:] for w in tail.group(1).split())}"
-    people = {str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
-    first_names = {p.split()[0] for p in people if p}
-    if proper.lower() in people or proper.lower() in first_names:
+    # A walk to a person is no place request (stage1 T4: "I walk back to Dale"
+    # with Dale the swineherd filed from this turn's prose made "The Dale").
+    if _destination_is_a_person(conn, proper):
+        turn_ledger.note("movement", "destination_is_a_person", name=proper)
         return ""
     rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
     for row in rows:
@@ -25430,6 +25566,14 @@ def apply_turn(
                 continue
             if location.get("_venue_consumed"):
                 continue  # already opened as the venue the player went into (playtest #50)
+            # A place name is a name: no sentence's full stop on it (stage1 T6:
+            # LOC_NEW "The marshes." filed with the period).
+            loc_name = _clean_place_name(loc_name)
+            if not loc_name:
+                continue
+            new_place_check = _new_place_against_roster(conn, loc_name, result, narration)
+            if new_place_check is not None:
+                continue
             # A person is not a place (#155, the reverse): a new place under a
             # roster person's name that the kind ask settled as that person.
             if _match_location_by_name(conn, loc_name) is None:

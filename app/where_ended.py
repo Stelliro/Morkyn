@@ -441,6 +441,22 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
             out["follow"] = report["follow"]
         return out
 
+    # A place the player's line asked for, read from the line by the engine, is
+    # not made over a checked "still here" (stage1 T4: "still in Back Stable
+    # Yard", confirmed, and the venue rule stood the player in "The Dale"). The
+    # place stays on record for the player to go to; the move is held, as the
+    # ask-before-move design offers a move instead of making it.
+    if status == "repaired" and rule == "venue_requested" and choice["kind"] == "here":
+        dest = _destination_row(conn, patch)
+        held = str(dest["name"] or "") if dest is not None else str(report.get("destination") or "")
+        turn_ledger.note("movement", "move_held_where_ended_confirmed", destination=held, answer=choice["label"])
+        patch["move_to_location"] = None
+        patch["move_to_location_code"] = None
+        result["map_walk"] = None
+        return {"status": "dropped_unshown", "from": report.get("from"), "destination": held,
+                "rule": "where_ended_here", "dropped_rule": rule, "held_offer": held,
+                "where_ended": report["where_ended"], "where_ended_choice": report["where_ended_choice"]}
+
     # The draft's own MOVE, a walk into a building, a map walk: their rules
     # stand. A different answer is kept for measurement.
     dest = _destination_row(conn, patch) if status in {"model", "repaired"} else None
