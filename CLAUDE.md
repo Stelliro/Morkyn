@@ -272,8 +272,11 @@ belong to, with the date).
 - **Models.** Stell (2026-10-23) chose **Hermes 3 (Llama 3.1 8B, Q4_K_M)** as the model to
   move to: "lets go with llama 3.1 ... expecting less and getting more is our goal anyway".
   It is the recommended entry of the one-click catalog (app/model_catalog.py), installed on the
-  Pop!_OS machine in `~/.local/share/morkyn/data/mle-models/`; it has no 8B-run baseline yet.
-  The runs so far were measured on Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf` on
+  Pop!_OS machine in `~/.local/share/morkyn/data/mle-models/`. Its baseline is the 100-turn
+  Saltmarrow run of 2026-10-24 (docs/showcase/hermes-base100-findings-2026-10-24.md): median turn
+  11.0 s, no fallbacks, 176 fault rows in 100 turns, led by money read from the model's die rather
+  than the prose, people rebound between rows, creatures never filed, and jobs never filed.
+  The earlier long runs were measured on Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf` on
   Windows; also in the catalog), so compare Hermes against that. Check `/api/model-status` →
   `file` to see which GGUF actually loaded. On the RTX 4070 Ti a turn takes about 10-40 s on the 8B and about 15 s on
   the 7B; a retry costs 30-80 s and usually returns nothing better.
