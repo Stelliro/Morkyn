@@ -289,6 +289,9 @@ belong to, with the date).
   moved by a scene in 100 turns, jobs were filed and completed, creatures still got no row and two
   blows hit a bystander. Run it with `tools/harness_with_packs.py` (the Linux .venv has no llama_cpp;
   the wrapper puts the installed CUDA pack on the path) and watch at http://127.0.0.1:8790/.
+  Its five fault classes (F192-F196) were fixed from the recorded turns on 2026-10-25 (Opus agents,
+  tests/test_sonnet100_*.py) and are not yet checked on the 8B: Stell asked for no 8B runs until
+  they say so.
   The earlier long runs were measured on Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf` on
   Windows; also in the catalog), so compare Hermes against that. Check `/api/model-status` →
   `file` to see which GGUF actually loaded. On the RTX 4070 Ti a turn takes about 10-40 s on the 8B and about 15 s on
@@ -312,11 +315,12 @@ belong to, with the date).
   `.closing()` block. tests/test_db_connections_close.py keeps bare blocks out of app/.
 - **Never touch the live `data/`** from tests, probes or servers. There is no single data-dir
   setting; use `tools/playtest_setup_presets.isolated_data_env(dir)` with absolute paths.
-- **Line endings are mixed.** (CHANGELOG.md is LF as of 2026-10-25.) README.md, docs/PLAYTEST_ISSUES.md, docs/TODO_NEXT.md,
-  app/world.py, app/llm.py, app/main.py, app/skill_checks.py, app/conversation.py,
-  app/narration_pipeline.py, app/turn_dsl.py, app/prompts.py, app/player_resources.py,
-  app/quest_parser.py, static/styles.css and static/index.html are CRLF (checked 2026-10-18);
-  static/app.js, CLAUDE.md, the showcase docs and most tests are LF. Check with `file` before a
+- **Line endings are mixed.** As of 2026-10-25: docs/TODO_NEXT.md, app/skill_checks.py,
+  app/turn_dsl.py, app/prompts.py, app/player_resources.py and static/styles.css are CRLF;
+  README.md, CHANGELOG.md, CLAUDE.md, docs/PLAYTEST_ISSUES.md, app/world.py, app/llm.py,
+  app/main.py, app/conversation.py, app/narration_pipeline.py, app/quest_parser.py,
+  app/interpreter.py, app/attack_line.py, app/attack_intent.py, app/unnamed.py, static/app.js,
+  static/index.html, the showcase docs and most tests are LF. Check with `file` before a
   scripted edit; a file can have changed sides since this list was written. Edit with the Edit
   tool or a byte-level, EOL-preserving script that reads bytes and keeps the file's own EOL.
   Never sed, and never `git stash` (autocrlf rewrites files).
