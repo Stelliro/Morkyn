@@ -106,7 +106,8 @@ _JOB_RE = re.compile(
 # words the job list has never seen (playtest #81: "any work i can do?" was
 # answered with an offer on T10, and nothing read it).
 _ASKS_WORK_RE = re.compile(
-    r"\b(?:any|some|a|the|honest|paying|more) (?:work|jobs?|tasks?|errands?|employment)\b|"
+    # "a contract I could run" (base100 T11): a contract is work asked for.
+    r"\b(?:any|some|a|the|honest|paying|more) (?:work|jobs?|tasks?|errands?|employment|contracts?)\b|"
     # Asked of the other person: "do you need a hand", "you wanted an extra set
     # of hands" (T11). "I need a hand finding the inn" is not asking for work.
     r"\b(?:you|ya)\s+(?:\w+\s+)?(?:need|needs|want|wanted|use) (?:a |an |an extra |another |some |any )?"

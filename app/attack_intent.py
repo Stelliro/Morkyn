@@ -306,6 +306,11 @@ def object_nouns(line: str) -> list[str]:
         j = i + 1
         while j < len(tokens) and re.fullmatch(r"[a-z][a-z'’-]*", tokens[j]) and tokens[j] not in _PHRASE_END \
                 and not _is_determiner(tokens[j]):
+            if words and _participle(tokens[j]) and j + 1 < len(tokens) and re.fullmatch(r"[a-z][a-z'’-]*", tokens[j + 1]):
+                # A participle after the noun with its own words after it ends the phrase: "the dire
+                # wolf circling us in the fog" is about the wolf (base100 T24 read "us"); "the ghoul
+                # lunging at you" about the ghoul. "the old building" keeps its head.
+                break
             words.append(tokens[j])
             j += 1
             if re.search(r"['’]s$", words[-1]):
@@ -319,10 +324,52 @@ def object_nouns(line: str) -> list[str]:
 
 
 _DETERMINER_WORDS = frozenset(_DETERMINERS.split("|")) - {r"\d+"}
+# Where one act of the line ends and another begins (grammar, as app/unnamed.player_objects splits).
+_LINE_CLAUSE_RE = re.compile(r"[,;:.!?]|\b(?:and|then|but)\b", re.I)
 
 
 def _is_determiner(token: str) -> bool:
     return token in _DETERMINER_WORDS or token.isdigit()
+
+
+def _participle(token: str) -> bool:
+    """An -ing verb form: a vowel in its stem ("circling", "lunging"; not "thing", "king", "ping")."""
+    low = str(token or "").lower()
+    return low.endswith("ing") and len(low) > 5 and bool(re.search(r"[aeiouy]", low[:-3]))
+
+
+def attack_clauses(line: str) -> list[str]:
+    """The clauses of the player's line that hold the blow, by the engine's own trigger tables; [] when the whole line is one.
+
+    "I ignore Orabel and slash at the dire wolf circling us in the fog"
+    (base100 T24): the blow is "slash at the dire wolf ..."; Orabel stands in
+    the clause the line ignores her in. The melee and ranged patterns of
+    skill_checks.SKILL_TRIGGER_PATTERNS, which rolled the check, say which
+    clause it was read from. Empty when no clause matches on its own or every
+    clause does (one act, or the tables did not fire): the whole line is read.
+    """
+    from app.interpreter import plain
+
+    text = plain(line)
+    clauses = [c.strip() for c in _LINE_CLAUSE_RE.split(text) if c and c.strip()]
+    if len(clauses) < 2:
+        return []
+    try:
+        from app.skill_checks import SKILL_TRIGGER_PATTERNS, _trigger_text_variants
+
+        patterns = [p for p, code in SKILL_TRIGGER_PATTERNS if code in ATTACK_SKILLS]
+    except Exception:
+        return []
+    found: list[str] = []
+    for clause in clauses:
+        low = clause.lower()
+        try:
+            variants = _trigger_text_variants(low, protect_others=False)
+        except Exception:
+            variants = [low]
+        if any(re.search(p, v) for p in patterns for v in variants):
+            found.append(clause)
+    return found if 0 < len(found) < len(clauses) else []
 
 
 def _title_words() -> frozenset[str]:
@@ -369,11 +416,28 @@ def line_names_person(line: str, person: dict[str, Any]) -> bool:
 
 
 def _kind_of(person: dict[str, Any]) -> str:
-    """The figure's kind from the row's kind column, singular and lower ("Ghoul 1" -> "ghoul"); "" for a named person."""
+    """The figure's kind from the row's kind column, its head noun singular and lower ("Dire Wolf 1" -> "wolf"); "" for a named person."""
+    from app.unnamed import kind_head
+
+    return kind_head(person.get("kind"))
+
+
+def _kinds_of(person: dict[str, Any]) -> set[str]:
+    """The kind column as the line may name it: its head and the whole ("wolf", "dire wolf")."""
     from app.unnamed import singular
 
     kind = str(person.get("kind") or "").strip().lower()
-    return singular(kind) if kind else ""
+    return {_kind_of(person), singular(kind) if kind else ""} - {""}
+
+
+def shown_kinds(*texts: Any) -> set[str]:
+    """The creature kinds these texts (the last turn's prose, this turn's) show acting; see unnamed.shown_kinds."""
+    try:
+        from app.unnamed import shown_kinds as _shown
+
+        return _shown(*texts)
+    except Exception:
+        return set()
 
 
 def _role_words(person: dict[str, Any]) -> tuple[str, set[str]]:
@@ -418,7 +482,7 @@ def _is_fixture(noun: str) -> bool:
 def kind_figures(line: str, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The living numbered figures whose kind the line names as a thing ("the ghoul", "another ghoul"), lowest number first."""
     from app.interpreter import is_dead
-    from app.unnamed import numbered_name, singular
+    from app.unnamed import numbered_name
 
     nouns = set(object_nouns(line))
     if not nouns:
@@ -428,10 +492,31 @@ def kind_figures(line: str, people: list[dict[str, Any]]) -> list[dict[str, Any]
         if not isinstance(person, dict) or is_dead(person):
             continue
         _name, kind = numbered_name(person)
-        if kind and singular(kind.lower()) in nouns:
+        if kind and _kinds_of(person) & nouns:
             out.append(person)
     out.sort(key=lambda p: int(p.get("kind_number") or 0))
     return out
+
+
+def unknown_creature(line: str, people: list[dict[str, Any]] | None, shown: set[str] | None) -> str:
+    """The thing the line's blow names that the prose has shown acting and no one here is: "wolf", or "".
+
+    Positive evidence that the blow is at something other than the people
+    present (base100 T23-T24: "the dire wolf" with the wolf shown lunging the
+    turn before and no row for it), read from the attack's own clauses.
+    """
+    text = str(line or "")
+    if not text.strip() or not shown:
+        return ""
+    focus = " ".join(attack_clauses(text)) or text
+    known: set[str] = set()
+    for other in people or []:
+        if isinstance(other, dict):
+            known |= _kinds_of(other) | _role_words(other)[1]
+    for noun in [*object_nouns(focus), *object_nouns(text)]:
+        if noun in shown and noun not in known:
+            return noun
+    return ""
 
 
 def line_may_target(
@@ -439,35 +524,52 @@ def line_may_target(
     person: dict[str, Any],
     people: list[dict[str, Any]] | None = None,
     places: list[dict[str, Any]] | None = None,
+    shown: set[str] | None = None,
 ) -> bool:
     """Whether the player's line can mean this person as the one attacked.
 
-    Yes when the line names them: their code, their whole name, or any word
-    of their name that is not a title ("i shoot Theo in the chest" and "a
-    bullet in Theo's head" for Dr. Theo; "Sam" for Old Sam; "Iqbal"). Yes
-    when a thing the line names ("the X") is them: their kind column ("the
-    ghoul" for Ghoul 1) or the head noun of their job ("the doctor", "the
-    hunter" for a ghoul hunter). No only on positive evidence that the thing
-    named is something else: the kind of another living figure in ``people``
-    ("the ghoul" with Ghoul 1 here, for Tunde or for Carlos the ghoul hunter),
+    Read from the attack's own clauses (attack_clauses) when the line has
+    more than one act: "I ignore Orabel and slash at the dire wolf" names
+    Orabel where it ignores her, and the blow names a wolf, so she is not
+    whom it is at (base100 T24). Yes when the blow names them: their code,
+    their whole name, or any word of their name that is not a title ("i shoot
+    Theo in the chest" and "a bullet in Theo's head" for Dr. Theo; "Sam" for
+    Old Sam; "Iqbal"). Yes when a thing it names ("the X") is them: their
+    kind column ("the ghoul" for Ghoul 1, "the wolf" or "the dire wolf" for
+    Dire Wolf 1) or the head noun of their job ("the doctor", "the hunter"
+    for a ghoul hunter). No only on positive evidence that the thing named is
+    something else: the kind of another living figure in ``people`` ("the
+    ghoul" with Ghoul 1 here, for Tunde or for Carlos the ghoul hunter),
     another person's job there ("the doctor" for the ghoul, with Chiara the
-    doctor here), or nothing named but a place in ``places`` or scenery the
-    engine knows is never a person ("the lock", "at the clinic"; "the man by
-    the gate" is at the man). Anything else, a person pronoun, no thing at
-    all, or a noun the engine knows nothing about ("the bastard", "the creep",
-    "the doc", "the merc"), leaves them a possible target, as the trigger
-    tables aimed it.
+    doctor here), a creature the prose has shown acting and no one here is
+    (``shown``, from unnamed.shown_kinds over the last turn's prose and this
+    one's: "the dire wolf" with the wolf shown lunging, base100 T23), or
+    nothing named but a place in ``places`` or scenery the engine knows is
+    never a person ("the lock", "at the clinic"; "the man by the gate" is at
+    the man). Anything else, a person pronoun, no thing at all, or a noun
+    the engine knows nothing about ("the bastard", "the creep", "the doc",
+    "the merc"), leaves them a possible target, as the trigger tables aimed it.
     """
     text = str(line or "")
     if not text.strip() or not isinstance(person, dict):
         return False
+    phrase, heads = _role_words(person)
+    own = (_kinds_of(person) | heads) - {""}
+    focus = " ".join(attack_clauses(text))
+    if focus:
+        # The blow is one act of several. Named or meant by a pronoun only in another act
+        # ("I ignore Orabel and ...", "I shout at @E to get back, then stab at ..."), while the
+        # blow itself is at a thing that is not them: not whom it is at.
+        in_blow = line_names_person(focus, person) or _PERSON_PRONOUN_RE.search(focus)
+        aside = line_names_person(text, person) or _PERSON_PRONOUN_RE.search(text)
+        blow_nouns = set(object_nouns(focus))
+        if aside and not in_blow and blow_nouns and not (blow_nouns & own):
+            return False
     if line_names_person(text, person):
         return True
     nouns = set(object_nouns(text))
     if not nouns:
         return True
-    phrase, heads = _role_words(person)
-    own = ({_kind_of(person)} | heads) - {""}
     if nouns & own or (" " in phrase and re.search(rf"\b{re.escape(phrase)}s?\b", text, re.I)):
         return True
     # A person pronoun means someone here, whatever else the line goes on to name ("i snap her neck
@@ -483,10 +585,13 @@ def line_may_target(
             continue
         if code and str(other.get("code") or "").strip().upper() == code:
             continue
-        elsewhere.add(_kind_of(other))
+        elsewhere |= _kinds_of(other)
         elsewhere |= _role_words(other)[1]
     elsewhere.discard("")
     if nouns & elsewhere:
+        return False
+    # A creature the prose shows and the engine has no row for: the blow is at it, not at a bystander.
+    if nouns & (set(shown or ()) - own):
         return False
     # A place or scenery is where the shot goes only when nothing else is named: "the lock", "at the
     # clinic"; "the man by the gate" is at the man.
@@ -496,11 +601,15 @@ def line_may_target(
     return True
 
 
+Minter = Callable[[str], Any]
+
+
 def decide(
     model_input: str,
     context: dict[str, Any] | None,
     inferred: dict[str, Any] | None,
     ask: Ask | None,
+    minter: Minter | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """The attack check for this line, or None, and the report of the asks.
 
@@ -509,11 +618,14 @@ def decide(
     again: it is marked as the attack on that person, when the line can mean
     them (line_may_target). When it cannot ('i shoot the nearest ghoul' aimed
     at the one named person here), the figure of the kind the line names is
-    the target instead, and with none here the blow has no target from the
-    trigger. Otherwise each person here the line can mean is asked about, and
-    a confirmed target gets an attack check: the inferred melee / ranged check
-    aimed at them when there was one (returned with "replaces_inferred"), else
-    a new one.
+    the target instead; with none here and the thing named a creature the
+    last turn's prose shows acting (context["last_narration"]; base100 T23
+    "the dire wolf"), ``minter(kind)`` (the engine's unnamed.mint_shown) files
+    it and the blow is aimed at the new row; else the blow has no target from
+    the trigger, and the report names the noun ("unknown_noun"). Otherwise each
+    person here the line can mean is asked about, and a confirmed target gets
+    an attack check: the inferred melee / ranged check aimed at them when
+    there was one (returned with "replaces_inferred"), else a new one.
     """
     started = time.time()
     report: dict[str, Any] = {"asks": [], "unconfirmed": [], "target": None}
@@ -521,13 +633,15 @@ def decide(
     try:
         line = player_line(model_input)
         people = people_here(context)
+        ctx = context if isinstance(context, dict) else {}
+        shown = shown_kinds(ctx.get("last_narration"))
         if inferred and inferred.get("skill_code") in ATTACK_SKILLS:
             ref = inferred.get("npc_ref") if isinstance(inferred.get("npc_ref"), dict) else {}
             if ref.get("code"):
                 person = next(
                     (p for p in people if str(p.get("code") or "").upper() == str(ref.get("code")).upper()), None
                 ) or {**ref, "name": _clean(ref.get("name"))}
-                if line_may_target(line, person, people=people, places=_places_here(context)):
+                if line_may_target(line, person, people=people, places=_places_here(context), shown=shown):
                     inferred["attack"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
                     report["target"] = inferred["attack"]
                     report["from"] = "trigger"
@@ -544,13 +658,27 @@ def decide(
                     report["skill"] = check["skill_code"]
                     report["from"] = "kind"
                     return check, report
+                noun = unknown_creature(line, people, shown)
+                if noun:
+                    report["unknown_noun"] = noun
+                    minted = minter(noun) if minter is not None else None
+                    if isinstance(minted, dict) and minted.get("code"):
+                        check = attack_check(minted, inferred, context)
+                        check["replaces_inferred"] = True
+                        report["target"] = check["attack"]
+                        report["skill"] = check["skill_code"]
+                        report["from"] = "minted"
+                        return check, report
+                    # The roll stands with no target: no bystander takes it, and no line names one.
+                    return None, report
         if ask is None:
             report["skipped"] = "no_model"
             return None, report
         # The people the line can mean, the figures of the kind it names first.
         figures = kind_figures(line, people)
         places = _places_here(context)
-        people = [*figures, *[p for p in people if line_may_target(line, p, people=people, places=places) and p not in figures]]
+        people = [*figures, *[p for p in people if line_may_target(line, p, people=people, places=places, shown=shown)
+                              and p not in figures]]
         report["people"] = [p.get("code") for p in people]
         target = find_target(line, people, ask, report)
         if target is None:
