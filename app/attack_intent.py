@@ -135,6 +135,17 @@ def people_here(context: dict[str, Any] | None) -> list[dict[str, Any]]:
     return out[:MAX_PEOPLE]
 
 
+def _places_here(context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The place records the context carries (the player's place and the known places), for line_may_target."""
+    ctx = context if isinstance(context, dict) else {}
+    out: list[dict[str, Any]] = []
+    here = ctx.get("current_location")
+    if isinstance(here, dict):
+        out.append(here)
+    out.extend(p for p in ctx.get("locations") or [] if isinstance(p, dict))
+    return out
+
+
 def _dead_codes(ctx: dict[str, Any]) -> set[str]:
     found = ctx.get("the_dead") if isinstance(ctx.get("the_dead"), dict) else {}
     codes = {str(p.get("code") or "") for p in found.get("people") or [] if isinstance(p, dict)}
@@ -238,13 +249,20 @@ def attack_check(person: dict[str, Any], inferred: dict[str, Any] | None, contex
 # ---------------------------------------------------------------------------
 #
 # 'i shoot the nearest ghoul' was aimed at Tunde Iqbal, the one named person
-# here, and 'i shoot the closest ghoul' at Carlos Khan, a companion: the engine
-# took the only person present as the target of any attack line. The line's
-# own words decide instead. A named person is the target only when the line
-# names them, or describes them (their job: "the doctor"; a person word: "the
-# man", "the stranger"), or names no one ("i shoot him", "i attack"). A thing
-# the line names that is none of these ("the ghoul") is a figure of that kind
-# when one is here (app/unnamed.py: numbered rows), else nobody known.
+# here, and 'i shoot the closest ghoul' at Carlos Khan, a companion, while the
+# ghouls were on the roster: the engine took the only person present as the
+# target of any attack line. The line's own words decide instead, by what the
+# engine knows. A person is meant when the line names them (their code, any
+# word of their name that is not a title: "Theo" for Dr. Theo, "Sam" for Old
+# Sam, "Iqbal", "Theo's"), or names a thing that is them (a figure's kind
+# column: "the ghoul"; a person's job: "the doctor"). A person is NOT meant
+# only on positive evidence that the thing the line names is something else:
+# another living figure's kind here, another person's job, or nothing named
+# but a place or scenery the engine knows is never a person (a door, a lock). Any
+# other noun ("the bastard", "the creep", "the thing", "the doc", "the merc")
+# leaves the person a possible target, as the trigger tables aimed it: a
+# noun's absence from a list is never evidence (round 2 kept a person-word
+# list and refused 'i shoot the bastard' at the one person present).
 
 # What opens a noun phrase the line acts on. Possessives are left out: "my
 # crowbar" is the player's own thing, never the target.
@@ -256,45 +274,143 @@ _PHRASE_END = frozenset({
     "toward", "towards", "against", "over", "under", "behind", "near", "beside", "about", "off", "up",
     "down", "out", "away", "back", "across", "along", "onto", "upon", "without", "because",
 })
-# A pronoun in the line means someone here: "i snap her neck", "i put a bullet in his head".
-_PRONOUN_RE = re.compile(r"\b(?:him|her|his|hers|them|their|theirs|it|its)\b", re.I)
-# Words that mean whoever is meant, beside world._FIGURE_NOUNS (the engine's person words).
-_ANYONE_WORDS = frozenset({"guy", "gal", "lad", "lass", "bloke", "kid", "chap", "foe", "enemy", "attacker", "target"})
+# Scenery the engine never takes for a person (world._NAME_SCENERY_RE: door, gate,
+# window, ...) and the two fixtures the live lines shot at ("the lock", "the sign").
+_FIXTURE_WORDS = frozenset({"lock", "sign"})
+# A pronoun for a person: the line means someone here ("i snap her neck", "i put a bullet in his head").
+_PERSON_PRONOUN_RE = re.compile(r"\b(?:him|her|his|hers|them|their|theirs)\b", re.I)
 _PRONOUN_OBJECTS = frozenset({"him", "her", "them", "it", "himself", "herself", "itself", "themselves"})
 
 
 def object_nouns(line: str) -> list[str]:
     """The head nouns of the line's noun phrases, singular: 'i shoot the nearest ghoul with my crowbar' -> ['ghoul'].
 
-    A phrase opens on a determiner or a count and ends at a grammar word or
-    punctuation; its last word is the noun. "at the sound, maybe ghouls" gives
-    ["sound"]: the bare "ghouls" opens no phrase.
+    A phrase opens on a determiner or a count and ends at a grammar word,
+    punctuation, the next determiner or a possessive ("the ghoul's head" is
+    about the ghoul); its last word is the noun. "the ghouls and the raider"
+    gives ["ghoul", "raider"]; "at the sound, maybe ghouls" gives ["sound"]:
+    the bare "ghouls" opens no phrase.
     """
     from app.interpreter import plain
     from app.unnamed import singular
 
     text = plain(line).lower()
+    tokens = re.findall(r"[a-z0-9][a-z0-9'’-]*|[^\sa-z0-9]", text)
     out: list[str] = []
-    for match in re.finditer(rf"\b(?:{_DETERMINERS})\s+([a-z][a-z'’-]*(?:\s+[a-z][a-z'’-]*)*)", text):
+    i = 0
+    while i < len(tokens):
+        if not _is_determiner(tokens[i]):
+            i += 1
+            continue
         words: list[str] = []
-        for word in match.group(1).split():
-            if word in _PHRASE_END:
+        j = i + 1
+        while j < len(tokens) and re.fullmatch(r"[a-z][a-z'’-]*", tokens[j]) and tokens[j] not in _PHRASE_END \
+                and not _is_determiner(tokens[j]):
+            words.append(tokens[j])
+            j += 1
+            if re.search(r"['’]s$", words[-1]):
                 break
-            words.append(word)
         if words:
             noun = re.sub(r"['’]s?$", "", words[-1])
             if noun:
                 out.append(singular(noun))
+        i = max(j, i + 1)
     return out
 
 
-def _is_person_word(noun: str) -> bool:
-    if noun in _ANYONE_WORDS:
+_DETERMINER_WORDS = frozenset(_DETERMINERS.split("|")) - {r"\d+"}
+
+
+def _is_determiner(token: str) -> bool:
+    return token in _DETERMINER_WORDS or token.isdigit()
+
+
+def _title_words() -> frozenset[str]:
+    """The titles a roster name may open on (world._TITLE_WORDS, #163: "Dr. Theo" is Theo), lower case, no dot."""
+    try:
+        from app.world import _TITLE_WORDS
+
+        return frozenset(_TITLE_WORDS)
+    except Exception:
+        try:
+            from app.narration_pipeline import _TITLE_ABBREVIATIONS
+
+            return frozenset(t.lower() for t in _TITLE_ABBREVIATIONS)
+        except Exception:
+            return frozenset()
+
+
+def name_words(person: dict[str, Any]) -> list[str]:
+    """The words of a roster name that name the person: the titles in front taken off ("Dr. Theo" -> ["Theo"],
+    "Old Sam" -> ["Sam"], "Tunde Iqbal" -> ["Tunde", "Iqbal"]); a lone word is left alone; numbers and two-letter
+    words are not names. A figure still under its number ("Ghoul 1") has no name words: it is meant by its kind
+    (two ghouls share the word, and "the ghoul" is one of them, lowest first: kind_figures)."""
+    from app.unnamed import numbered_name
+
+    if numbered_name(person)[0]:
+        return []
+    words = [w.strip(".,;:'’\"") for w in _clean(person.get("name")).split()]
+    words = [w for w in words if w]
+    titles = _title_words()
+    while len(words) > 1 and words[0].lower() in titles:
+        words.pop(0)
+    return [w for w in words if len(w) >= 3 and not w.isdigit()]
+
+
+def line_names_person(line: str, person: dict[str, Any]) -> bool:
+    """The player's line names this person: their code (@A, [[A]]), their whole name, or any word of it as a word
+    ("Theo", "Theo's", "Iqbal"; never "Theo" inside "Theodora")."""
+    from app.interpreter import line_names
+
+    text = str(line or "")
+    if line_names(text, person):
+        return True
+    return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text, re.I) for word in name_words(person))
+
+
+def _kind_of(person: dict[str, Any]) -> str:
+    """The figure's kind from the row's kind column, singular and lower ("Ghoul 1" -> "ghoul"); "" for a named person."""
+    from app.unnamed import singular
+
+    kind = str(person.get("kind") or "").strip().lower()
+    return singular(kind) if kind else ""
+
+
+def _role_words(person: dict[str, Any]) -> tuple[str, set[str]]:
+    """The role as a phrase and its head noun, singular: "ghoul hunter" -> ("ghoul hunter", {"hunter"}).
+
+    A role is matched on its head noun, never on every word in it: a "ghoul
+    hunter" is "the hunter", not "the ghoul" (the kind of a figure is its kind
+    column, never a word of someone else's job).
+    """
+    from app.unnamed import singular
+
+    words = re.findall(r"[a-z]+", str(person.get("role") or "").lower())
+    if not words:
+        return "", set()
+    return " ".join(words), {singular(words[-1])}
+
+
+def _place_heads(places: list[dict[str, Any]] | None) -> set[str]:
+    from app.unnamed import singular
+
+    out: set[str] = set()
+    for place in places or []:
+        if not isinstance(place, dict):
+            continue
+        words = re.findall(r"[a-z]+", str(place.get("name") or "").lower())
+        if words and len(words[-1]) >= 3:
+            out.add(singular(words[-1]))
+    return out
+
+
+def _is_fixture(noun: str) -> bool:
+    if noun in _FIXTURE_WORDS:
         return True
     try:
-        from app.world import _FIGURE_NOUNS
+        from app.world import _NAME_SCENERY_RE
 
-        return re.fullmatch(_FIGURE_NOUNS, noun, re.I) is not None
+        return _NAME_SCENERY_RE.fullmatch(noun) is not None
     except Exception:
         return False
 
@@ -318,35 +434,66 @@ def kind_figures(line: str, people: list[dict[str, Any]]) -> list[dict[str, Any]
     return out
 
 
-def line_may_target(line: str, person: dict[str, Any]) -> bool:
+def line_may_target(
+    line: str,
+    person: dict[str, Any],
+    people: list[dict[str, Any]] | None = None,
+    places: list[dict[str, Any]] | None = None,
+) -> bool:
     """Whether the player's line can mean this person as the one attacked.
 
-    Yes when the line names them (code, full name, or first name as a word),
-    names no thing at all ("i shoot him", "i attack"), or names a thing that
-    is them: a numbered figure's kind ("the ghoul"), a named person's job
-    ("the doctor"), a word of their name, or a person word ("the man"). No
-    when every thing the line names is something else ("the nearest ghoul"
-    with only Tunde the hunter here).
+    Yes when the line names them: their code, their whole name, or any word
+    of their name that is not a title ("i shoot Theo in the chest" and "a
+    bullet in Theo's head" for Dr. Theo; "Sam" for Old Sam; "Iqbal"). Yes
+    when a thing the line names ("the X") is them: their kind column ("the
+    ghoul" for Ghoul 1) or the head noun of their job ("the doctor", "the
+    hunter" for a ghoul hunter). No only on positive evidence that the thing
+    named is something else: the kind of another living figure in ``people``
+    ("the ghoul" with Ghoul 1 here, for Tunde or for Carlos the ghoul hunter),
+    another person's job there ("the doctor" for the ghoul, with Chiara the
+    doctor here), or nothing named but a place in ``places`` or scenery the
+    engine knows is never a person ("the lock", "at the clinic"; "the man by
+    the gate" is at the man). Anything else, a person pronoun, no thing at
+    all, or a noun the engine knows nothing about ("the bastard", "the creep",
+    "the doc", "the merc"), leaves them a possible target, as the trigger
+    tables aimed it.
     """
-    from app.interpreter import line_names
-    from app.unnamed import numbered_name, singular
-
     text = str(line or "")
     if not text.strip() or not isinstance(person, dict):
         return False
-    if line_names(text, person):
+    if line_names_person(text, person):
         return True
-    first = str(person.get("name") or "").split()[0] if str(person.get("name") or "").strip() else ""
-    if len(first) >= 3 and re.search(rf"(?<!\w){re.escape(first)}(?!\w)", text, re.I):
+    nouns = set(object_nouns(text))
+    if not nouns:
         return True
-    nouns = object_nouns(text)
-    if not nouns or _PRONOUN_RE.search(text):
+    phrase, heads = _role_words(person)
+    own = ({_kind_of(person)} | heads) - {""}
+    if nouns & own or (" " in phrase and re.search(rf"\b{re.escape(phrase)}s?\b", text, re.I)):
         return True
-    _numbered, kind = numbered_name(person)
-    if kind:
-        return singular(kind.lower()) in nouns
-    described = {singular(w) for w in re.findall(r"[a-z]+", f"{person.get('role') or ''} {person.get('name') or ''}".lower()) if len(w) >= 3}
-    return any(noun in described or _is_person_word(noun) for noun in nouns)
+    # A person pronoun means someone here, whatever else the line goes on to name ("i snap her neck
+    # and burn the clinic", cc87dd29 T5); "it" / "its" is a creature's or a thing's and decides nothing.
+    if _PERSON_PRONOUN_RE.search(text):
+        return True
+    from app.interpreter import is_dead
+
+    code = str(person.get("code") or "").strip().upper()
+    elsewhere: set[str] = set()
+    for other in people or []:
+        if not isinstance(other, dict) or other is person or is_dead(other):
+            continue
+        if code and str(other.get("code") or "").strip().upper() == code:
+            continue
+        elsewhere.add(_kind_of(other))
+        elsewhere |= _role_words(other)[1]
+    elsewhere.discard("")
+    if nouns & elsewhere:
+        return False
+    # A place or scenery is where the shot goes only when nothing else is named: "the lock", "at the
+    # clinic"; "the man by the gate" is at the man.
+    scenery = _place_heads(places)
+    if all(n in scenery or _is_fixture(n) for n in nouns):
+        return False
+    return True
 
 
 def decide(
@@ -380,7 +527,7 @@ def decide(
                 person = next(
                     (p for p in people if str(p.get("code") or "").upper() == str(ref.get("code")).upper()), None
                 ) or {**ref, "name": _clean(ref.get("name"))}
-                if line_may_target(line, person):
+                if line_may_target(line, person, people=people, places=_places_here(context)):
                     inferred["attack"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
                     report["target"] = inferred["attack"]
                     report["from"] = "trigger"
@@ -402,7 +549,8 @@ def decide(
             return None, report
         # The people the line can mean, the figures of the kind it names first.
         figures = kind_figures(line, people)
-        people = [*figures, *[p for p in people if line_may_target(line, p) and p not in figures]]
+        places = _places_here(context)
+        people = [*figures, *[p for p in people if line_may_target(line, p, people=people, places=places) and p not in figures]]
         report["people"] = [p.get("code") for p in people]
         target = find_target(line, people, ask, report)
         if target is None:

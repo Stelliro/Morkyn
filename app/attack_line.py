@@ -282,6 +282,60 @@ def resolve(check: dict[str, Any], row: dict[str, Any], combat: Any, seed: str =
     }
 
 
+def follow_band(check: dict[str, Any], combat: Any) -> dict[str, Any] | None:
+    """The combat block already resolved on the attacked row by its own d20, corrected to the check's band.
+
+    One roll decides an attack (#129): world._combat_follows_attack_check does
+    this before the draft for a check aimed at the row; an untargeted check
+    matched to that row only after the draft (baseline T3: 'i shoot Marisol
+    [[A]]', failure, while the combat rolled a glancing hit) is corrected here.
+    The damage is the combat's own damage roll read against the band (0 on a
+    miss, halved on a graze); ``damage_applied_before`` is what the turn
+    already took off, so world.apply_turn moves the health by the difference.
+    None when they agree or there is nothing to correct.
+    """
+    if not isinstance(check, dict) or not isinstance(combat, dict) or combat.get("status") != "resolved_player_attack":
+        return None
+    resolution = combat.get("resolution") if isinstance(combat.get("resolution"), dict) else None
+    landed = lands_of(check)
+    if resolution is None or not landed or landed == str(resolution.get("outcome") or ""):
+        return None
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+    profile = target.get("combat_profile") if isinstance(target.get("combat_profile"), dict) else {}
+
+    def _int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    was = max(0, _int(resolution.get("damage")))
+    raw = max(1, _int(resolution.get("raw_damage_roll"), 1))
+    if landed == MISS:
+        damage = 0
+    else:
+        damage = max(1, raw - max(0, _int(profile.get("defense")) // 4))
+        if landed == GRAZE:
+            damage = max(1, damage // 2)
+    before = max(0, _int(resolution.get("target_health_before")))
+    top = max(before, _int(profile.get("max_health"), before))
+    after = max(0, min(before - damage, top))
+    out = dict(combat)
+    out["resolution"] = {
+        **resolution,
+        "outcome": landed,
+        "damage": damage,
+        "target_health_after": after,
+        "target_defeated": after == 0 and before > 0,
+        "decided_by": "attack_check_after_draft",
+        "combat_roll_outcome": str(resolution.get("outcome") or ""),
+        "damage_applied_before": was,
+    }
+    out["resolved_after_draft"] = True
+    out["reapplied_from_band"] = True
+    return out
+
+
 def combat_after_draft(combat: dict[str, Any], row: dict[str, Any], resolution: dict[str, Any]) -> dict[str, Any]:
     """The turn's combat block resolved on the target found after the draft (world applies it)."""
     profile = resolution.get("profile") if isinstance(resolution.get("profile"), dict) else {}

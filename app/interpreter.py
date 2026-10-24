@@ -1109,9 +1109,9 @@ def attacked_row(
     A check with a target (its "attack" record, app/attack_intent.py) is at
     that row, unless the row is dead (never a line on a body) or the line
     cannot mean them (attack_intent.line_may_target: 'i shoot the nearest
-    ghoul' recorded on Tunde, the one named person here): then the living
-    figure of the kind the line names is the target, and with none here
-    there is no target. A check with no target (merge1 T4, F186: 'i shoot
+    ghoul' recorded on Tunde, the one named person here, with a ghoul on the
+    roster): then the living figure of the kind the line names is the target,
+    and with none here there is no target. A check with no target (merge1 T4, F186: 'i shoot
     the closest ghoul' rolled before the ghouls were on the roster) is
     matched from the records only: a living person here the line names
     whole (one, or none), the check's own opposition by name when the line
@@ -1137,7 +1137,7 @@ def attacked_row(
         if is_dead(row):
             _note("attack_target_dead", code=code, name=str(row.get("name") or ""))
             return None
-        if not line.strip() or line_may_target(line, row):
+        if not line.strip() or line_may_target(line, row, people=living, places=match.places):
             return row
         figures = kind_figures(line, living)
         if figures:
@@ -1150,6 +1150,8 @@ def attacked_row(
         return None
     if not line.strip():
         return None
+    # Whole name or code only: a roll with no target is matched to a person the line names outright,
+    # never to a name merely mentioned ("i practice sword drills with Theo watching").
     whole = [r for r in living if line_names(line, r)]
     # "Theo" inside "Dr. Theo" is the longer name's mention (as the Matcher reads names).
     whole = [r for r in whole if not any(o is not r and _key(r) != _key(o) and _key(r) in _key(o) for o in whole)]
@@ -1159,7 +1161,7 @@ def attacked_row(
         return None
     opposition = check.get("opposition") if isinstance(check.get("opposition"), dict) else {}
     opposed = [r for r in living if _key(r) and _key(r) == _key({"name": clean_name(opposition.get("name"))})]
-    if len(opposed) == 1 and line_may_target(line, opposed[0]):
+    if len(opposed) == 1 and line_may_target(line, opposed[0], people=living, places=match.places):
         return opposed[0]
     figures = kind_figures(line, living)
     return figures[0] if figures else None
@@ -1227,6 +1229,21 @@ def show_attacks(
             # No hit line without the hit applied: the combat math follows the check on this row.
             already = isinstance(combat, dict) and combat.get("status") == "resolved_player_attack" \
                 and str(((combat.get("target") or {}) if isinstance(combat.get("target"), dict) else {}).get("code") or "").upper() == code
+            if already:
+                # One resolution per row (#129, one roll decides): the combat already resolved on this
+                # row by its own d20 is not resolved again. When its hit or miss is the band's, the
+                # line is theirs alike; when the two disagree, the check's band wins and the combat is
+                # corrected to it (baseline T3: 'i shoot Marisol [[A]]' rolled a failure, the combat
+                # a glancing hit), applied by world.apply_turn as the difference.
+                followed = attack_line.follow_band(check, combat)
+                if followed is not None:
+                    report["combat_after_draft"] = followed
+                    _note("combat_reresolved_from_band", code=code, check_outcome=outcome,
+                          was=str((combat.get("resolution") or {}).get("outcome") or ""), now=landed,
+                          damage=(followed.get("resolution") or {}).get("damage"),
+                          damage_applied_before=(followed.get("resolution") or {}).get("damage_applied_before"))
+                else:
+                    _note("attack_already_resolved", code=code, outcome=outcome, landed=landed)
             if not already:
                 resolution = attack_line.resolve(check, row, combat, str((records or {}).get("player_line") or ""))
                 if resolution is None or report.get("combat_after_draft"):

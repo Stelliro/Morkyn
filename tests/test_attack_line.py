@@ -247,19 +247,31 @@ class TheLiveTurns(unittest.TestCase):
         # His quoted "You almost hit me" is someone speaking, never the outcome.
         self.assertEqual(entry["state"], "unshown")
 
-    def test_unnamed_t3_the_check_recorded_on_tunde_is_not_the_lines_target_no_line(self):
+    def test_unnamed_t3_the_check_recorded_on_tunde_stands_with_no_ghoul_on_the_roster_and_gives_way_to_one(self):
+        # As recorded, no ghoul row exists: "the nearest ghoul" is no evidence against the one person
+        # present (a noun's absence from a list is never evidence; round 3), so the aimed check stands on him.
         records = _people(("A", "Tunde Iqbal"), line="i shoot the nearest ghoul", role="hunter", health=40, max_health=40)
+        out = _run(UNNAMED_T3, records, [_check("success", 18, "A", "Tunde Iqbal")])
+        self.assertEqual([(b["code"], b["aimed"]) for b in _beats(out)], [("A", True)])
+        # With a ghoul filed here the ghoul is the target and the line is never on Tunde.
+        records["people"].append(_ghoul("D", 1, here=0))
+        with Notes() as notes:
+            out = _run(UNNAMED_T3, records, [_check("success", 18, "A", "Tunde Iqbal")], COMBAT_NEEDS_TARGET)
+        self.assertEqual([(b["code"], b["aimed"]) for b in _beats(out)], [("D", False)])
+        self.assertIn("attack_retargeted", notes.events())
+        self.assertNotIn("Tunde Iqbal [[A]].", out["narration"])
+        # A thing the engine knows is not a person: no target, no line, a note.
+        records = _people(("A", "Tunde Iqbal"), line="i shoot the lock", role="hunter", health=40, max_health=40)
         with Notes() as notes:
             out = _run(UNNAMED_T3, records, [_check("success", 18, "A", "Tunde Iqbal")])
-        self.assertEqual(out["narration"], UNNAMED_T3)
-        self.assertEqual(_beats(out), [])
+        self.assertEqual((out["narration"], _beats(out)), (UNNAMED_T3, []))
         self.assertIn("attack_target_not_in_line", notes.events())
 
     def test_unnamed2_t3_carlos_the_companion_is_not_the_closest_ghoul(self):
         records = _people(("A", "Carlos Khan"), line="i shoot the closest ghoul", role="ranger", health=40, max_health=40)
         out = _run(UNNAMED2_T3, records, [_check("failure", 7, "A", "Carlos Khan")])
-        self.assertEqual(out["narration"], UNNAMED2_T3)
-        self.assertEqual(_beats(out), [])
+        # No ghoul on the roster: the word is no evidence and the aimed check stands (as main had it).
+        self.assertEqual([(b["code"], b["aimed"]) for b in _beats(out)], [("A", True)])
         # With a ghoul filed here, the line is aimed at the ghoul, not Carlos.
         records["people"].append(_ghoul("D", 1, here=0))
         out = _run(UNNAMED2_T3, records, [_check("failure", 7, "A", "Carlos Khan")], COMBAT_NEEDS_TARGET)
@@ -402,8 +414,14 @@ class TheTargetIsMatchedStrictly(unittest.TestCase):
     def test_a_named_person_is_the_target_only_when_the_line_names_or_describes_them(self):
         match = lambda r: I.Matcher(r["people"], r.get("places"))  # noqa: E731
         hunter = _people(("A", "Tunde Iqbal"), line="i shoot the nearest ghoul", role="hunter")
-        self.assertIsNone(I.attacked_row(_check("success", 18, "A", "Tunde Iqbal"), hunter, match(hunter)))
-        for line in ("i shoot Tunde", "i shoot the hunter", "i shoot him", "i shoot the man by the gate", "i shoot [[A]]", "i open fire"):
+        # No ghoul on the roster: the word is no evidence and the aimed check stands on him (round 3).
+        self.assertEqual(I.attacked_row(_check("success", 18, "A", "Tunde Iqbal"), hunter, match(hunter))["code"], "A")
+        with_ghoul = {**hunter, "people": [*hunter["people"], _ghoul("D", 1, here=0)]}
+        self.assertEqual(I.attacked_row(_check("success", 18, "A", "Tunde Iqbal"), with_ghoul, match(with_ghoul))["code"], "D")
+        locked = {**hunter, "player_line": "i shoot the lock"}
+        self.assertIsNone(I.attacked_row(_check("success", 18, "A", "Tunde Iqbal"), locked, match(locked)))
+        for line in ("i shoot Tunde", "i shoot the hunter", "i shoot him", "i shoot the man by the gate", "i shoot [[A]]", "i open fire",
+                     "i shoot the bastard", "i shoot Iqbal in the knee"):
             records = {**hunter, "player_line": line}
             self.assertEqual(I.attacked_row(_check("success", 18, "A", "Tunde Iqbal"), records, match(records))["code"], "A", line)
         doctor = _people(("A", "Chiara Weber"), line="i shoot the doctor", role="doctor")

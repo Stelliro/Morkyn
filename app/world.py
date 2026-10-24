@@ -2410,13 +2410,17 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
 
     The living figure of the kind the line names ("the ghoul") comes first
     (app/attack_intent.kind_figures). Otherwise the referenced, best-scored
-    or only candidate, when the line can mean them (attack_intent.line_may_target):
-    'i shoot the nearest ghoul' with only Tunde the hunter here aimed at him,
-    and the combat math hurt him (unnamed T3; unnamed2 T3/T4 Carlos).
+    or only candidate, unless the line's own words show it means something
+    else (attack_intent.line_may_target: another figure's kind here, a place,
+    a door or a lock): 'i shoot the nearest ghoul' with Tunde the hunter and
+    the ghouls here aimed at him, and the combat math hurt him (unnamed T3;
+    unnamed2 T3/T4 Carlos). A noun the engine knows nothing about ("the
+    bastard") leaves the candidate as it was.
     """
     from app.attack_intent import kind_figures, line_may_target
 
-    figures = kind_figures(player_input, _local_npcs_from_state(state))
+    local = _local_npcs_from_state(state)
+    figures = kind_figures(player_input, local)
     if figures:
         return figures[0]
     candidates = _combat_target_candidates(state, player_input, refs)
@@ -2437,7 +2441,7 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
     if target is None:
         hostile = [npc for npc in candidates if str(npc.get("attitude") or "").lower() in {"hostile", "aggressive", "violent"}]
         target = hostile[0] if len(hostile) == 1 else None
-    if target is not None and not line_may_target(player_input, target):
+    if target is not None and not line_may_target(player_input, target, people=local, places=state.get("locations") or []):
         turn_ledger.note("check", "combat_target_not_the_lines", code=str(target.get("code") or ""),
                          name=str(target.get("name") or ""), line=str(player_input or "")[:200])
         return None
@@ -21985,6 +21989,47 @@ def _apply_turn_npc_relationship_deltas(conn, result: dict[str, Any], player_inp
             break  # one delta per trade turn
 
 
+def _reapply_combat_from_band(conn, combat: dict[str, Any], turn: int) -> None:
+    """The combat this turn already applied by its own d20, moved to the attack check's band (#129, one roll decides).
+
+    attack_line.follow_band wrote the corrected resolution after the draft, with
+    ``damage_applied_before`` as what _apply_deterministic_combat already took
+    off the row: the health moves by the difference (back up on a miss), and
+    the journal says so.
+    """
+    if not _play_system_enabled(conn, "fighting_enabled", True):
+        return
+    if not isinstance(combat, dict) or combat.get("status") != "resolved_player_attack":
+        return
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+    resolution = combat.get("resolution") if isinstance(combat.get("resolution"), dict) else {}
+    target_code = norm_name(str(target.get("code") or ""))
+    if not target_code:
+        return
+    was = max(0, _int_from_any(resolution.get("damage_applied_before"), 0))
+    now = max(0, _int_from_any(resolution.get("damage"), 0))
+    row = conn.execute("SELECT id, name, health, max_health FROM npcs WHERE code = ?", (target_code,)).fetchone()
+    if row is None:
+        return
+    max_health = max(0, int(row["max_health"] or 0))
+    if max_health <= 0:
+        return
+    current_health = int(row["health"] if row["health"] is not None else max_health)
+    next_health = clamp(current_health + was - now, 0, max_health)
+    conn.execute("UPDATE npcs SET health = ? WHERE id = ?", (next_health, row["id"]))
+    weapon = str((combat.get("player_attack") or {}).get("weapon") or "unarmed")[:120]
+    conn.execute(
+        "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+        (
+            turn,
+            "mechanics",
+            f"Deterministic combat follows the attack check: {weapon} vs {target_code} {row['name']} "
+            f"{str(resolution.get('combat_roll_outcome') or '')} -> {str(resolution.get('outcome') or '')}; "
+            f"damage {was} -> {now}; health {current_health}->{next_health}/{max_health}."[:1400],
+        ),
+    )
+
+
 def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None:
     if not _play_system_enabled(conn, "fighting_enabled", True):
         return
@@ -25771,13 +25816,19 @@ def apply_turn(
         combat_after = result.get("_deterministic_combat") if isinstance(result.get("_deterministic_combat"), dict) else {}
         if combat_after.get("resolved_after_draft") and not combat_after.get("applied_after_draft"):
             try:
-                _apply_deterministic_combat(conn, combat_after, turn)
+                # A block the turn already applied, corrected to the check's band (#129): the difference.
+                corrected = bool(combat_after.get("reapplied_from_band"))
+                if corrected:
+                    _reapply_combat_from_band(conn, combat_after, turn)
+                else:
+                    _apply_deterministic_combat(conn, combat_after, turn)
                 combat_after["applied_after_draft"] = True
                 turn_ledger.note(
-                    "interpreter", "combat_applied_after_draft",
+                    "interpreter", "combat_reapplied_from_band" if corrected else "combat_applied_after_draft",
                     code=str((combat_after.get("target") or {}).get("code") or ""),
                     outcome=str((combat_after.get("resolution") or {}).get("outcome") or ""),
                     damage=(combat_after.get("resolution") or {}).get("damage"),
+                    **({"damage_applied_before": (combat_after.get("resolution") or {}).get("damage_applied_before")} if corrected else {}),
                 )
             except Exception as exc:
                 turn_ledger.note("interpreter", "combat_after_draft_failed", error=f"{type(exc).__name__}: {exc}"[:200])
