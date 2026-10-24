@@ -93,6 +93,9 @@ def _fake_ask(fill: dict, check: dict | None = None, progress: dict | None = Non
             return dict(fill)
         if phase == qo.CHECK_PHASE:
             return dict(check)
+        if phase == qo.DEED_PHASE:
+            # F195: the deed is asked as a few words of work, not the found sentence.
+            return {"work": "stow the first stack of crates"}
         return dict(progress)
 
     return ask, calls

@@ -1347,6 +1347,7 @@ def validate_quest_changes(
     settled_ids: set[int] | None = None,
     passive: bool = False,
     shown_unnamed: list[str] | None = None,
+    moved_to: str = "",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Pure check. Returns (accepted_changes, rejected) where each rejected row is {"kind", "item", "reasons"}.
 
@@ -1358,6 +1359,9 @@ def validate_quest_changes(
     ``passive``: the player did no work this turn (Wait, a plain question,
     looking around); a step is done only on a quote that shows a result and
     is about that job (``done_check``, #130).
+
+    ``moved_to``: the place the player reached this turn ("" when they did not
+    move); a trip's job that names another place is not finished by it (F195).
     """
     accepted: dict[str, Any] = {"source": (changes or {}).get("source") or "parser", "new": [], "updates": []}
     rejected: list[dict[str, Any]] = []
@@ -1807,7 +1811,30 @@ def validate_quest_changes(
                 turn_ledger.note("quest", "retold_offer_taken", quest=str(prior.get("code") or prior.get("id")),
                                  retold_as=str(item.get("title") or ""))
 
-    for raw in list((changes or {}).get("updates") or [])[: MAX_UPDATES_PER_TURN * 2]:
+    # A job someone says is done binds by reference first (F195, sonnet100
+    # T84: Eadric's "Second job's complete too" was a mark on the quest
+    # "complete", unknown_quest). The bound job's done update replaces any
+    # other done update on that job and any done update naming no open job.
+    from app import turn_ledger
+
+    open_rows = [q for q in existing or [] if str(q.get("status") or "") not in {"declined", "completed"}]
+    updates_in =[u for u in list((changes or {}).get("updates") or []) if isinstance(u, dict)]
+    bound = bind_said_done(narration, player_input, npcs=npcs, existing=existing)
+    if bound:
+        bound_codes = {str(b["quest"]).upper() for b in bound}
+        kept_updates = []
+        for upd in updates_in:
+            act = str(upd.get("action") or "").strip().lower()
+            if act in {"step_done", "complete", "done"}:
+                target = _resolve_quest(upd.get("quest"), open_rows)
+                if target is None or str(target.get("code") or "").upper() in bound_codes:
+                    turn_ledger.note("quest", "done_rebound", quest=str(upd.get("quest") or ""),
+                                     to=sorted(bound_codes), why="said_done_by_reference")
+                    continue
+            kept_updates.append(upd)
+        updates_in = [*bound, *kept_updates]
+
+    for raw in updates_in[: MAX_UPDATES_PER_TURN * 2]:
         if not isinstance(raw, dict):
             continue
         reasons = []
@@ -1848,7 +1875,16 @@ def validate_quest_changes(
         # Setting out is not done (7B Saltmarrow T7): "you head down the
         # slipway onto the northern mudflats to look for the lost cargo"
         # completed and paid the cargo job while the search roll failed.
-        if action in {"step_done", "complete"} and _intent_only(evidence):
+        said_done = bool(raw.get("_bound"))
+        if said_done:
+            # Someone said this job is done and the job was bound by reference
+            # (bind_said_done): the quote is their word, not a result sentence
+            # to read for work words. Only the player's own "not yet" stands.
+            if action in {"step_done", "complete"} and quest is not None and not reasons and _PLAYER_NOT_DONE_RE.search(
+                _player_line_text(player_input) or str(player_input or "")
+            ):
+                reasons.append("player_says_not_done")
+        elif action in {"step_done", "complete"} and _intent_only(evidence):
             reasons.append("evidence_is_intent")
         elif (
             action in {"step_done", "complete"}
@@ -1860,9 +1896,18 @@ def validate_quest_changes(
             # Arriving finishes a trip, not a salvage job: the last step of
             # work that is not itself a journey needs the work shown done.
             reasons.append("evidence_is_travel")
-        if action in {"step_done", "complete"} and quest is not None and not reasons:
+        elif (
+            action in {"step_done", "complete"}
+            and quest is not None
+            and (action == "complete" or _int(quest.get("current_step"), 1) >= _int(quest.get("total_steps"), 1))
+            and travel_job_points_elsewhere(quest, moved_to, locations)
+        ):
+            # A trip ends where it goes: walking off to Saltmarrow did not
+            # deliver to the Guild (sonnet100 T79).
+            reasons.append("travel_not_to_the_job")
+        if not said_done and action in {"step_done", "complete"} and quest is not None and not reasons:
             reasons.extend(done_check(evidence, quest, passive=passive))
-        if action in {"step_done", "complete"} and quest is not None and not reasons:
+        if not said_done and action in {"step_done", "complete"} and quest is not None and not reasons:
             finishing = action == "complete" or _int(quest.get("current_step"), 1) >= _int(quest.get("total_steps"), 1)
             if _PLAYER_NOT_DONE_RE.search(_player_line_text(player_input) or str(player_input or "")):
                 # The player's own word that the work is not done stands.
@@ -2211,6 +2256,229 @@ def _one_act_one_quest(accepted: dict[str, Any], rejected: list[dict[str, Any]],
 
 
 # ---------------------------------------------------------------------------
+# A job's done step is a task phrase; a job said done binds by reference (F195)
+# ---------------------------------------------------------------------------
+# sonnet100 (Hermes 3 8B, 2026-10-25): 12 of 14 step rows were a sentence of
+# the scene or the player's own question ("Who wants what, and what it pays?"
+# T22, "He looks at you, his eyes glinting in the candlelight." T37), because
+# the progress pass wrote the keyword sentence it had found as the deed. A deed
+# is now a few words of work, starting with its verb, that the text holds.
+TASK_PHRASE_MAX_WORDS = 8
+_PHRASE_SUBJECT_RE = re.compile(
+    r"^(?:he|she|they|it|his|her|their|its|the|a|an|this|that|these|those|there|someone|somebody|nobody|no\s+one)\b", re.I
+)
+_FIRST_PERSON_RE = re.compile(r"\b(?:i|i['’]m|i['’]ve|i['’]ll|i['’]d|me|my|mine|we|our|us)\b", re.I)
+_WH_START_RE = re.compile(r"^(?:who|what|where|when|why|how|which|whose)\b", re.I)
+_NO_WORK_ANSWER_RE = re.compile(r"^(?:none|nothing|no|n/?a|no\s+work|not\s+yet)\b", re.I)
+_TALK_STEMS = {
+    _stem(w) for w in ("ask", "asked", "tell", "told", "say", "said", "talk", "speak", "spoke", "chat", "wonder",
+                       "inquire", "discuss", "listen", "hear", "heard", "learn", "agree")
+}
+
+
+def task_phrase_problem(phrase: Any, *texts: str, quest: dict[str, Any] | None = None) -> str:
+    """Why ``phrase`` is not a task phrase for a job's done step; "" when it is.
+
+    A task phrase is a few words of the player's work, led by its verb ("search
+    the debris for salvage"), whose words the turn's text holds. Refused: a
+    question, the player's own voice ("I ..."), a sentence about the scene (led
+    by someone else, or acting on "you"), anything past a short phrase, talk
+    about the job on a job that is not talk, and words the text never held.
+    "You search ..." is the player's act told by the prose and loses its "you".
+    """
+    raw = re.sub(r"\s+", " ", str(phrase or "")).strip()
+    flat = re.sub(r"\s*\[\[[^\]]*\]\]", "", raw).strip().strip("\"'“”‘’ .,;:!")
+    flat = re.sub(r"^(?:then\s+)?you\s+", "", flat, flags=re.I)
+    if not flat or _NO_WORK_ANSWER_RE.match(flat):
+        return "no_work"
+    if raw.rstrip("\"'”’ ").endswith("?") or _WH_START_RE.match(flat):
+        return "question"
+    if _FIRST_PERSON_RE.search(flat):
+        return "players_voice"
+    if _PHRASE_SUBJECT_RE.match(flat) or re.search(r"\byou\b", flat, re.I):
+        return "scene_sentence"
+    words = flat.split()
+    if len(words) > TASK_PHRASE_MAX_WORDS:
+        return "not_a_phrase"
+    job = _stems(f"{(quest or {}).get('title') or ''} {(quest or {}).get('current_step_text') or (quest or {}).get('current_objective') or ''}")
+    if _stem(words[0]) in _TALK_STEMS and _stem(words[0]) not in job:
+        return "talk_is_not_work"
+    content = {s for s in _stems(flat) if len(s) >= 4}
+    if not content:
+        return "not_a_phrase"
+    held: set[str] = set()
+    for text in texts:
+        held |= _stems(re.sub(r"\s*\[\[[^\]]*\]\]", " ", str(text or "")))
+    if len(content & held) * 2 < len(content):
+        return "not_in_text"
+    return ""
+
+
+def task_phrase(phrase: Any) -> str:
+    """The phrase as a step title: no codes, no leading "you", no closing stop."""
+    flat = re.sub(r"\s*\[\[[^\]]*\]\]", "", re.sub(r"\s+", " ", str(phrase or ""))).strip().strip("\"'“”‘’ .,;:!")
+    flat = re.sub(r"^(?:then\s+)?you\s+", "", flat, flags=re.I)
+    return flat[:1].upper() + flat[1:] if flat else ""
+
+
+# Someone says the job is done: "Second job's complete too" (sonnet100 T84),
+# "The work is done" (8B run 153, T7). Read inside a person's spoken line only.
+_JOB_SAID_DONE_RE = re.compile(
+    r"\b(?:job|work|task|errand|contract|delivery|run|haul)(?:['’]s|\s+is|\s+was|\s+has\s+been|\s+are|s\s+are|s\s+were)?\s+"
+    r"(?:all\s+|now\s+|already\s+|both\s+)?(?:done|finished|complete|completed|marked|settled|over)\b"
+    r"|\b(?:ledger|tally|book)\s+is\s+(?:closed|settled|marked)\b",
+    re.I,
+)
+# The same words, not yet said as done: "once the job's done", "the work will be finished".
+_DONE_NOT_YET_RE = re.compile(
+    r"\b(?:not|never|when|once|if|until|till|unless|before|after|will|shall|soon|yet|almost|nearly|half)\b|n['’]t\b|['’]ll\b",
+    re.I,
+)
+_ORDINAL_JOB_RE = re.compile(r"\b(first|second|third|fourth|fifth)\s+(?:job|task|errand|contract|delivery|run)\b", re.I)
+_ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
+_QUEST_REF_RE = re.compile(r"@Q(\d+)\b", re.I)
+_LINE_ABOUT_A_JOB_RE = re.compile(r"\b(?:job|jobs|work|task|errand|contract|delivery|pay|paid|coin|owe|owed|mark|complete|done)\b", re.I)
+
+
+def done_word_said(narration: str) -> bool:
+    """Cheap gate: the prose holds words saying a job is done."""
+    return bool(_JOB_SAID_DONE_RE.search(str(narration or "")))
+
+
+def jobs_said_done(narration: str, player_input: str, npcs: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    """Spoken lines (not the player's) where someone says a job is done: [{"sentence", "speaker"}]."""
+    if not done_word_said(narration):
+        return []
+    try:
+        from app.conversation import spoken_lines
+
+        rows = [n for n in npcs or [] if isinstance(n, dict) and str(n.get("code") or "").strip()]
+        entries = spoken_lines(narration, rows, player_input)
+    except Exception:
+        return []
+    out: list[dict[str, str]] = []
+    for entry in entries:
+        for sentence in _SENTENCE_SPLIT.split(str(entry.get("line") or "")):
+            flat = re.sub(r"\s+", " ", sentence).strip()
+            match = _JOB_SAID_DONE_RE.search(flat)
+            if not match or flat.rstrip("\"'”’ ").endswith("?"):
+                continue
+            clause = re.split(r"[,;:—–]", flat[: match.start()])[-1] + flat[match.start(): match.end()]
+            if _DONE_NOT_YET_RE.search(clause):
+                continue
+            out.append({"sentence": flat, "speaker": str(entry.get("code") or "")})
+    return out
+
+
+def bind_said_done(
+    narration: str,
+    player_input: str,
+    *,
+    npcs: list[dict[str, Any]] | None,
+    existing: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """The open jobs a spoken "the job's done" finishes, bound by reference before any text match.
+
+    In order: ``@Q1`` in the player's line; "second job" in the line said (the
+    jobs in the order filed); the speaker gave exactly one open job; the line
+    said and the player's line name exactly one open job's words; the only
+    open job, when the player's line is about a job or the speaker is the
+    giver. Anything less certain binds nothing (a note says so). Returns
+    [{"quest", "action": "complete", "evidence", "_bound": how}].
+    """
+    from app import turn_ledger
+
+    said = jobs_said_done(narration, player_input, npcs)
+    if not said:
+        return []
+    quests = sorted([q for q in existing or [] if isinstance(q, dict)], key=lambda q: _int(q.get("id"), 0))
+    open_jobs = [q for q in quests if str(q.get("status") or "") == "active"]
+    if not open_jobs:
+        return []
+    own = _player_line_text(player_input)
+    by_code = {str(n.get("code") or ""): n for n in npcs or [] if isinstance(n, dict)}
+    out: list[dict[str, Any]] = []
+    bound_ids: set[int] = set()
+    refs = {int(n) for n in _QUEST_REF_RE.findall(own)}
+    referenced = [q for q in open_jobs if _int(q.get("id"), 0) in refs or str(q.get("code") or "").upper() in {f"Q{n}" for n in refs}]
+    filed = [q for q in quests if str(q.get("status") or "") not in {"declined"}]
+    for row in said:
+        sentence, speaker = row["sentence"], row["speaker"]
+        quest, how = None, ""
+        if len(referenced) == 1:
+            quest, how = referenced[0], "reference"
+        if quest is None:
+            ordinal = _ORDINAL_JOB_RE.search(sentence)
+            if ordinal:
+                n = _ORDINALS[ordinal.group(1).lower()]
+                # The codes count the jobs as filed: the second job is Q2.
+                target = next((q for q in quests if str(q.get("code") or "").upper() == f"Q{n}"), None) or (
+                    filed[n - 1] if 0 < n <= len(filed) else None)
+                if target is None or str(target.get("status") or "") != "active":
+                    turn_ledger.note("quest", "said_done_unbound", why="ordinal_not_open", quote=sentence[:200])
+                    continue
+                quest, how = target, "ordinal"
+        giver_id = _int((by_code.get(speaker) or {}).get("id"), 0) if speaker else 0
+        if quest is None and giver_id:
+            given = [q for q in open_jobs if _int(q.get("giver_npc_id"), 0) == giver_id]
+            if len(given) == 1:
+                quest, how = given[0], "giver"
+        if quest is None:
+            words = _stems(f"{sentence} {own}") - _GENERIC_JOB_STEMS
+            named = [
+                q for q in open_jobs
+                if words & (_stems(f"{q.get('title') or ''} {q.get('current_step_text') or ''}") - _GENERIC_JOB_STEMS)
+            ]
+            if len(named) == 1:
+                quest, how = named[0], "named"
+            elif not named and len(open_jobs) == 1 and (
+                _LINE_ABOUT_A_JOB_RE.search(_QUOTED_RE.sub(" ", own) or own) or (
+                    giver_id and _int(open_jobs[0].get("giver_npc_id"), 0) == giver_id)
+            ):
+                quest, how = open_jobs[0], "only_open_job"
+        if quest is None:
+            turn_ledger.note("quest", "said_done_unbound", why="no_one_job", speaker=speaker, quote=sentence[:200])
+            continue
+        if _int(quest.get("id"), 0) in bound_ids:
+            continue
+        bound_ids.add(_int(quest.get("id"), 0))
+        out.append({"quest": str(quest.get("code") or f"Q{quest.get('id')}"), "action": "complete",
+                    "evidence": sentence[:300], "_bound": how, "_speaker": speaker})
+    return out
+
+
+def _job_place_words(quest: dict[str, Any] | None, locations: list[dict[str, Any]] | None) -> set[str]:
+    """Words of known places that the job's title, step or first place names."""
+    text = " ".join(str((quest or {}).get(k) or "") for k in ("title", "current_step_text", "first_step_location")).lower()
+    job = set(re.findall(r"[a-z][a-z'’-]{3,}", text))
+    places: set[str] = set()
+    for loc in locations or []:
+        places |= set(re.findall(r"[a-z][a-z'’-]{3,}", str((loc or {}).get("name") or "").lower()))
+    return (job & places) - _QUEST_STOP_STEMS - {"from", "with", "into", "near", "past"}
+
+
+def travel_job_points_elsewhere(quest: dict[str, Any] | None, moved_to: str, locations: list[dict[str, Any]] | None) -> bool:
+    """The player moved this turn, the job's work is getting somewhere, and it names a known place they did not reach.
+
+    sonnet100 T79: "Deliver Exposed Salvage" ("Bring exposed salvaged goods to
+    the Guild") was finished and paid off "The Guild Yard would still be there
+    when you returned." as the player walked away from the Guild Yard to
+    Saltmarrow. Arriving finishes a trip only where the trip goes.
+    """
+    if not quest or not str(moved_to or "").strip():
+        return False
+    title = str(quest.get("title") or "").strip()
+    step = str(quest.get("current_step_text") or "").strip()
+    if not (_TRAVEL_JOB_RE.search(title) or _TRAVEL_JOB_RE.search(step) or _TRAVEL_STEP_RE.search(step)):
+        return False
+    wanted = _job_place_words(quest, locations)
+    if not wanted:
+        return False
+    reached = set(re.findall(r"[a-z][a-z'’-]{3,}", str(moved_to).lower()))
+    return not (wanted & reached)
+
+
+# ---------------------------------------------------------------------------
 # Apply (DB)
 # ---------------------------------------------------------------------------
 def _rows(conn, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
@@ -2264,11 +2532,14 @@ def apply_quest_changes(
     settled_ids: set[int] | None = None,
     passive: bool = False,
     shown_unnamed: list[str] | None = None,
+    moved_to: str = "",
 ) -> dict[str, Any]:
     """Validate against the live DB, create/advance quests, journal + event-log each one. Returns a report for the trace.
 
     ``settled_ids``: quests the engine already advanced or refused this turn (playtest #85b).
     ``passive``: the player did no work this turn (see validate_quest_changes).
+    ``moved_to``: the place the player reached this turn, "" when they stayed.
+    A turn with no proposal still runs when someone says a job is done (F195).
     """
     from app import turn_ledger
 
@@ -2280,7 +2551,9 @@ def apply_quest_changes(
         "rejected": [],
     }
     try:
-        if not isinstance(changes, dict) or not (changes.get("new") or changes.get("updates") or changes.get("worked")):
+        if not isinstance(changes, dict):
+            changes = {}
+        if not (changes.get("new") or changes.get("updates") or changes.get("worked")) and not done_word_said(narration):
             return report
         from app.quests import (
             STEPS_FROM_PLAY_NOTE,
@@ -2302,6 +2575,7 @@ def apply_quest_changes(
             settled_ids=settled_ids,
             passive=passive,
             shown_unnamed=shown_unnamed,
+            moved_to=moved_to,
         )
         for r in rejected:
             if r["kind"] == "update" and str(r["item"].get("action") or "") in {"step_done", "complete", "done"}:
@@ -2462,10 +2736,15 @@ def log_worked(
     Work on a from-play job the prose shows and the progress check found not
     yet finished: written into the job's steps (quests.log_job_progress).
 
-    Each row is {"quest": code, "evidence": sentence}. The sentence has to be
-    in the prose; a job the engine or an update already decided this turn is
-    left alone. Returns what was written.
+    Each row is {"quest": code, "evidence": sentence, "deed": task phrase}.
+    The sentence has to be in the prose; a job the engine or an update already
+    decided this turn is left alone. What is written is the deed, never the
+    sentence: a row with no deed, or one that is no task phrase
+    (task_phrase_problem), is noted and writes nothing (F195, sonnet100: 12
+    of 14 steps were a sentence of the scene or the player's question).
+    Returns what was written.
     """
+    from app import turn_ledger
     from app.quests import log_job_progress
 
     out: list[dict[str, Any]] = []
@@ -2479,7 +2758,13 @@ def log_worked(
         evidence = str(row.get("evidence") or "").strip()
         if quest is None or int(quest.get("id") or 0) in skip or not evidence_found(evidence, narration, player_input):
             continue
-        logged = log_job_progress(conn, int(quest["id"]), evidence, turn=turn, source="prose")
+        deed = str(row.get("deed") or "").strip()
+        problem = task_phrase_problem(deed, narration, player_input, quest=quest) if deed else "no_deed"
+        if problem:
+            turn_ledger.note("quest", "step_not_a_task_phrase", quest=str(quest.get("code") or ""), why=problem,
+                             deed=deed[:120], sentence=evidence[:200])
+            continue
+        logged = log_job_progress(conn, int(quest["id"]), task_phrase(deed), turn=turn, source="prose")
         if logged:
             out.append(logged)
     return out
