@@ -290,8 +290,12 @@ belong to, with the date).
   blows hit a bystander. Run it with `tools/harness_with_packs.py` (the Linux .venv has no llama_cpp;
   the wrapper puts the installed CUDA pack on the path) and watch at http://127.0.0.1:8790/.
   Its five fault classes (F192-F196) were fixed from the recorded turns on 2026-10-25 (Opus agents,
-  tests/test_sonnet100_*.py) and are not yet checked on the 8B: Stell asked for no 8B runs until
-  they say so.
+  tests/test_sonnet100_*.py). The stage1 run (same day, 15 turns, Sonnet player,
+  docs/showcase/hermes-stage1-findings-2026-10-25.md) showed them holding and found F199-F201 (an
+  op-named creature filed kindless and blows at it running no attack machinery; places from a
+  person's name; a length note and the player's line echoed), fixed the same way
+  (tests/test_stage1_*.py), not yet checked live. Stell's stage rules: short stages, Sonnet as the
+  player, Opus agents for the fixes, fix agents never load the 8B, no 100-turn run until asked.
   The earlier long runs were measured on Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf` on
   Windows; also in the catalog), so compare Hermes against that. Check `/api/model-status` →
   `file` to see which GGUF actually loaded. On the RTX 4070 Ti a turn takes about 10-40 s on the 8B and about 15 s on
