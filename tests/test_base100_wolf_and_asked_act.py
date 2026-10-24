@@ -304,10 +304,15 @@ class WhomTheBlowIsAt(unittest.TestCase):
     def test_t24_ignore_orabel_never_aims_at_orabel(self):
         from app import attack_intent as A
 
-        self.assertFalse(A.line_may_target(T24_LINE, ORABEL, people=[ORABEL]))
+        # The blow names a thing the engine knows is not her: the wolf's row here, or the wolf the prose
+        # showed attacking (shown). With neither, the noun decides nothing (round 2 of the review:
+        # "I turn to Orabel and stab the bastard" goes to the one person present).
+        self.assertFalse(A.line_may_target(T24_LINE, ORABEL, people=[ORABEL, WOLF]))
         self.assertFalse(A.line_may_target(T24_LINE, ORABEL, people=[ORABEL], shown={"wolf"}))
-        self.assertFalse(A.line_may_target("I shout at @E to get back, then stab at the dire wolf's neck", ORABEL, people=[ORABEL]))
-        self.assertFalse(A.line_may_target("I ignore her and slash at the wolf", ORABEL, people=[ORABEL]))
+        self.assertTrue(A.line_may_target(T24_LINE, ORABEL, people=[ORABEL]))
+        self.assertFalse(A.line_may_target("I shout at @E to get back, then stab at the dire wolf's neck", ORABEL,
+                                           people=[ORABEL, WOLF]))
+        self.assertFalse(A.line_may_target("I ignore her and slash at the wolf", ORABEL, people=[ORABEL], shown={"wolf"}))
         # Named in the blow itself: aimed.
         self.assertTrue(A.line_may_target("I ignore the wolf and stab Orabel", ORABEL, people=[ORABEL]))
         self.assertTrue(A.line_may_target("i stab her", ORABEL, people=[ORABEL]))

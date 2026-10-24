@@ -28,7 +28,10 @@ _TEMPLATES: tuple[tuple[tuple[str, ...], tuple[tuple[int, int], ...], str], ...]
     (
         ("guard", "watchman", "watchwoman", "warden", "marshal", "deputy", "officer", "police officer",
          "constable", "sentry", "security guard", "road warden", "harbour watchman", "port inspector",
-         "dock inspector", "toll keeper", "gatekeeper"),
+         "dock inspector", "toll keeper", "gatekeeper",
+         # Hired fighters keep a guard's watches.
+         "mercenary", "merc", "hired gun", "hired blade", "hired sword", "sellsword", "bodyguard", "enforcer",
+         "hired muscle"),
         ((6 * 60, 14 * 60), (14 * 60, 22 * 60), (22 * 60, 6 * 60)),
         "at home asleep, or in a tavern",
     ),
@@ -95,6 +98,27 @@ def _template(job: str) -> tuple[tuple[tuple[int, int], ...], str] | None:
         if start >= 0 and end >= 0 and start != end:
             return ((start, end),), _DAY_OFF
     return _DAY_SHIFT, _DAY_OFF
+
+
+def job_words(role: Any) -> tuple[str, ...]:
+    """The names of the job family this role belongs to ("kitchen hand" -> cook, line cook, kitchen hand, ...); () when none.
+
+    The templates group the jobs that are one job under different names, so a
+    reader that asks whether "the cook" may mean the kitchen hand has the
+    engine's own answer.
+    """
+    text = re.sub(r"[^a-z' -]+", " ", job_of(role).lower()).replace("-", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text or text in _NOT_JOBS:
+        return ()
+    best: tuple[str, ...] = ()
+    best_len = 0
+    for words, _windows, _off in _TEMPLATES:
+        for word in words:
+            folded = word.replace("-", " ")
+            if len(folded) > best_len and re.search(rf"(?:^|\s){re.escape(folded)}(?:\s|$)", text):
+                best, best_len = words, len(folded)
+    return best
 
 
 def shift_for(role: Any, code: str, seed: int) -> tuple[int, int, str] | None:

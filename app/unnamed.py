@@ -186,6 +186,13 @@ _CLAUSE_OPENERS = frozenset({
     "once", "now", "yet", "where", "that", "who", "which", "if", "though", "although", "since", "just",
     "still", "there", "here", "even", "again",
 })
+# A subordinating conjunction opens a clause of its own inside the stretch between two marks:
+# "your arm stings where the rat bit you". Relatives ("that", "who") are read by _head_at; a
+# coordinator ("and") is not here, so "you see the raiders and the ghoul" stays one clause.
+_SUBORDINATORS = frozenset({
+    "where", "when", "whenever", "while", "as", "until", "till", "before", "after", "because", "since", "once",
+    "if", "unless", "though", "although",
+})
 _PREPOSITIONS = frozenset({
     "with", "in", "inside", "from", "of", "near", "at", "on", "under", "behind", "by", "out", "into", "onto",
     "across", "through", "beyond", "above", "below", "among", "between", "outside", "over", "around",
@@ -318,6 +325,12 @@ def _verb_shaped(tok: str, plural: bool) -> bool:
         return True
     if low in _CLOSED or low.endswith(("'s", "’s")):
         return False
+    from app.attack_line import IRREGULAR_PAST
+
+    if low in IRREGULAR_PAST:
+        # An irregular past of the engine's own attack family: "the rat bit you", "the wolf
+        # sprang", "the ghoul struck" (base100 T60: "bit" has no -s and no -ed to show it).
+        return True
     # A participle has a vowel in its stem: "eating", "lurking", "raised";
     # "ping", "thing", "red" and "shed" are not.
     for end in ("ing", "ed"):
@@ -413,6 +426,10 @@ def mentions(text: str, objects: Any = (), names: Any = ()) -> list[dict[str, An
         while i < len(toks):
             # The clause the mention stands in (between punctuation marks).
             start = max([k for k in range(i) if toks[k] in _CLAUSE_MARKS] + [-1]) + 1
+            # A subordinate clause inside the stretch has its own subject: "your arm stings where
+            # the rat bit you" (base100 T60) has the rat biting, "you see ghouls when a raider steps
+            # in" the raider stepping. Grammar: the subordinator opens the clause.
+            start = max([k for k in range(start, i) if toks[k].lower() in _SUBORDINATORS] + [start - 1]) + 1
             seen = _players_object(toks[start:i])
             found = _mention_at(toks, i, kinds, bare=seen, names=names)
             if found is None:
@@ -770,6 +787,7 @@ def _head_at(toks: list[str], i: int, j: int, form: str, count: int, ordinal: in
             "ordinal": ordinal,
             "stated": stated,
             "acts": True if (is_object or is_bare) else _acts(toks, verb_at),
+            "verb_phrase": "" if (is_object or is_bare) else _verb_phrase(toks, verb_at),
             "modifier": _modifier_at(toks, j, at),
             "_end": verb_at + 1,
             "_ing": ing,
@@ -778,6 +796,18 @@ def _head_at(toks: list[str], i: int, j: int, form: str, count: int, ordinal: in
             "_head": at,
         }
     return None
+
+
+def _verb_phrase(toks: list[str], verb_at: int) -> str:
+    """The verb the phrase is the subject of and the words after it in its clause, lower: "lunges at you"."""
+    if not 0 <= verb_at < len(toks):
+        return ""
+    words: list[str] = []
+    for tok in toks[verb_at: verb_at + 6]:
+        if tok in _CLAUSE_MARKS:
+            break
+        words.append(tok.lower())
+    return " ".join(words)
 
 
 def _verb_after_phrase(toks: list[str], at: int, plural: bool) -> int:
@@ -913,22 +943,32 @@ def _alive_anywhere(conn, kind: str) -> bool:
     return False
 
 
-def _introduced(ms: list[dict[str, Any]], plain: str) -> dict[str, Any] | None:
-    """The mention that introduces a kind by "the", when the text has met it as new.
+def _introduced(ms: list[dict[str, Any]], plain: str, names: Any = ()) -> dict[str, Any] | None:
+    """The mention that introduces a kind by "the": a body closing on the player.
 
-    "The deathclaw charges you" acts on the player in its own clause; "a
-    massive beast - a dire wolf ... The dire wolf lunges, and you steel
-    yourself" (base100 T22) has the prose introduce the wolf with "a" first,
-    so its "the" refers back to that, not to anything the engine holds.
-    "The radiation sensors flash a warning" and "the pale morning light" do
-    neither and are not asked about (grammar: a determiner, not a word list).
+    "The deathclaw charges you" and "The dire wolf lunges, and you steel
+    yourself" (base100 T22) have the noun as the subject of an attack or of a
+    body coming at someone (app/attack_line.hostile_act, the engine's one
+    family of those verbs) with the player in the sentence. "The storm
+    batters you", "The fog swallows you", "The tavern calls to you" and "The
+    salt air stings your eyes" (base100: 29 asks over 100 turns about the
+    weather, the light, places and sounds) are verbs of weather, light and
+    sound, not of a body, and are not asked about. Scenery the engine never
+    takes for a person (world._NAME_SCENERY_RE) and a name (``names``) are
+    never introduced this way.
     """
+    from app.attack_line import hostile_act
+    from app.world import _NAME_SCENERY_RE
+
+    known = {str(n).lower() for n in names or ()}
     for m in ms:
         if m["form"] != "the" or not m["acts"] or not m["subject"]:
             continue
-        if m.get("you_object"):
-            return m
-        if m.get("you_sentence") and _met_as_new(plain, m["kind"]):
+        if m["kind"] in known or m["noun"].lower() in known or _NAME_SCENERY_RE.fullmatch(m["kind"]):
+            continue
+        if not hostile_act(m.get("verb_phrase") or ""):
+            continue
+        if m.get("you_object") or m.get("you_sentence"):
             return m
     return None
 
@@ -1041,7 +1081,7 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
         # "The dire wolf lunges, and you steel yourself" with no wolf anywhere in
         # the save: the prose introduces it (base100 T22), so the "the" form
         # counts as a count of one here and below (file_figures).
-        introduced = _introduced(ms, plain) if kind not in vague and kind not in people else None
+        introduced = _introduced(ms, plain, _roster_names(conn)) if kind not in vague and kind not in people else None
         if introduced is not None and _alive_anywhere(conn, kind):
             introduced = None
         if kind in people or kind in stored:
@@ -1542,7 +1582,7 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
         ambiguous = False
         # A "the <kind>" acting on the player with no living one anywhere in the
         # save introduces it: one here (base100 T22, "The dire wolf lunges").
-        introduced = _introduced(ms, _plain(narration)) if kind not in vague and not here else None
+        introduced = _introduced(ms, _plain(narration), _roster_names(conn)) if kind not in vague and not here else None
         if introduced is not None and _alive_anywhere(conn, kind):
             introduced = None
         # A group the prose counts itself ("two raiders", "two more") is that many: nothing is rolled.
@@ -1803,22 +1843,58 @@ def ask_label(person: dict[str, Any], people: list[dict[str, Any]]) -> str:
 # ------------------------------------------- creatures the prose shows (attacks)
 
 
-def shown_kinds(*texts: Any) -> set[str]:
-    """The kinds of figure these texts show acting or seen, head nouns and two-word kinds ("wolf", "dire wolf").
+_HE_SHE_RE = re.compile(r"\b(?:he|she|him|her|his|hers|himself|herself)\b", re.I)
 
-    The person words the figure hints own ("a man", "the guard") are left
-    out: a person here may be called by them. What is left is what the
-    player's attack line can mean that is no person present: a creature the
-    prose has shown and the engine may have no row for (base100 T23-T24,
-    "the dire wolf"; app/attack_intent.line_may_target).
+
+def _took_person_pronoun(sentence: str, phrase: str, following: str) -> bool:
+    """The thing the phrase names is spoken of as he or she: a person, whatever word the prose used for them.
+
+    "The cook steps out of the kitchen, wiping her hands on her apron. She
+    eyes you": the pronoun after the phrase in its sentence, with no name
+    between, or opening the next sentence, is the cook's. A creature is "it".
     """
+    at = sentence.lower().find(phrase.lower())
+    rest = sentence[at + len(phrase):] if at >= 0 else sentence
+    hit = _HE_SHE_RE.search(rest)
+    if hit and not re.search(r"\b[A-Z][a-z]+\b", rest[: hit.start()]):
+        return True
+    return bool(re.match(r"\W*(?:He|She)\b", following or ""))
+
+
+def shown_kinds(*texts: Any, names: Any = ()) -> set[str]:
+    """The kinds of creature these texts (the last turn's prose, the player's line, this turn's prose) show attacking, head nouns and two-word kinds ("wolf", "dire wolf").
+
+    What the player's attack line can mean that is no person present: a
+    creature shown closing on someone (app/attack_line.hostile_act: "The dire
+    wolf lunges", "the rat bit you", the player's own "Marsh rats come at
+    me"; base100 T23-T24, T60-T61; app/attack_intent.line_may_target). Left
+    out, as words a person present may be called by: the person words the
+    figure hints own ("a man", "the guard"), a thing spoken of as he or she
+    ("The cook ... wiping her hands"), a name (``names``), and scenery the
+    engine never takes for a person. A thing only seen, or acting in no
+    hostile way ("The fog swallows you", "A barrel rolls toward you"), is no
+    evidence of a creature.
+    """
+    from app.attack_line import hostile_act
+    from app.world import _NAME_SCENERY_RE
+
     people = _person_words() | _vague_words()
+    known = {str(n).lower() for n in names or ()}
     out: set[str] = set()
     for text in texts:
         if not str(text or "").strip():
             continue
+        sentences = _sentences(str(text))
         for m in mentions(str(text)):
-            if not (m["subject"] or m["seen"]) or m["kind"] in people:
+            if not m["subject"] or m["kind"] in people or m["kind"] in known or m["noun"].lower() in known:
+                continue
+            if _NAME_SCENERY_RE.fullmatch(m["kind"]) or not hostile_act(m.get("verb_phrase") or ""):
+                continue
+            try:
+                following = sentences[sentences.index(m["sentence"]) + 1]
+            except (ValueError, IndexError):
+                following = ""
+            if _took_person_pronoun(m["sentence"], m["phrase"], following):
                 continue
             out.add(m["kind"])
             if m.get("full"):
@@ -1843,7 +1919,14 @@ def mint_shown(conn, narration: str, kind: str, location_id: int | None, *, call
     if not kind or not location_id or kind in _person_words() or kind in _vague_words():
         return None
     ms = [m for m in mentions(narration, (kind,), _roster_names(conn)) if m["kind"] == kind and (m["subject"] or m["seen"])]
+    if not ms and line:
+        # The player's own line shows it coming at them ("Marsh rats come at me out of the reeds; I kick
+        # and slash at them", base100 T60): the player's words are theirs, and the rats are what the blow is at.
+        ms = [m for m in mentions(line, (kind,), _roster_names(conn)) if m["kind"] == kind and m["subject"]]
     if not ms:
+        return None
+    if kind not in shown_kinds(narration, line, names=_roster_names(conn)):
+        # Not shown attacking (the fog, a barrel seen, a cook spoken of as she): no creature to mint.
         return None
     if _here(conn, int(location_id), kind):
         return None

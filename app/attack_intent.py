@@ -430,14 +430,80 @@ def _kinds_of(person: dict[str, Any]) -> set[str]:
     return {_kind_of(person), singular(kind) if kind else ""} - {""}
 
 
-def shown_kinds(*texts: Any) -> set[str]:
-    """The creature kinds these texts (the last turn's prose, this turn's) show acting; see unnamed.shown_kinds."""
+def shown_kinds(*texts: Any, people: list[dict[str, Any]] | None = None) -> set[str]:
+    """The creature kinds these texts (the last turn's prose, the player's line, this turn's) show attacking; see unnamed.shown_kinds.
+
+    The names of ``people`` are never a kind ("The kitchen hand Orabel watches you").
+    """
     try:
         from app.unnamed import shown_kinds as _shown
 
-        return _shown(*texts)
+        names = {w for p in people or [] if isinstance(p, dict)
+                 for w in re.findall(r"[a-z]+", str(p.get("name") or "").lower())}
+        return _shown(*texts, names=names)
     except Exception:
         return set()
+
+
+def _role_family(person: dict[str, Any]) -> set[str]:
+    """Every word the engine has for this person's job: the role's own words and its job family (app/shifts).
+
+    A kitchen hand is called "the cook"; a hired gun "the merc". The shift
+    templates group the jobs that are one job under different names, so a
+    word of the family is a plausible word for the person.
+    """
+    from app.shifts import job_of, job_words
+    from app.unnamed import singular
+
+    role = job_of(person.get("role"))
+    out = {singular(w) for w in re.findall(r"[a-z]+", role.lower())}
+    for job in job_words(role):
+        out.add(singular(job))
+        out |= {singular(w) for w in job.split()}
+    return out - {""}
+
+
+def plausible_word(person: dict[str, Any], noun: str) -> bool:
+    """Whether a thing-noun the line or the prose uses may mean this person: their kind, or a word of their job."""
+    return noun in _kinds_of(person) or noun in _role_family(person)
+
+
+def creature_evidence(shown: set[str] | None, people: list[dict[str, Any]] | None) -> set[str]:
+    """The shown kinds that are plausible for no one present: positive evidence of a creature with no row.
+
+    A shown kind is evidence against a person present only when it is not a
+    word for them (CLAUDE.md: a noun's absence from a list is never evidence;
+    the one person present takes a noun the engine knows nothing about, as
+    4833150 decided). "the cook" with Orabel the kitchen hand here, "the merc"
+    with Grit the hired gun, are words for them, not creatures.
+    """
+    return {k for k in shown or () if not any(plausible_word(p, k) for p in people or [] if isinstance(p, dict))}
+
+
+def line_antecedents(line: str) -> set[str]:
+    """The kinds a "them" in the line refers back to: a plural the line itself named before it.
+
+    "Marsh rats come at me out of the reeds; I kick and slash at them" (base100
+    T60): "them" is the rats of the line's own first clause, never someone
+    present. Empty when the line has no "them", or no plural before it.
+    """
+    from app.interpreter import plain
+    from app.unnamed import is_plural, mentions, singular
+
+    text = plain(line)
+    hit = re.search(r"\b(?:them|they|their|theirs)\b", text, re.I)
+    if not hit:
+        return set()
+    before = text[: hit.start()]
+    out: set[str] = set()
+    for m in mentions(before):
+        if m["subject"] and is_plural(m["noun"]):
+            out.add(m["kind"])
+            if m.get("full"):
+                out.add(m["full"])
+    plural_words = {singular(w) for w in re.findall(r"[a-z]+", before.lower()) if is_plural(w)}
+    out |= set(object_nouns(before)) & plural_words
+    return out - {""}
 
 
 def _role_words(person: dict[str, Any]) -> tuple[str, set[str]]:
@@ -508,13 +574,12 @@ def unknown_creature(line: str, people: list[dict[str, Any]] | None, shown: set[
     text = str(line or "")
     if not text.strip() or not shown:
         return ""
+    evidence = creature_evidence(shown, people)
+    if not evidence:
+        return ""
     focus = " ".join(attack_clauses(text)) or text
-    known: set[str] = set()
-    for other in people or []:
-        if isinstance(other, dict):
-            known |= _kinds_of(other) | _role_words(other)[1]
-    for noun in [*object_nouns(focus), *object_nouns(text)]:
-        if noun in shown and noun not in known:
+    for noun in [*object_nouns(focus), *object_nouns(text), *sorted(line_antecedents(text))]:
+        if noun in evidence:
             return noun
     return ""
 
@@ -553,31 +618,13 @@ def line_may_target(
     text = str(line or "")
     if not text.strip() or not isinstance(person, dict):
         return False
-    phrase, heads = _role_words(person)
-    own = (_kinds_of(person) | heads) - {""}
-    focus = " ".join(attack_clauses(text))
-    if focus:
-        # The blow is one act of several. Named or meant by a pronoun only in another act
-        # ("I ignore Orabel and ...", "I shout at @E to get back, then stab at ..."), while the
-        # blow itself is at a thing that is not them: not whom it is at.
-        in_blow = line_names_person(focus, person) or _PERSON_PRONOUN_RE.search(focus)
-        aside = line_names_person(text, person) or _PERSON_PRONOUN_RE.search(text)
-        blow_nouns = set(object_nouns(focus))
-        if aside and not in_blow and blow_nouns and not (blow_nouns & own):
-            return False
-    if line_names_person(text, person):
-        return True
-    nouns = set(object_nouns(text))
-    if not nouns:
-        return True
-    if nouns & own or (" " in phrase and re.search(rf"\b{re.escape(phrase)}s?\b", text, re.I)):
-        return True
-    # A person pronoun means someone here, whatever else the line goes on to name ("i snap her neck
-    # and burn the clinic", cc87dd29 T5); "it" / "its" is a creature's or a thing's and decides nothing.
-    if _PERSON_PRONOUN_RE.search(text):
-        return True
     from app.interpreter import is_dead
 
+    phrase, heads = _role_words(person)
+    own = (_kinds_of(person) | heads) - {""}
+    # What the engine knows a thing-noun to be that is not this person: another living figure's
+    # kind or job here, or a creature shown attacking that is a word for no one present
+    # (creature_evidence: "the cook" with Orabel the kitchen hand here is a word for her).
     code = str(person.get("code") or "").strip().upper()
     elsewhere: set[str] = set()
     for other in people or []:
@@ -588,14 +635,44 @@ def line_may_target(
         elsewhere |= _kinds_of(other)
         elsewhere |= _role_words(other)[1]
     elsewhere.discard("")
-    if nouns & elsewhere:
-        return False
-    # A creature the prose shows and the engine has no row for: the blow is at it, not at a bystander.
-    if nouns & (set(shown or ()) - own):
+    evidence = (elsewhere | creature_evidence(shown, [person, *(people or [])])) - own
+    scenery = _place_heads(places)
+    antecedents = line_antecedents(text)
+    focus = " ".join(attack_clauses(text))
+    if focus:
+        # The blow is one act of several. Named or meant by a pronoun only in another act ("I ignore
+        # Orabel and ...", "I shout at @E to get back, then stab at ..."), while the blow itself is at
+        # a thing the engine knows is not them: not whom it is at. A thing it knows nothing about
+        # ("I turn to Orabel and stab the bastard", "I push past Mira and stab the doc") decides
+        # nothing, as in one act.
+        in_blow = line_names_person(focus, person) or _PERSON_PRONOUN_RE.search(focus)
+        aside = line_names_person(text, person) or _PERSON_PRONOUN_RE.search(text)
+        blow_nouns = set(object_nouns(focus))
+        if re.search(r"\b(?:them|they|their|theirs)\b", focus, re.I):
+            blow_nouns |= antecedents
+        blow_nouns -= own
+        if aside and not in_blow and blow_nouns and (
+            blow_nouns & evidence or all(n in scenery or _is_fixture(n) for n in blow_nouns)
+        ):
+            return False
+    if line_names_person(text, person):
+        return True
+    nouns = set(object_nouns(text)) | antecedents
+    if not nouns:
+        return True
+    if nouns & own or (" " in phrase and re.search(rf"\b{re.escape(phrase)}s?\b", text, re.I)):
+        return True
+    # A person pronoun means someone here, whatever else the line goes on to name ("i snap her neck
+    # and burn the clinic", cc87dd29 T5); "it" / "its" is a creature's or a thing's and decides
+    # nothing, and a "them" the line's own earlier plural answers for is that plural ("Marsh rats
+    # come at me out of the reeds; I kick and slash at them", base100 T60).
+    pronouns = {m.group(0).lower() for m in _PERSON_PRONOUN_RE.finditer(text)}
+    if pronouns - ({"them", "their", "theirs"} if antecedents else set()):
+        return True
+    if nouns & evidence:
         return False
     # A place or scenery is where the shot goes only when nothing else is named: "the lock", "at the
     # clinic"; "the man by the gate" is at the man.
-    scenery = _place_heads(places)
     if all(n in scenery or _is_fixture(n) for n in nouns):
         return False
     return True
@@ -634,7 +711,8 @@ def decide(
         line = player_line(model_input)
         people = people_here(context)
         ctx = context if isinstance(context, dict) else {}
-        shown = shown_kinds(ctx.get("last_narration"))
+        # The creatures shown attacking: by the last turn's prose, or by the player's own line.
+        shown = shown_kinds(ctx.get("last_narration"), line, people=people)
         if inferred and inferred.get("skill_code") in ATTACK_SKILLS:
             ref = inferred.get("npc_ref") if isinstance(inferred.get("npc_ref"), dict) else {}
             if ref.get("code"):

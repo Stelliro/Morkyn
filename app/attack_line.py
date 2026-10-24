@@ -61,16 +61,53 @@ MISS = "miss"
 # What the roll's band allows a clause to say; anything else is the opposite.
 AGREES = {HIT: {HIT}, GRAZE: {GRAZE, HIT}, MISS: {MISS}}
 
+# The acts of an attack, as a scene names them: a blow given by anyone.
+_ATTACK_ACTS = (
+    r"shoot|shoots|shooting|shot|fire|fires|fired|firing|"
+    r"swing|swings|swung|stab|stabs|stabbed|slash|slashes|slashed|punch|punches|punched|"
+    r"kick|kicks|kicked|thrust|thrusts|lunge|lunges|lunged|strike|strikes|struck|hit|hits"
+)
 # The words a scene uses for an attack (an act or what it sent). Grammar decides
 # whose act it is (below): these alone never make an attack sentence.
 _ATTACK = (
-    r"shoot|shoots|shooting|shot|shots|fire|fires|fired|firing|trigger|squeeze|squeezes|"
-    r"swing|swings|swung|stab|stabs|stabbed|slash|slashes|slashed|punch|punches|punched|"
-    r"kick|kicks|kicked|thrust|thrusts|lunge|lunges|lunged|strike|strikes|struck|"
-    r"hit|hits|miss|misses|missed|aim at|blow|blows|"
+    _ATTACK_ACTS + r"|shots|trigger|squeeze|squeezes|miss|misses|missed|aim at|blow|blows|"
     # what the player's weapon does in the engine's own line ("Your crowbar lands on ...")
     r"lands|connects|catches|slams|finds its mark|grazes|glances|clips|nicks|goes wide|goes far wide|falls short"
 )
+# A creature closing on its target: the attack acts above and the acts of a body
+# coming at someone ("charges you", "bites", "comes at you", "circles"). One
+# family for every reader that asks whether a thing the prose shows is attacking
+# (app/unnamed: a "the <kind>" that charges the player is a figure to file; the
+# creature a blow is at). The weather, the light and a sound do none of these.
+_CLOSING_ACTS = (
+    r"attack|attacks|attacked|attacking|charge|charges|charged|charging|leap|leaps|leapt|leaped|leaping|"
+    r"pounce|pounces|pounced|pouncing|bite|bites|bit|bitten|biting|claw|claws|clawed|clawing|"
+    r"snap|snaps|snapped|snapping|maul|mauls|mauled|mauling|gore|gores|gored|goring|ram|rams|rammed|ramming|"
+    r"circle|circles|circled|circling|stalk|stalks|stalked|stalking|rush|rushes|rushed|rushing|"
+    r"spring|springs|sprang|sprung|springing|tear|tears|tore|torn|tearing|seize|seizes|seized|seizing|"
+    r"grab|grabs|grabbed|grabbing|snatch|snatches|snatched|snatching|"
+    r"(?:come|comes|came|coming|go|goes|went|going|close|closes|closed|closing|bear|bears|bore|bearing|"
+    r"move|moves|moved|moving|advance|advances|advanced|advancing)\s+(?:at|for|toward|towards|upon|in\s+on|"
+    r"down\s+on|straight\s+(?:at|for))"
+)
+# The family's past forms with no -s, -ed or -ing to show they are verbs (morphology, not meaning):
+# "the rat bit you", "the wolf sprang". Forms that are as often nouns ("shot", "hit") are left out.
+IRREGULAR_PAST = frozenset({
+    "bit", "bitten", "struck", "swung", "sprang", "sprung", "tore", "torn", "came", "went", "bore", "leapt",
+})
+HOSTILE_ACT_RE = re.compile(
+    rf"^\W*(?:(?:is|are|was|were)\s+)?(?:\w+ly\s+)?(?:{_ATTACK_ACTS}|{_CLOSING_ACTS})\b", re.I
+)
+
+
+def hostile_act(verb_phrase: str) -> bool:
+    """Whether a verb phrase (the verb and what follows it) is a blow or a body closing on someone.
+
+    "lunges at you", "is charging", "bit you", "comes at me", "snarls and
+    lunges at you" (any verb of the chain) are; "swallows you", "stings your
+    eyes", "calls to you", "leads you past" are not.
+    """
+    return any(HOSTILE_ACT_RE.match(part) for part in re.split(r"\b(?:and|then|or)\b|,", str(verb_phrase or "")))
 _SENT = r"shot|bullet|round|bolt|arrow|blast|blow|strike|swing|punch|fist|blade|knife|slug|shell|beam"
 # "you ... shoot" in one clause (no full stop or semicolon between), or a sentence opening on what was sent.
 # "Your gaze lands on her" is no blow: the player's eyes, mind or breath never attack.

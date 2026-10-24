@@ -15864,30 +15864,37 @@ def _rebuild_segments(turn: dict[str, Any], text: str) -> None:
 
 
 def player_verbs(own: str) -> set[str]:
-    """The stems of the verbs the player's own line does: "I hand her the coin, take the herring and eat it" -> hand, take, eat.
+    """The stems of the acts the player's own line does now: "I hand her the coin, take the herring and eat it" -> hand, take, eat.
 
-    Each act of the line opens on its verb (after "I", "I'll", "try to", "then"
-    and any adverb), as app/unnamed.player_objects reads the line; quoted
-    speech is not an act. Names, objects and the rest of the clause are not
-    verbs: "the wolf" in the line makes no sentence about the wolf the
-    player's act.
+    Read by grammar (app/act_clauses.acts_now, the engine's one reading of
+    which clauses are done now): speech, a plan or a promise ("I'll pay her
+    tomorrow"), a case, a report ("tell him I'll ..."), a question and a
+    denial ("I don't take the coin") are not acts now. Each act opens on its
+    verb (after "I", "I'll", "try to", "then" and any adverb), as
+    app/unnamed.player_objects reads the line. A verb of speech
+    (narration_pipeline._INDIRECT_SPEECH_RE, the set the engine reads whose
+    words are whose by: say, tell, ask, greet, reply ...) is talk, not an act:
+    the player's words are theirs word for word, so a sentence that puts
+    words in the player's mouth is never the act they asked for. Names,
+    objects and the rest of the clause are not verbs: "the wolf" in the line
+    makes no sentence about the wolf the player's act.
     """
-    from app.narration_pipeline import content_stems
+    from app.act_clauses import acts_now
+    from app.narration_pipeline import _INDIRECT_SPEECH_RE, content_stems
 
-    # A quotation leaves a mark, so the tag beside it ('"Morning," I say') is read as the tag, not an act.
-    flat = re.sub(r"[@#!&]\w+|\[\[[^\]]*\]\]", " ", _SCENE_QUOTE_RE.sub(" QUOTEMARK ", str(own or "")))
+    flat = re.sub(r"[@#!&]\w+|\[\[[^\]]*\]\]", " ", acts_now(str(own or "")))
     out: set[str] = set()
     for clause in re.split(r"[,;:.!?]|\b(?:and|then)\b", flat, flags=re.I):
         words = re.findall(r"[A-Za-z][\w'’-]*", clause)
-        quoted = "QUOTEMARK" in words
-        words = [w for w in words if w != "QUOTEMARK"]
-        while words and (words[0].lower() in {"i", "i'll", "i’ll", "try", "to", "then", "quickly", "now"}
+        while words and (words[0].lower() in {"i", "i'll", "i’ll", "we", "try", "to", "then", "quickly", "now"}
                          or re.fullmatch(r"[a-z]+ly", words[0].lower())):
             words.pop(0)
-        if not words or (quoted and len(words) == 1):
+        if not words:
             continue
         verb = words[0]
         if verb[:1].isupper() or verb.lower() in {"the", "a", "an", "my", "it", "for", "at", "with", "if", "as"}:
+            continue
+        if _INDIRECT_SPEECH_RE.fullmatch(verb):
             continue
         out |= content_stems(verb)
     return out
@@ -15939,8 +15946,14 @@ def asked_act_cut(text: str, cut: int, player_input: str) -> tuple[int, str]:
     head out" is a decision, not the heading): the cut moves past the last
     such sentence, keeping what stands between (the other party's half of the
     act), and ends before the first later sentence where the player acts
-    without the line asking it. Returns the cut and the last protected
-    sentence ("" when nothing moved).
+    without the line asking it. Two sentences are never the asked act: the
+    one the cut was decided on (the gate's own evidence: "Left or right? You
+    walk right" is a choice made for the player, whatever the line's verb),
+    and one whose player clause is speech, a quotation or a speech tag
+    (narration_pipeline._YOU_SAID_RE: '"I'm Will Tanaka," you say', "You tell
+    him you want to stay on"), since the player's words are theirs word for
+    word and only a physical act can be the one the line asked for. Returns
+    the cut and the last protected sentence ("" when nothing moved).
     """
     body = str(text or "")
     if cut <= 0 or cut >= len(body):
@@ -15948,6 +15961,7 @@ def asked_act_cut(text: str, cut: int, player_input: str) -> tuple[int, str]:
     verbs = player_verbs(player_line_of(player_input))
     if not verbs or str(player_input or "").startswith("__"):
         return cut, ""
+    from app.narration_pipeline import _YOU_SAID_RE
     from app.prose_state import sentence_spans
 
     head = _SCENE_QUOTE_RE.sub(" ", body[:cut])
@@ -15956,10 +15970,14 @@ def asked_act_cut(text: str, cut: int, player_input: str) -> tuple[int, str]:
         return cut, ""
     tail = body[cut:]
     last_sentence, in_act, stop = "", False, len(tail)
-    for start, _end, sentence in sentence_spans(tail):
+    for index, (start, _end, sentence) in enumerate(sentence_spans(tail)):
+        if index == 0:
+            continue  # the sentence the cut was decided on: the gate's judgment stands
         outside = _SCENE_QUOTE_RE.sub(" ", sentence)
         clauses = _you_clauses(outside)
-        performs = bool(_you_verbs(clauses) & verbs)
+        # The player's words are theirs word for word: a quotation or a speech tag is never the asked act.
+        speech = outside != sentence or bool(_YOU_SAID_RE.search(outside))
+        performs = bool(clauses) and not speech and bool(_you_verbs(clauses) & verbs)
         if performs:
             in_act, last_sentence = True, sentence.strip()
         elif in_act and clauses:

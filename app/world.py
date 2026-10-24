@@ -2426,7 +2426,7 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
     candidates = _combat_target_candidates(state, player_input, refs)
     if not candidates:
         return None
-    shown = shown_kinds(state.get("last_narration"))
+    shown = shown_kinds(state.get("last_narration"), player_input, people=local)
     if refs.get("npcs"):
         # A code the line names is the target when the blow is at them: "I shout at @E to get
         # back, then stab at the dire wolf's neck" names E where it warns her (base100 T27).
@@ -9627,6 +9627,12 @@ def ground_acquisitions(
             continue
         head = _held_head(name)
         if head and head in held_heads:
+            continue
+        # Eaten or drunk where the player stands is in no pack: "You take a glistening herring from
+        # the pile and pop it into your mouth" for "take the herring and eat it" put the fish in the
+        # pack (base100 T17), the same rule as the GRANT op's (_filter_inventory_changes).
+        if own and _consumed_in_line(own, re.findall(r"[a-z][a-z'’-]*", name)):
+            turn_ledger.note("inventory", "not_a_thing", item=name, why="ordered and eaten or drunk", by="prose")
             continue
         if names_held and not (head and head in own_words):
             # The player handled something they hold; the prose renamed it.
@@ -17182,6 +17188,13 @@ def _grant_shown_takes(
                 tokens = _item_name_tokens(phrase)
                 if not (takes_any or _sentence_mentions_item(line_l, phrase, tokens)):
                     continue
+                # Eaten or drunk where the player stands is in no pack, whatever name the prose gives
+                # it: "You take a glistening herring from the pile and pop it into your mouth" for
+                # "take the herring and eat it" (base100 T17); the GRANT op's own rule
+                # (_filter_inventory_changes), applied to the take the prose shows.
+                if _consumed_in_line(str(player_input or ""), tokens):
+                    turn_ledger.note("inventory", "not_a_thing", item=phrase, why="ordered and eaten or drunk", by="prose")
+                    continue
                 if covered(phrase, tokens, [c for c in changes + added if int(_float((c or {}).get("quantity_delta"), 0)) > 0]):
                     continue
                 if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "gain"]):
@@ -17274,6 +17287,9 @@ def _grant_shown_takes(
         for phrase, qty in _line_take_objects(line):
             tokens = _item_name_tokens(phrase)
             if any(word in _NOT_A_TAKEN_THING for word in phrase.split()):
+                continue
+            if _consumed_in_line(str(player_input or ""), tokens):
+                turn_ledger.note("inventory", "not_a_thing", item=phrase, why="ordered and eaten or drunk", by="prose")
                 continue
             # Named in this prose: the pass above already decided (kept, put back or refused).
             if _sentence_mentions_item(plain.lower(), phrase, tokens):
@@ -25821,11 +25837,15 @@ def apply_turn(
                 from app.llm import _model_timeout, _run_interpreter
 
                 records = load_records(conn)
-                # The creatures the last turn's prose and this one's show acting: a blow the
-                # line aims at one of them is at no bystander (attack_intent.line_may_target).
+                # The creatures the last turn's prose, the player's line and this prose show
+                # attacking: a blow the line aims at one of them is at no bystander
+                # (attack_intent.line_may_target).
                 records["shown_kinds"] = sorted(unnamed.shown_kinds(
                     str((prompt_context or {}).get("last_narration") or "") if isinstance(prompt_context, dict) else "",
+                    player_input if input_kind == "player" else "",
                     narration,
+                    names=[w for p in records.get("people") or [] if isinstance(p, dict)
+                           for w in re.findall(r"[a-z]+", str(p.get("name") or "").lower())],
                 ))
                 result = _run_interpreter(
                     result,
