@@ -401,6 +401,9 @@ _PLACEHOLDER_VALUES = frozenset({
     "no change", "none needed", "empty",
 })
 _BAND_OPS = frozenset({"GOLD", "XP", "HP", "KARMA"})
+# The item ops: a name in quotes, then QTY and a band (F194: the band's own
+# label, BAND, written out is a field of these two).
+_ITEM_OPS = frozenset({"GRANT", "TAKE"})
 
 
 def _is_placeholder_op(op: str, positionals: list[str], flags: dict[str, str]) -> bool:
@@ -441,6 +444,22 @@ def _ends_multiword(token: str, flag_keys: set[str]) -> bool:
     if sep and key.upper() in flag_keys:
         return True
     return bool(_LOCATION_CODE_RE.match(token)) or token.lower() in _NPC_ATTITUDES
+
+
+def _ends_item_name(token: str, keys: set[str] | frozenset[str]) -> bool:
+    """A token that is not part of an unquoted item name (F194, sonnet100 T14:
+    "GRANT: brass medallion QTY:1 BAND:small" kept "brass" as the name and read
+    "medallion" as its amount): a label, a glued label, a quoted part, a band or
+    a number."""
+    if _ends_multiword(token, set(keys)):
+        return True
+    if token.endswith(":") and token[:-1].upper() in keys:
+        return True
+    glued = re.fullmatch(r"([A-Za-z]+):(\S+)", token)
+    if glued and glued.group(1).upper() in keys:
+        return True
+    band, number = _amount(token)
+    return band is not None or number is not None
 
 
 def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
@@ -504,6 +523,12 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
     force_positional_remaining = _LEADING_POSITIONALS.get(opcode, 0)
     own_op = normalize_opcode(opcode)
     own_fields = _OP_FIELDS.get(own_op, frozenset())
+    # F194 (sonnet100 T13): 'TAKE: "BAND: small"' on a line of its own filed an
+    # item called "BAND: small". The op list says "QTY and a band"; the band's
+    # label written out is this field of GRANT and TAKE, never the name.
+    if own_op in _ITEM_OPS:
+        own_fields = own_fields | {"BAND"}
+        flag_keys = flag_keys | {"BAND"}
 
     def _is_label(tok: str) -> bool:
         return (tok.endswith(":") and tok[:-1].upper() in own_fields) or tok in own_fields
@@ -548,6 +573,15 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
                 i += 1
             if words:
                 flags.setdefault(key_u, " ".join(words))
+            continue
+        # F194 (sonnet100 T14): "QTY:1", "BAND:small"; one of this op's own
+        # field labels glued to its value by the colon is that field.
+        glued = re.fullmatch(r"([A-Za-z]+):(\S+)", token) if not force_positional_remaining else None
+        if glued and glued.group(1).upper() in own_fields:
+            glued_value = glued.group(2)
+            glued_str = re.fullmatch(r"__STR(\d+)__", glued_value)
+            flags.setdefault(glued.group(1).upper(), strings[int(glued_str.group(1))] if glued_str else _decode_arg_escapes(glued_value))
+            i += 1
             continue
         upper = token.upper()
         str_match = re.fullmatch(r"__STR(\d+)__", token)
@@ -629,6 +663,17 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
                     words.append(_decode_arg_escapes(parts[i]))
                     i += 1
                 flags[upper] = " ".join(words)
+            continue
+        # F194 (sonnet100 T14): "GRANT: brass medallion QTY:1" kept "brass" as
+        # the name and read "medallion" as its amount. An unquoted item name
+        # runs to the next label, band, number or quoted part.
+        if own_op in _ITEM_OPS and not positionals and not force_positional_remaining:
+            words = [_decode_arg_escapes(token)]
+            i += 1
+            while i < len(parts) and len(words) < 5 and not _ends_item_name(parts[i], flag_keys | own_fields):
+                words.append(_decode_arg_escapes(parts[i]))
+                i += 1
+            positionals.append(" ".join(words))
             continue
         positionals.append(_decode_arg_escapes(token))
         i += 1
@@ -1036,6 +1081,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         qty_token = flags.get("QTY")
         if qty_token in (None, "") and len(args) > 1:
             qty_token = args[1]
+        if qty_token in (None, ""):
+            qty_token = flags.get("BAND")
         amount: dict[str, Any] = {}
         _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token)
         if not amount:
@@ -1068,6 +1115,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         qty_token = flags.get("QTY")
         if qty_token in (None, "") and len(args) > 1:
             qty_token = args[1]
+        if qty_token in (None, ""):
+            qty_token = flags.get("BAND")
         amount = {}
         _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token, negate=True)
         if not amount:

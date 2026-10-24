@@ -16845,6 +16845,126 @@ _COIN_STATE_WORDS = frozenset({
 })
 
 
+# --- F194: a coin amount, a band label or a bare material is no thing --------
+# sonnet100 T68 filed "eighty silver x1" (GRANT "eighty silver": an item die
+# item:eighty silver, the purse unchanged), T19 "leather pouch of gold x1",
+# T13-14 "BAND: small x1" (an op label quoted as a name) and "brass x1" (a
+# material word with no object), T4 "salvage job x1" (work, not a thing). An
+# item name is accepted at one place, _filter_inventory_changes, and
+# _not_a_thing_name decides there for every path (resolve_turn_bands asks it
+# first so such a name gets no item die). The head noun decides, not a word's
+# presence: "silver pendant", "gold ring", "brass medallion" and "copper
+# kettle" stay things. Coin the engine already counts into the purse
+# (_coin_name_match: counted gold coins, through _coins_to_gold) keeps that
+# path; the rest is money for the transaction parser (m0) to own, noted for it.
+_COIN_CONTAINER_WORDS = frozenset({
+    "pouch", "purse", "bag", "sack", "stack", "pile", "handful", "fistful", "heap", "hoard", "stash", "roll", "chest",
+    "box", "coffer", "wallet", "sum", "payment",
+})
+_COIN_GENERIC_HEADS = frozenset({"coin", "coins", "money", "cash", "coinage", "funds"})
+# Words a currency set lists that are things in their own right too.
+_COIN_WORDS_THAT_ARE_THINGS = frozenset({
+    "purse", "note", "notes", "bundle", "bundles", "chit", "chits", "trade goods", "buck", "bucks",
+})
+_MATERIAL_WORDS = frozenset({
+    "brass", "bronze", "iron", "steel", "tin", "lead", "pewter", "metal", "wood", "timber", "leather", "hide", "cloth",
+    "fabric", "glass", "stone", "bone", "ivory", "wool", "linen", "silk", "clay", "wax",
+})
+_WORK_HEADS = frozenset({"job", "jobs", "errand", "errands", "task", "tasks", "chore", "chores"})
+# An op's field label at the front of a name: "BAND: small", "QTY: 1", "NAME: x".
+_LABEL_FRAGMENT_RE = re.compile(r"^(?:[A-Z][A-Z_]+|(?i:qty|band|type|desc|name|rarity|loc|role|note|notes))\s*:")
+_NAME_DETERMINERS = frozenset({"a", "an", "the", "some", "my", "your", "his", "her", "their", "its"})
+
+
+def _coin_heads(conn=None) -> frozenset[str]:
+    """The world's coin words (app.currency: the active set's denominations and
+    generic words), lower case, without the short forms and without the words
+    that are also things. The default set when there is no save to ask."""
+    try:
+        from app import currency
+
+        cset = currency.active_set(conn) if conn is not None else currency.theme_set(currency.DEFAULT_SET)
+        words = currency.coin_words(cset)
+    except Exception:
+        words = ["copper", "coppers", "silver", "silvers", "gold", "golds", "platinum", "coin", "coins", "money"]
+    return frozenset(w for w in words if len(w) > 2 and w not in _COIN_WORDS_THAT_ARE_THINGS) | _COIN_GENERIC_HEADS
+
+
+def _coin_phrase_head(words: list[str], heads: frozenset[str]) -> str:
+    """The coin word a name is headed by, "" when none: its last word, or last
+    two ("gold coins", "ration chit"), past a container or measure of it
+    ("leather pouch of gold", "stack of silvers" -> "gold", "silvers"). A kind
+    of coin ("worn seagull coin") is a curio, not coin: a generic head keeps
+    only state words, numbers and containers before it; a denomination
+    ("eighty silver", "guild gold") is coin whatever stands before it."""
+    text = " ".join(words)
+    parts = re.split(r"\s+of\s+", text, maxsplit=1)
+    if len(parts) == 2 and parts[0].split() and parts[0].split()[-1] in (_COIN_CONTAINER_WORDS | _ITEM_MEASURE_WORDS):
+        words = [w for w in parts[1].split() if w not in _NAME_DETERMINERS]
+    if not words:
+        return ""
+    if len(words) >= 2 and f"{words[-2]} {words[-1]}" in heads:
+        head, mods = f"{words[-2]} {words[-1]}", words[:-2]
+    elif words[-1] in heads:
+        head, mods = words[-1], words[:-1]
+    else:
+        return ""
+    if head.split()[-1] in _COIN_GENERIC_HEADS:
+        from app.prose_state import _NUMBER_WORDS
+
+        allowed = _COIN_STATE_WORDS | _COIN_CONTAINER_WORDS | set(_NUMBER_WORDS) | heads
+        if any(not (m in allowed or m.isdigit() or re.fullmatch(r"[a-z]+-[a-z]+", m)) for m in mods):
+            return ""
+    return head
+
+
+def _not_a_thing_name(name: str, conn=None) -> dict[str, Any] | None:
+    """Why a GRANT/TAKE name is no thing to file, or None when it is one (F194).
+
+    The dict is the ledger note: ``decision`` and what the name was read as.
+    "eighty silver" and "leather pouch of gold" are coin (coin_amount_not_an_item,
+    with the amount text and, when readable, its units for the transaction
+    parser); "BAND: small" and "small" are an op label and a band
+    (band_label_not_an_item); "brass" alone is a material (material_not_an_item);
+    "salvage job" is work (work_not_an_item). Coin _coin_name_match reads
+    already (counted gold coins) is left to _coins_to_gold and the purse: None.
+    """
+    raw = re.sub(r"\s+", " ", str(name or "")).strip()
+    if not raw:
+        return None
+    if _LABEL_FRAGMENT_RE.match(raw) or raw.upper() == "BAND":
+        return {"decision": "band_label_not_an_item", "label": raw}
+    words = re.findall(r"[a-z0-9][\w'’-]*", raw.lower())
+    while words and words[0] in _NAME_DETERMINERS:
+        words = words[1:]
+    if not words:
+        return None
+    from app.rng import BAND_ALIASES, BAND_INDEX
+
+    if len(words) == 1 and (words[0] in BAND_INDEX or words[0] in BAND_ALIASES or words[0] == "band"):
+        return {"decision": "band_label_not_an_item", "label": raw}
+    if _coin_name_match(raw):
+        return None
+    coin = _coin_phrase_head(words, _coin_heads(conn))
+    if coin:
+        verdict: dict[str, Any] = {"decision": "coin_amount_not_an_item", "amount": raw, "coin": coin}
+        try:
+            from app import currency
+
+            cset = currency.active_set(conn) if conn is not None else currency.theme_set(currency.DEFAULT_SET)
+            parsed = currency.parse_amount(raw, cset)
+            if parsed:
+                verdict["units"] = int(parsed["units"])
+        except Exception:
+            pass
+        return verdict
+    if len(words) == 1 and words[0] in _MATERIAL_WORDS:
+        return {"decision": "material_not_an_item", "material": words[0]}
+    if words[-1] in _WORK_HEADS:
+        return {"decision": "work_not_an_item", "work": raw}
+    return None
+
+
 def _coins_to_gold(
     conn, changes: list[dict[str, Any]], narration: str, *, gold_moving: bool = False
 ) -> list[dict[str, Any]]:
@@ -17737,6 +17857,14 @@ def _filter_inventory_changes(
             and str(change.get("quantity_band") or "").strip().lower() not in {"", "none", "zero", "0"}
             and not str(change.get("quantity_band") or "").strip().startswith("-")
         )
+        # F194 (sonnet100 T13-14, T19, T68): a coin amount, an op label, a bare
+        # material or a job is money or nothing, never a row. A loss of a row an
+        # older save still holds under such a name may still go.
+        if is_gain or not _inventory_row_named(conn, name):
+            verdict = _not_a_thing_name(name, conn)
+            if verdict:
+                turn_ledger.note("inventory", verdict.pop("decision"), item=name, **verdict)
+                continue
         if is_gain:
             if gain_key in seen_gains:
                 turn_ledger.note("inventory", "repeated_grant_dropped", item=name)
@@ -22915,6 +23043,11 @@ def resolve_turn_bands(
 
     for change in result.get("inventory_changes") or []:
         if not isinstance(change, dict):
+            continue
+        # F194: a coin amount, an op label or a bare material gets no item die
+        # (sonnet100 T68 rolled item:eighty silver); _filter_inventory_changes
+        # drops it with the note.
+        if _not_a_thing_name(str(change.get("name") or ""), conn):
             continue
         band = change.get("quantity_band")
         raw = change.get("quantity_delta")
