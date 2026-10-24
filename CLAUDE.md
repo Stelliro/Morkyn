@@ -188,6 +188,21 @@ belong to, with the date).
   setup and stored with it; `$<number>` is always base units and the engine shows it in that
   world's coins. Bartering (trading goods for goods) is wanted too but is harder and comes
   after the currency work.
+- **Transactions are settled before the draft, and the narrator is told the result** (2026-10-25,
+  Stell: "what if we were to do the transactions and confirm them before we finish the draft?"
+  ... "sounds good"). The attack line's pattern, applied to money and items. (1) Before the draft
+  the engine reads the player's line for what it commits to (pay, offer, hand over, take, sell,
+  buy; amount and item). (2) It confirms against its records: the item is held, the price matches
+  an offer on record, the other side has the coin; one small ask only when the line is unclear.
+  (3) The other side is settled by the engine: an offer on record is accepted, otherwise the
+  haggle or persuasion check decides accept, counter or refuse. (4) Purse and inventory move
+  before the narrator writes; the done fact is handed to it as a line it must show, and when the
+  draft leaves it out or contradicts it the engine inserts its own line (no model rewrite).
+  (5) After the draft the reader only looks for what the scene introduced (finds, a gift, a price
+  quoted): those are proposals filed as records, applied when the player's next line acts on them
+  or a quest step completes. Offers must therefore be held as records between turns (jobs need
+  the same). Built as the first item of the money work (m1 currency set, `$<number>`), after the
+  sonnet100 run.
 - **#157's cross-reference is a system, not a fix** (2026-10-24): "this will be a big undertaking,
   as to do this we will need to ensure we build a cross referencing system between npc's and the
   llm, as well as what the player says and what the llm what the llm wants to say". Design it as
