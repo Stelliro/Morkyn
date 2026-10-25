@@ -52,7 +52,8 @@ MEDIEVAL = currency.theme_set("coin_medieval")
 CREDITS = currency.theme_set("credits")
 CASH = currency.theme_set("cash")
 SCRIP = currency.theme_set("scrip")
-ALL_SETS = (MEDIEVAL, CREDITS, CASH, SCRIP)
+CAPS = currency.theme_set("caps")
+ALL_SETS = (MEDIEVAL, CREDITS, CASH, SCRIP, CAPS)
 
 # contracts.md 1.1: the CurrencySet shape.
 _SET_KEY_TYPES = {
@@ -73,7 +74,8 @@ class CurrencySetShapeTests(unittest.TestCase):
         self.assertEqual(MEDIEVAL["per_legacy_gold"], 10000)
 
     def test_every_preset_has_required_keys(self):
-        self.assertEqual(set(currency.CURRENCY_SETS), {"coin_medieval", "credits", "cash", "scrip"})
+        # m1 (2026-10-25): bottle caps joined, from Stell's "credits, or bottle caps" (a fallout rpg).
+        self.assertEqual(set(currency.CURRENCY_SETS), {"coin_medieval", "credits", "cash", "scrip", "caps"})
         for cset in ALL_SETS:
             with self.subTest(set=cset["id"]):
                 for key, typ in _SET_KEY_TYPES.items():
@@ -544,35 +546,31 @@ class CurrencyDbTests(unittest.TestCase):
 
 
 class LeafTests(unittest.TestCase):
-    # The other unwired leaves of this pass that format money through app.currency (contracts 5.3: trade and
-    # agreements import it directly, restraint lazily inside one function). Each must itself be an unwired
-    # leaf, which the Status line proves; any other file under app/ or static/ is an offender.
-    _ALLOWED_IMPORTERS = {"app/trade.py", "app/agreements.py", "app/restraint.py"}
+    # m1 (2026-10-25) wired the module: the game imports it (world, purse, db, prose_state, quests ...).
+    # The leaf rule that stays: currency imports nothing of the game at module level but prose_state's
+    # number words, so world -> currency never loops. The one game import is app.world.resolve_world_era,
+    # inside detect_theme_set, at call time.
+    _MODULE_LEVEL_APP_IMPORTS = {"app.prose_state"}
 
     def test_module_is_a_leaf(self):
-        needle = re.compile(r"app\.currency\b|from app import currency\b|import currency\b")
-        offenders = []
-        for folder in ("app", "static"):
-            for path in sorted((ROOT / folder).rglob("*")):
-                if not path.is_file() or path.suffix not in (".py", ".js", ".html", ".css"):
-                    continue
-                if path == ROOT / "app" / "currency.py":
-                    continue
-                try:
-                    text = path.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
-                    continue
-                if not needle.search(text):
-                    continue
-                rel = path.relative_to(ROOT).as_posix()
-                if rel in self._ALLOWED_IMPORTERS:
-                    self.assertIn("Status: built, not wired", text, f"{rel} imports currency but is not an unwired leaf")
-                    continue
-                offenders.append(rel)
-        self.assertEqual(offenders, [], "the live game must not import app.currency in this pass")
+        import ast
+
+        tree = ast.parse((ROOT / "app" / "currency.py").read_text(encoding="utf-8"))
+        found = set()
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app"):
+                found.add(node.module)
+            elif isinstance(node, ast.Import):
+                found.update(alias.name for alias in node.names if alias.name.startswith("app"))
+        self.assertEqual(found, self._MODULE_LEVEL_APP_IMPORTS)
+        lazy = [
+            node.module for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app") and node not in tree.body
+        ]
+        self.assertEqual(lazy, ["app.world"], "only detect_theme_set reaches into the game, at call time")
         doc = currency.__doc__ or ""
-        self.assertIn("Status: built, not wired (TODO n17).", doc)
-        self.assertIn("Wiring (not done):", doc)
+        self.assertIn("Status: wired (m1, TODO n17).", doc)
+        self.assertIn("Wiring (done):", doc)
         self.assertIn("Turn on:", doc)
         self.assertIn("Tests: tests/test_currency.py", doc)
 

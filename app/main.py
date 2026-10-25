@@ -545,6 +545,8 @@ class SetupRequest(BaseModel):
     npc_skill_frequency: str = Field(default="some trained NPCs", max_length=100)
     rank_scale: str = Field(default="F,E,D,C,B,A,S,SS,SSS", max_length=100)
     economy: str = Field(default="scarce", max_length=80)
+    # The world's money (m1, app/currency.py): "auto" detects it from the theme.
+    currency_set: str = Field(default="auto", max_length=40)
     loot_rarity: str = Field(default="earned and uncommon", max_length=80)
     inventory_weight_limit: int = Field(default=60)
     inventory_slot_limit: int = Field(default=24)

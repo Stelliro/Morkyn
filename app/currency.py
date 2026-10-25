@@ -1,17 +1,17 @@
 """Currency sets by theme: smallest-unit storage, format, parse, convert.
 
-Status: built, not wired (TODO n17).
+Status: wired (m1, TODO n17).
 
 A world's money is a currency set chosen from its theme: medieval or fantasy coin (100 copper = 1 silver,
 100 silver = 1 gold, 100 gold = 1 platinum), sci-fi credits, modern cash, post-collapse scrip that leans
-on goods. Every amount this module handles is an int of the set's smallest unit. The only storage is the
-settings row ``currency_config`` (a world rule, not turn state, so it is not snapshotted), written by
-``update_currency_config`` alone. The live game still keeps one unitless ``player.gold`` number; nothing
-here reads or writes it, and no function here touches any other table. The migration of that number is
-written down in ``MIGRATION_PLAN`` below and is not executed by this module. The live game does not call
-anything in this file.
+on goods, bottle caps. Every amount this module handles is an int of the set's smallest unit (the base
+unit; ``$<number>`` in model text is always base units). The only storage here is the settings row
+``currency_config`` (a world rule, not turn state, so it is not snapshotted), written by
+``update_currency_config`` alone; start_playthrough writes the world's set there. The purse itself is
+``player.purse_units``, kept by app/purse.py (``player.gold`` is its whole-gold mirror). No function here
+touches any other table.
 
-Wiring (not done):
+Wiring (done):
   app/world.py:_apply_player() -> units = currency.from_legacy_gold(player_patch["gold_delta"], cset) before
       the gold clamp, once player.purse_units exists (MIGRATION_PLAN step 1).
   app/prose_state.py:stated_coin_amounts() -> currency.coin_pattern(cset) in place of _COIN inside _PAID_RE /
@@ -41,6 +41,7 @@ Tests: tests/test_currency.py
 """
 from __future__ import annotations
 
+import contextvars
 import copy
 import json
 import math
@@ -150,7 +151,30 @@ CURRENCY_SETS: dict[str, dict[str, Any]] = {
         "starting_purse": 60,
         "compound": True,
     },
+    # Stell (2026-10-24): "credits, or bottle caps (if the player wants to play a fallout rpg for example)".
+    # One unit; a cap is worth about what a credit is.
+    "caps": {
+        "id": "caps",
+        "label": "caps",
+        "smallest": "cap",
+        "denominations": [
+            {"id": "cap", "value": 1, "singular": "cap", "plural": "caps", "short": "caps",
+             "words": ["cap", "caps", "bottle cap", "bottle caps", "bottlecap", "bottlecaps"]},
+        ],
+        "generic_words": ["caps", "bottle caps"],
+        "display": "cap",
+        "per_legacy_gold": 10,
+        "decimal": False,
+        "symbol": "",
+        "accepts_goods": True,
+        "coin_acceptance": "usually",
+        "starting_purse": 120,
+        "compound": False,
+    },
 }
+
+# Worlds that pay in bottle caps; checked before the other post-collapse words.
+CAPS_WORDS = ("fallout", "bottle cap", "bottlecap", "bottle-cap")
 
 # Theme detection, first match wins. The words below mark a post-collapse
 # world whatever its tech level says.
@@ -208,7 +232,13 @@ def detect_theme_set(options: dict[str, Any] | None) -> str:
     custom_style = _option_text(options, "custom_style")
     economy = _option_text(options, "economy")
     tech_level = _option_text(options, "tech_level")
+    chosen = _option_text(options, "currency_set")
+    if chosen in CURRENCY_SETS:
+        # The setup page's own pick rides in the options (E: chosen with the world).
+        return chosen
     blob = " ".join((world_style, custom_style, economy, tech_level))
+    if any(word in blob for word in CAPS_WORDS):
+        return "caps"
     if any(word in blob for word in SCRIP_WORDS):
         return "scrip"
     # Imported here, not at module level, so a later wiring from app.world does not loop.
@@ -311,15 +341,41 @@ def active_set(conn) -> dict[str, Any]:
     """The world's CurrencySet: the config row's ``set`` when chosen, else detection from playthrough_options,
     with the row's symbol and starting_purse overrides applied."""
     cfg = get_currency_config(conn)
+    options = _playthrough_options(conn)
     if cfg["set"] != "auto":
         cset = theme_set(cfg["set"])
+        if "barter" in _option_text(options, "economy"):
+            cset["accepts_goods"] = True
     else:
-        cset = set_for_options(_playthrough_options(conn))
+        cset = set_for_options(options)
     if cfg["symbol"]:
         cset["symbol"] = cfg["symbol"]
     if cfg["starting_purse"] is not None:
         cset["starting_purse"] = int(cfg["starting_purse"])
     return cset
+
+
+# The set a turn is played in, for the pure text readers (app/prose_state.py)
+# that have no connection: app/world.py sets it around play_turn / apply_turn.
+# Unset, it is the default set, which is what the readers read before m1.
+_CURRENT_SET: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("morkyn_currency_set", default=None)
+
+
+def use_set(cset: dict[str, Any] | None) -> contextvars.Token:
+    """Make ``cset`` the current set; pass the token to reset_set when the turn ends."""
+    return _CURRENT_SET.set(cset)
+
+
+def reset_set(token: contextvars.Token) -> None:
+    try:
+        _CURRENT_SET.reset(token)
+    except (ValueError, RuntimeError):
+        _CURRENT_SET.set(None)
+
+
+def current_set() -> dict[str, Any]:
+    cset = _CURRENT_SET.get()
+    return cset if isinstance(cset, dict) and cset.get("denominations") else CURRENCY_SETS[DEFAULT_SET]
 
 
 # ---------------------------------------------------------------------------

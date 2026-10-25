@@ -4529,6 +4529,17 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
                 """
             ).fetchone()
         )
+        # The purse in the world's base units and its coins (m1); gold is the
+        # whole-gold mirror the older readers use.
+        from app import currency as _currency
+        from app import purse as _purse
+
+        world_set = _currency.active_set(conn)
+        purse_view = _currency.purse_view(_purse.units_of_row(player, world_set) if player else 0, world_set)
+        purse_view["coin_words"] = [str(d.get("plural") or d.get("id")) for d in world_set.get("denominations") or []]
+        if player:
+            player["purse_units"] = purse_view["units"]
+            player["gold"] = purse_view["legacy_gold"]
         locations = rows_to_dicts(
             conn.execute("SELECT * FROM locations ORDER BY name COLLATE NOCASE").fetchall()
         )
@@ -4865,6 +4876,7 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             "setup_complete": settings.get("setup_complete") == "true" or settings.get("setup_complete") is True,
             "settings": settings,
             "player": player,
+            "purse": purse_view,
             "resources": resources,
             "collapse": collapse,
             "resource_settings": res_settings,
@@ -5338,6 +5350,8 @@ def _clear_playthrough(conn) -> None:
     # game 2's opening draft as its GOAL and moved the new player to game 1's
     # "The Spindle at Edge".
     conn.executemany("DELETE FROM settings WHERE key = ?", [(key,) for key in SNAPSHOT_SETTING_KEYS])
+    # The last world's money is that world's: a new one re-detects its set (m1).
+    conn.execute("DELETE FROM settings WHERE key = 'currency_config'")
 
     for table in (
         "quest_steps",
@@ -5711,12 +5725,24 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             ),
         )
         start_id = int(cursor.lastrowid)
+        # The world's money is chosen with the world and stored with it (m1):
+        # the setup's pick, else the theme's set. The purse starts at the set's
+        # starting purse in base units; gold is its whole-gold mirror.
+        from app import currency
+
+        world_set = currency.set_for_options(options)
+        try:
+            currency.update_currency_config(conn, {"set": world_set["id"]})
+        except ValueError:
+            pass
+        start_units = int(world_set.get("starting_purse") or 0)
         conn.execute(
             """
-            INSERT INTO player (id, name, public_name, title, age, sex, previous_life_age, previous_life_sex, backstory_mode, backstory, memory_policy, health, max_health, level, xp, gold, karma, current_location_id)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO player (id, name, public_name, title, age, sex, previous_life_age, previous_life_sex, backstory_mode, backstory, memory_policy, health, max_health, level, xp, gold, karma, current_location_id, purse_units)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (player_name, public_name, player_title, player_age, player_sex, previous_life_age, previous_life_sex, backstory_mode, character_backstory, memory_policy, 20, 20, 1, 0, 12, 0, start_id),
+            (player_name, public_name, player_title, player_age, player_sex, previous_life_age, previous_life_sex, backstory_mode, character_backstory, memory_policy, 20, 20, 1, 0,
+             currency.to_legacy_gold(start_units, world_set), 0, start_id, start_units),
         )
         # Kept across games so the next character is not handed this name again.
         from app.example_pools import remember_player_name
