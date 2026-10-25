@@ -1266,6 +1266,15 @@ def show_attacks(
                           why="no combat block or no health on the row" if resolution is None else "a second untargeted roll")
                     continue
                 report["combat_after_draft"] = attack_line.combat_after_draft(combat, row, resolution)
+                was_on = str((((combat or {}).get("target") or {}) if isinstance((combat or {}).get("target"), dict)
+                              else {}).get("code") or "").strip().upper() if isinstance(combat, dict) else ""
+                if was_on and was_on != code and combat.get("status") == "resolved_player_attack":
+                    # The fight was applied to another row before the draft (stage2 T11: Wat Thatcher [[E]]
+                    # for "stab at the boar"); the result moves to the row the roll was at, and that one's
+                    # damage is undone (world._undo_applied_combat).
+                    report["combat_after_draft"]["moved_from"] = was_on
+                    _note("attack_result_moved", was=was_on, now=code, outcome=outcome,
+                          damage=resolution.get("damage"))
         name = called(row, prose=True)
         beat = attack_line.line_for(check, f"{name} [[{code}]]" if name else f"[[{code}]]", attack_weapon(check, turn_result))
         if not beat:

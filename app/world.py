@@ -2717,6 +2717,55 @@ def _combat_follows_attack_check(combat: Any, checks: Any) -> dict[str, Any] | N
     return out
 
 
+def _combat_off_cleared_target(combat: Any, checks: Any) -> dict[str, Any] | None:
+    """The fight block taken off a person the rolled attack is not at, or None when it stands.
+
+    _build_mechanics_context picks its target alone (_clear_combat_target: the
+    one person here), and the attack reader decides whom the roll is at. stage2
+    T11 "I ignore them and stab at the boar with my knife": the fight was
+    resolved on Wat Thatcher, the snare setter, while the reader cleared him
+    of the blow (no row for the boar yet), and he took 2 damage before the
+    draft. One roll decides an attack (#129) and its target is the fight's: a
+    block on someone the reader cleared (the check's "not_at"), or on someone
+    no rolled attack is at while one is at another, becomes needs_target. The
+    roll's own target then gets its block (_combat_for_aimed_check), or the
+    reader after the draft resolves it on the row the scene files
+    (interpreter.show_attacks). Noted in the ledger.
+    """
+    if not isinstance(combat, dict) or combat.get("status") != "resolved_player_attack":
+        return None
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+    code = str(target.get("code") or "").strip().upper()
+    if not code:
+        return None
+    from app.attack_intent import ATTACK_SKILLS, attack_target
+
+    def skill_of(c: dict[str, Any]) -> str:
+        skill = c.get("skill") if isinstance(c.get("skill"), dict) else {}
+        return str(skill.get("code") or c.get("skill_code") or "")
+
+    rolled = [c for c in (checks if isinstance(checks, list) else [])
+              if isinstance(c, dict) and c.get("natural") is not None and skill_of(c) in ATTACK_SKILLS]
+    if not rolled or any(attack_target(c) == code for c in rolled):
+        return None
+    cleared = any(code in [str(x).upper() for x in c.get("not_at") or []] for c in rolled)
+    elsewhere = next((attack_target(c) for c in rolled if attack_target(c) and attack_target(c) != code), "")
+    if not cleared and not elsewhere:
+        return None
+    out = {
+        "status": "needs_target",
+        "action_kind": combat.get("action_kind") or "player_attack",
+        "player_attack": combat.get("player_attack"),
+        "target_candidates": [c for c in combat.get("target_candidates") or []
+                              if isinstance(c, dict) and str(c.get("code") or "").strip().upper() != code],
+        "rules": combat.get("rules") or [],
+        "cleared_target": code,
+    }
+    turn_ledger.note("check", "combat_target_cleared", code=code, name=str(target.get("name") or ""),
+                     why="cleared_by_attack_reader" if cleared else "roll_aimed_elsewhere", now=elsewhere)
+    return out
+
+
 def _combat_for_aimed_check(state: dict[str, Any], player_input: str, combat: Any, checks: Any) -> dict[str, Any] | None:
     """The combat block for a rolled attack aimed at a row when the intent reader built none, or None.
 
@@ -2730,7 +2779,8 @@ def _combat_for_aimed_check(state: dict[str, Any], player_input: str, combat: An
     then decides it (_combat_follows_attack_check). Noted in the ledger.
     """
     status = str((combat or {}).get("status") or "") if isinstance(combat, dict) else ""
-    if status not in {"", "not_combat"}:
+    # needs_target: the intent reader found no one (or its one was cleared, _combat_off_cleared_target).
+    if status not in {"", "not_combat", "needs_target"}:
         return None
     if not _setup_flag_enabled(_playthrough_options(state), "fighting_enabled", True):
         return None
@@ -22463,6 +22513,53 @@ def _reapply_combat_from_band(conn, combat: dict[str, Any], turn: int) -> None:
     )
 
 
+def _undo_applied_combat(conn, combat: dict[str, Any], turn: int) -> None:
+    """The fight this turn applied to a row the roll was not at, taken back (stage2 T11: Wat Thatcher's 2 damage).
+
+    _apply_deterministic_combat records what it changed in combat["applied"]
+    (the row, its health before and after, its standing with the player
+    before); the reader after the draft found the roll at another row
+    (interpreter.show_attacks, "moved_from"). The health comes back by what
+    was taken and the standing is put back. A death cascade (the nearby and
+    family resentment of a kill) is not undone; it is noted. Ledger note.
+    """
+    applied = combat.get("applied") if isinstance(combat.get("applied"), dict) else {}
+    code = norm_name(str(combat.get("moved_from") or ""))
+    if not applied or norm_name(str(applied.get("code") or "")) != code:
+        turn_ledger.note("interpreter", "attack_damage_not_undone", code=code, why="nothing applied on that row")
+        return
+    row = conn.execute("SELECT id, name, health, max_health FROM npcs WHERE code = ?", (code,)).fetchone()
+    if row is None:
+        return
+    taken = max(0, _int_from_any(applied.get("health_before"), 0) - _int_from_any(applied.get("health_after"), 0))
+    max_health = max(0, int(row["max_health"] or 0))
+    current = int(row["health"] if row["health"] is not None else max_health)
+    restored = clamp(current + taken, 0, max_health) if max_health > 0 else current
+    conn.execute("UPDATE npcs SET health = ? WHERE id = ?", (restored, row["id"]))
+    rel = applied.get("relationship") if isinstance(applied.get("relationship"), dict) else None
+    if rel or applied.get("relationship_absent"):
+        try:
+            if rel:
+                conn.execute(
+                    "UPDATE npc_player_relationships SET affinity = ?, fear = ?, respect = ? WHERE npc_id = ?",
+                    (int(rel["affinity"]), int(rel["fear"]), int(rel["respect"]), int(row["id"])),
+                )
+            else:
+                # The row the blow made ("Player attacked ..."): there was none before it.
+                conn.execute("DELETE FROM npc_player_relationships WHERE npc_id = ?", (int(row["id"]),))
+        except Exception as exc:
+            turn_ledger.note("interpreter", "attack_standing_not_undone", code=code,
+                             error=f"{type(exc).__name__}: {exc}"[:200])
+    conn.execute(
+        "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+        (turn, "mechanics", f"Deterministic combat moved off {code} {row['name']}: the roll was at "
+                            f"{str((combat.get('target') or {}).get('code') or '')}; health {current}->{restored}/{max_health}."[:1400]),
+    )
+    turn_ledger.note("interpreter", "attack_damage_undone", code=code, name=str(row["name"] or ""), damage=taken,
+                     health=restored, now=str((combat.get("target") or {}).get("code") or ""),
+                     cascade_kept=bool(applied.get("killed")))
+
+
 def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None:
     if not _play_system_enabled(conn, "fighting_enabled", True):
         return
@@ -22491,6 +22588,21 @@ def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None
         return
     next_health = clamp(current_health - damage, 0, max_health)
     conn.execute("UPDATE npcs SET health = ? WHERE id = ?", (next_health, row["id"]))
+    # What this changed, so a fight the reader later finds was at another row can be taken back
+    # (_undo_applied_combat, stage2 T11).
+    applied: dict[str, Any] = {"code": target_code, "health_before": current_health, "health_after": next_health,
+                               "killed": next_health <= 0 < current_health}
+    try:
+        rel_row = conn.execute(
+            "SELECT affinity, fear, respect FROM npc_player_relationships WHERE npc_id = ?", (row["id"],)
+        ).fetchone()
+        if rel_row is not None:
+            applied["relationship"] = {"affinity": rel_row["affinity"], "fear": rel_row["fear"], "respect": rel_row["respect"]}
+        else:
+            applied["relationship_absent"] = True
+    except Exception:
+        pass
+    combat["applied"] = applied
     weapon = str((combat.get("player_attack") or {}).get("weapon") or "unarmed")[:120]
     outcome = str(resolution.get("outcome") or "resolved")[:80]
     conn.execute(
@@ -26288,7 +26400,10 @@ def apply_turn(
         # An attack roll with no target (F186): the people here have health to
         # lose before the interpreter matches the roll to one of them.
         combat_before = result.get("_deterministic_combat") if isinstance(result.get("_deterministic_combat"), dict) else {}
-        if isinstance(pending, dict) and combat_before.get("status") == "needs_target" and combat_before.get("action_kind") == "player_attack":
+        # A fight already resolved on someone needs them too: the reader may find the roll was at a
+        # figure this scene filed (stage2 T11, Boar 1), and the result moves to it (show_attacks).
+        if isinstance(pending, dict) and combat_before.get("status") in {"needs_target", "resolved_player_attack"} \
+                and combat_before.get("action_kind") == "player_attack":
             try:
                 written = _ensure_combat_profiles_here(conn)
                 if written:
@@ -26335,6 +26450,9 @@ def apply_turn(
             try:
                 # A block the turn already applied, corrected to the check's band (#129): the difference.
                 corrected = bool(combat_after.get("reapplied_from_band"))
+                if combat_after.get("moved_from") and not corrected:
+                    # The roll was at another row than the fight was applied to (stage2 T11): undone first.
+                    _undo_applied_combat(conn, combat_after, turn)
                 if corrected:
                     _reapply_combat_from_band(conn, combat_after, turn)
                 else:
@@ -27561,6 +27679,20 @@ def _attack_check_for_line(
         turn_ledger.note("check", "attack_target_unknown_noun", noun=report.get("unknown_noun"),
                          minted=bool(report.get("from") == "minted"), target=report.get("target"),
                          not_the_lines=report.get("not_the_lines"))
+    if report.get("not_players_act"):
+        # "A guard stabs me ..." (cheat100 T16): the blow in the line is another's on the player; no roll.
+        turn_ledger.note("check", "attack_not_the_players_act", line=attack_intent.player_line(model_input)[:200])
+    if report.get("unknown_code"):
+        # "I attack @Z" with no Z on record (cheat100 T5): the roll stands with no target.
+        turn_ledger.note("check", "attack_target_unknown_code", code=report.get("unknown_code"),
+                         not_the_lines=report.get("not_the_lines"))
+    if report.get("aim_only"):
+        # The line means them only as the aim of an act that is no blow ("... to find the beast", stage2 T14).
+        turn_ledger.note("check", "attack_ask_aim_only", codes=report.get("aim_only"))
+    for entry in report.get("unconfirmed") or []:
+        if isinstance(entry, dict) and entry.get("why") == "reply_about_another":
+            turn_ledger.note("check", "attack_ask_unconfirmed", code=entry.get("code"), why="reply_about_another",
+                             other=entry.get("other"))
     if report.get("from_place") and report.get("target"):
         # A creature at the player's place the scene record did not hold (stage1 T12): the blow
         # needs its health to come off.
@@ -28167,6 +28299,9 @@ def play_turn(
                     attack = _attack_check_for_line(model_input, context, inferred, pre_draft_usage, pre_draft_trace)
                     if attack and attack.pop("replaces_inferred", False):
                         inferred, attack = attack, None
+                    if isinstance(inferred, dict) and inferred.get("not_the_players_act"):
+                        # The line's blow is someone else's on the player (cheat100 T16): no roll of theirs.
+                        inferred = None
                 for candidate in (attack, inferred, also):
                     if isinstance(candidate, dict) and (
                         candidate.get("social") or check_cfg.get("auto_check_on_risky_actions")
@@ -28272,6 +28407,9 @@ def play_turn(
                 # that person's death only on a success (interpreter.allow_event).
                 if isinstance(item.get("attack"), dict) and resolved.get("enabled") is not False:
                     resolved["attack"] = dict(item["attack"])
+                # Whom the attack reader cleared of this blow (stage2 T11): no fight stands on them.
+                if item.get("not_at") and resolved.get("enabled") is not False:
+                    resolved["not_at"] = [str(c).upper() for c in item.get("not_at") or [] if c]
                 if item.get("act") and resolved.get("enabled"):
                     resolved["act"] = str(item.get("act"))[:100]
                     resolved["act_family"] = str(item.get("act_family") or "")
@@ -28379,6 +28517,11 @@ def play_turn(
                 # A blow the engine aimed at a row in words the intent reader does not
                 # take for a fight ("I swing my fist at the creature", stage1 T12) has
                 # its combat math all the same: the roll's target is the fight's.
+                # A fight the intent reader built on someone the roll is not at (stage2 T11: on Wat
+                # Thatcher, for "stab at the boar") does not stand; the roll's own target, if any, gets it.
+                cleared_combat = _combat_off_cleared_target(mechanics_context.get("combat"), skill_check_results)
+                if cleared_combat is not None:
+                    mechanics_context["combat"] = cleared_combat
                 aimed_combat = _combat_for_aimed_check(context, model_input, mechanics_context.get("combat"),
                                                        skill_check_results)
                 if aimed_combat is not None:
