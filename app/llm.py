@@ -10458,6 +10458,117 @@ def _narration_sample_cover(context: dict[str, Any] | None) -> tuple[list[str], 
     return list(hide), sorted(keep)
 
 
+# A degenerate reply: the model falls into one short unit over and over
+# (cheat100 T71: the 8B draft wrote "discerning" 645 times in a row until the
+# 1400-token cap, cut mid-word, and 2225 characters of it reached the player).
+# Measured, not listed: the longest run of one 1-3-word unit repeated in a row.
+# A run is a loop at DEGENERATE_MIN_REPEATS repeats spanning at least
+# DEGENERATE_MIN_CHARS characters, so "No. No. No." or a chant of three stays.
+# Over 213 recorded turns of four runs, the T71 draft is the only reply with
+# even four repeats of a 1-8-word unit in a row.
+DEGENERATE_MAX_UNIT = 3
+DEGENERATE_MIN_REPEATS = 6
+DEGENERATE_MIN_CHARS = 80
+# Less sound prose than this left after the cut and the reply counts as failed:
+# the depth floor (or the JSON fallback for an empty draft) takes it from there.
+DEGENERATE_USABLE_CHARS = 200
+_DEGEN_WORD_RE = re.compile(r"\S+")
+_DEGEN_SENTENCE_END_RE = re.compile(r"[.!?][\"'”’)]*(?=\s)|\n")
+
+
+def degenerate_run(text: str) -> tuple[int, int, str] | None:
+    """(start, end, unit) of the longest loop in text, by character offsets, or None."""
+    words = list(_DEGEN_WORD_RE.finditer(str(text or "")))
+    norm = [re.sub(r"[^\w']", "", m.group(0).lower()) or m.group(0) for m in words]
+    best: tuple[int, int, str] | None = None
+    for n in range(1, DEGENERATE_MAX_UNIT + 1):
+        i = 0
+        while i + n <= len(norm):
+            unit = norm[i:i + n]
+            k = 1
+            while norm[i + k * n:i + (k + 1) * n] == unit:
+                k += 1
+            if k >= DEGENERATE_MIN_REPEATS:
+                start, end = words[i].start(), words[i + k * n - 1].end()
+                if end - start >= DEGENERATE_MIN_CHARS and (best is None or end - start > best[1] - best[0]):
+                    best = (start, end, " ".join(unit), words[i + n].start())
+                i += k * n
+            else:
+                i += 1
+    if best is None:
+        return None
+    start, end, unit, second = best
+    # A loop that ran to the token cap ends on a piece of its word ("discern").
+    tail = re.match(r"[ \t]*(\S+)[ \t]*(?=\n|$)", text[end:])
+    if tail:
+        piece = re.sub(r"[^\w']", "", tail.group(1).lower())
+        if piece and unit.split()[0].startswith(piece):
+            end += tail.end()
+    return start, end, unit, second
+
+
+def cut_degenerate_loop(text: str, *, keep_sentence: bool = True) -> tuple[str, dict[str, Any] | None]:
+    """The text with its loop cut out, and what was cut (None when there is no loop).
+
+    Prose (``keep_sentence``): the sentence the loop broke goes with it, back to
+    the last sentence end before the loop and on to the next one after it; the
+    sound prose on both sides stays, and so does a section after it (===OPS===).
+    Otherwise (a JSON reply) only the run itself goes, so the JSON around it is
+    left as it was.
+    """
+    text = str(text or "")
+    ops_at = text.find("\n===OPS")
+    scan = text if ops_at < 0 else text[:ops_at]
+    run = degenerate_run(scan)
+    if run is None:
+        return text, None
+    start, end, unit, second = run
+    limit = len(scan)
+    if keep_sentence:
+        closed = bool(re.search(r"[.!?][\"'”’)]*\s*$", scan[start:end]))
+        ends = [m.end() for m in _DEGEN_SENTENCE_END_RE.finditer(scan, 0, start)]
+        start = ends[-1] if ends else 0
+        if not closed:  # the run ended its own sentence ("nothing nothing nothing.")
+            after = _DEGEN_SENTENCE_END_RE.search(scan, end, limit)
+            end = (after.start() if after and after.group(0) == "\n" else after.end()) if after else limit
+    else:
+        start = second  # one telling of the unit stays
+    before, rest = text[:start].rstrip(" \t"), text[end:].lstrip(" \t")
+    joined = before + ("" if not before or not rest or rest[0] == "\n" or before[-1] == "\n" else " ") + rest
+    prose = re.sub(r"===[A-Z]+===", " ", joined.split("\n===OPS", 1)[0])
+    info = {
+        "unit": unit,
+        "chars_cut": len(text) - len(joined),
+        "kept_chars": len(prose.strip()),
+        "usable": len(prose.strip()) >= DEGENERATE_USABLE_CHARS,
+    }
+    return joined, info
+
+
+def _cut_degenerate_reply(
+    content: str, phase: str, trace: list[dict[str, Any]] | None, *, keep_sentence: bool = True
+) -> str:
+    """A degenerate reply is cut back to its sound prose before anything reads it (cheat100 T71), noted."""
+    cut, info = cut_degenerate_loop(content, keep_sentence=keep_sentence)
+    if info is None:
+        return content
+    for _ in range(2):  # a second loop further on in the same reply
+        again, more = cut_degenerate_loop(cut, keep_sentence=keep_sentence)
+        if more is None:
+            break
+        cut = again
+        info = {**more, "chars_cut": len(content) - len(cut), "units": [info["unit"], more["unit"]]}
+    decision = "degenerate_tail_cut" if info["usable"] else "degenerate_reply_dropped"
+    _append_trace(trace, {"phase": phase, "event": decision, **info})
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("prose", decision, phase=phase, **info)
+    except Exception:
+        pass
+    return cut
+
+
 def _chat_text(
     system_prompt: str,
     user_prompt: str,
@@ -10529,7 +10640,7 @@ def _chat_text(
             **_script_repair_trace(),
         },
     )
-    return content
+    return _cut_degenerate_reply(content, phase, trace)
 
 
 def _chat_json(
@@ -10603,6 +10714,7 @@ def _chat_json(
             **_script_repair_trace(),
         },
     )
+    content = _cut_degenerate_reply(content, phase, trace, keep_sentence=False)
     try:
         parsed = _extract_json(content)
         _append_trace(

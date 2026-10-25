@@ -1784,6 +1784,20 @@ _YOU_SAID_RE = re.compile(
     r"chuckle|chuckled|wave|waved)(?:\s+[\w'’]+){0,3}?,(?=\s*(?:[\"“]|$))",
     re.IGNORECASE,
 )
+# The player's "you" carried over "and" to a speech verb right before the line:
+# 'You stride up to the innkeeper, Jasper Wayfarer, and with a flourish of
+# your hand declare, "The guard O was never here at all."' (cheat100 T71: the
+# player's T69 line put back in their mouth on a turn that only asked for
+# work). The tag is the grammar of the one sentence, so no one else may be a
+# subject between "you" and the verb. A bare "You then ask, ..." is left to the
+# readings that already judge it (7B run 5, T51: a voiced request kept).
+_YOU_AND_SAID_RE = re.compile(
+    r"^you\b(?:(?!\b(?:who|whom|whose|which|he|she|they|it)\b)[^\"“”.!?])*?"
+    r"\band\b(?:(?!\b(?:who|whom|whose|which|he|she|they|it)\b)[^\"“”.!?]){0,60}?"
+    r"\b(?:say|ask|declare|announce|proclaim|exclaim|reply|answer|whisper|shout|call\s+out|mutter|murmur|"
+    r"state|insist|explain|add|demand|remark|respond|tell\s+\w+)\s*[,:]?\s*[\"“]",
+    re.IGNORECASE,
+)
 # Someone else's speech tag in the same unit: the line is theirs.
 _OTHER_SAID_RE = re.compile(
     r"\b(?:says|asks|replies|answers|mutters|whispers|shouts|calls|growls|snaps|adds|continues|"
@@ -2153,6 +2167,8 @@ def drop_invented_player_speech(
                 tagged = bool(_YOU_SAID_RE.search(outside)) and not _OTHER_SAID_RE.search(
                     _YOU_SAID_RE.sub(" ", outside)
                 )
+                if not tagged and _YOU_AND_SAID_RE.match(unit.strip()) and not _OTHER_SAID_RE.search(outside):
+                    tagged = True
                 if (
                     not tagged
                     and says is not None
