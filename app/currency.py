@@ -1,46 +1,57 @@
 """Currency sets by theme: smallest-unit storage, format, parse, convert.
 
-Status: built, not wired (TODO n17).
+Status: wired (m1, TODO n17).
 
 A world's money is a currency set chosen from its theme: medieval or fantasy coin (100 copper = 1 silver,
 100 silver = 1 gold, 100 gold = 1 platinum), sci-fi credits, modern cash, post-collapse scrip that leans
-on goods. Every amount this module handles is an int of the set's smallest unit. The only storage is the
-settings row ``currency_config`` (a world rule, not turn state, so it is not snapshotted), written by
-``update_currency_config`` alone. The live game still keeps one unitless ``player.gold`` number; nothing
-here reads or writes it, and no function here touches any other table. The migration of that number is
-written down in ``MIGRATION_PLAN`` below and is not executed by this module. The live game does not call
-anything in this file.
+on goods, bottle caps. Every amount this module handles is an int of the set's smallest unit (the base
+unit; ``$<number>`` in model text is always base units). The only storage here is the settings row
+``currency_config`` (a world rule, not turn state, so it is not snapshotted), written by
+``update_currency_config`` alone; start_playthrough writes the world's set there. The purse itself is
+``player.purse_units``, kept by app/purse.py (``player.gold`` is its whole-gold mirror). No function here
+touches any other table.
 
-Wiring (not done):
-  app/world.py:_apply_player() -> units = currency.from_legacy_gold(player_patch["gold_delta"], cset) before
-      the gold clamp, once player.purse_units exists (MIGRATION_PLAN step 1).
-  app/prose_state.py:stated_coin_amounts() -> currency.coin_pattern(cset) in place of _COIN inside _PAID_RE /
-      _PRICED_RE / _RECEIVED_RE (they carry the pay / price / receive context and the quote split), and
-      currency.parse_amount(match.group(0), cset)["units"] in place of _match_number so the lists hold units.
-  app/world.py:_reconcile_prose_with_state() -> currency.format_amount(units, cset) for the "You have N gold"
-      sentence and currency.coin_pattern(cset) for the clamp regex.
-  app/world.py:resolve_turn_bands() -> money_delta = currency.from_legacy_gold(gold_delta, cset); the dice in
-      app/rng.py DEFAULT_MAGNITUDE_TABLES["gold"] stay in the display denomination (step 3).
-  app/quests.py:pay_quest_completion() / create_quest() -> reward_units = currency.from_legacy_gold(reward_gold, cset) (step 6).
-  app/world.py:start_playthrough() -> cset["starting_purse"] instead of the literal 12 (step 7).
-  app/world.py:get_state() -> state["purse"] = currency.purse_view(units, cset) for the UI and the prompt packet.
-  app/world.py:build_prompt_context() -> one line naming the coin words, currency.coin_words(cset).
+Wiring (done):
+  app/world.py:_apply_player() -> purse.turn_units(patch, cset): money_delta (exact units) while it agrees with
+      gold_delta, else from_legacy_gold(gold_delta); the old gold caps in units; purse_units and the gold mirror
+      written together.
+  app/prose_state.py:stated_coin_amounts() -> every reader regex matches _ANY_COIN (coin_pattern over every
+      set's words) and _match_value reads the match in the current set through parse_amount (joined parts are
+      one sum); the lists stay on the legacy gold scale the gates compare in ("five silver" is 0.05) and
+      _purse.put_gold writes the exact units.
+  app/world.py:_reconcile_prose_with_state() -> the refused-purchase sentence says format_amount of the purse
+      and the price; the clamped price is found with parse_all_amounts and rewritten as format_amount.
+  app/world.py:resolve_turn_bands() -> the gold dice stay legacy gold (step 3); a stale money_delta is dropped
+      when they write gold_delta; _apply_player converts.
+  app/quests.py:pay_quest_reward() -> purse.add_units(from_legacy_gold(reward gold)); reward_text shows the
+      world's coins (step 6). reward_gold stays the job's whole legacy gold.
+  app/world.py:start_playthrough() -> the set from the options (setup pick or theme) stored in
+      currency_config; purse_units = cset["starting_purse"], gold = to_legacy_gold (step 7).
+  app/world.py:get_state() -> state["purse"] = purse_view(units, cset) (+ coin_words); player.gold = the mirror.
+  app/world.py:build_prompt_context() -> player.purse / player.purse_units in place of gold, and the one line
+      money_line() (prompts._visible_world ships it as world_state.money).
+  app/world.py:_render_money_commands() -> "$<number>" in the draft's narration and summary becomes
+      render_money_commands' coins before any reader or the player sees it.
+  app/world.py:_settle_trade() -> sale and purchase prices are parse_all_amounts units (price_units); the
+      m0 interim copper_not_held is retired.
 
 Turn on:
-  [ ] settings row currency_config is read by get_state through currency.active_set(conn) (no snapshot:
+  [x] settings row currency_config is read by get_state through currency.active_set(conn) (no snapshot:
       it is a world rule, not turn state)
-  [ ] _clear_playthrough(): DELETE FROM settings WHERE key = 'currency_config' so a new world re-detects its
+  [x] _clear_playthrough(): DELETE FROM settings WHERE key = 'currency_config' so a new world re-detects its
       set from its own playthrough_options instead of keeping the set the last world chose
-  [ ] MIGRATION_PLAN steps 1-12 in order; step 1 is the only schema change (additive player columns);
-      ensure_schema here is a no-op, so no WORLD_TABLES / AUTOINC_TABLES / snapshot / export entry is needed
-  [ ] route GET/POST /api/currency-config (pattern: /api/tts-config) if the user should pick a set
-  [ ] UI: purse display reads state.purse.display; the bands text in band_contract_block names the coin words
-  [ ] prompt: the coin words line; nothing else
+  [x] MIGRATION_PLAN steps 1-11 (step 1 the only schema change: player.purse_units); step 12 is later
+  [x] route GET/POST /api/currency-config (world.currency_config_view / update_world_currency)
+  [x] UI: purse display reads state.purse; band_contract_block names gold only as the gold_band field (kept)
+  [x] prompt: the coin words line; nothing else
 
-Tests: tests/test_currency.py
+A world with no theme match gets DEFAULT_SET (coin_medieval: copper, silver, gold, platinum).
+
+Tests: tests/test_currency.py, tests/test_m1_currency_purse.py
 """
 from __future__ import annotations
 
+import contextvars
 import copy
 import json
 import math
@@ -48,7 +59,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from app.prose_state import _NUMBER_WORDS
+from app.number_words import _COMPOUND_AMOUNT, _NUMBER_WORDS, _number
 
 CONFIG_KEY = "currency_config"
 DEFAULT_SET = "coin_medieval"
@@ -150,7 +161,30 @@ CURRENCY_SETS: dict[str, dict[str, Any]] = {
         "starting_purse": 60,
         "compound": True,
     },
+    # Stell (2026-10-24): "credits, or bottle caps (if the player wants to play a fallout rpg for example)".
+    # One unit; a cap is worth about what a credit is.
+    "caps": {
+        "id": "caps",
+        "label": "caps",
+        "smallest": "cap",
+        "denominations": [
+            {"id": "cap", "value": 1, "singular": "cap", "plural": "caps", "short": "caps",
+             "words": ["cap", "caps", "bottle cap", "bottle caps", "bottlecap", "bottlecaps"]},
+        ],
+        "generic_words": ["caps", "bottle caps"],
+        "display": "cap",
+        "per_legacy_gold": 10,
+        "decimal": False,
+        "symbol": "",
+        "accepts_goods": True,
+        "coin_acceptance": "usually",
+        "starting_purse": 120,
+        "compound": False,
+    },
 }
+
+# Worlds that pay in bottle caps; checked before the other post-collapse words.
+CAPS_WORDS = ("fallout", "bottle cap", "bottlecap", "bottle-cap")
 
 # Theme detection, first match wins. The words below mark a post-collapse
 # world whatever its tech level says.
@@ -208,7 +242,13 @@ def detect_theme_set(options: dict[str, Any] | None) -> str:
     custom_style = _option_text(options, "custom_style")
     economy = _option_text(options, "economy")
     tech_level = _option_text(options, "tech_level")
+    chosen = _option_text(options, "currency_set")
+    if chosen in CURRENCY_SETS:
+        # The setup page's own pick rides in the options (E: chosen with the world).
+        return chosen
     blob = " ".join((world_style, custom_style, economy, tech_level))
+    if any(word in blob for word in CAPS_WORDS):
+        return "caps"
     if any(word in blob for word in SCRIP_WORDS):
         return "scrip"
     # Imported here, not at module level, so a later wiring from app.world does not loop.
@@ -311,15 +351,41 @@ def active_set(conn) -> dict[str, Any]:
     """The world's CurrencySet: the config row's ``set`` when chosen, else detection from playthrough_options,
     with the row's symbol and starting_purse overrides applied."""
     cfg = get_currency_config(conn)
+    options = _playthrough_options(conn)
     if cfg["set"] != "auto":
         cset = theme_set(cfg["set"])
+        if "barter" in _option_text(options, "economy"):
+            cset["accepts_goods"] = True
     else:
-        cset = set_for_options(_playthrough_options(conn))
+        cset = set_for_options(options)
     if cfg["symbol"]:
         cset["symbol"] = cfg["symbol"]
     if cfg["starting_purse"] is not None:
         cset["starting_purse"] = int(cfg["starting_purse"])
     return cset
+
+
+# The set a turn is played in, for the pure text readers (app/prose_state.py)
+# that have no connection: app/world.py sets it around play_turn / apply_turn.
+# Unset, it is the default set, which is what the readers read before m1.
+_CURRENT_SET: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("morkyn_currency_set", default=None)
+
+
+def use_set(cset: dict[str, Any] | None) -> contextvars.Token:
+    """Make ``cset`` the current set; pass the token to reset_set when the turn ends."""
+    return _CURRENT_SET.set(cset)
+
+
+def reset_set(token: contextvars.Token) -> None:
+    try:
+        _CURRENT_SET.reset(token)
+    except (ValueError, RuntimeError):
+        _CURRENT_SET.set(None)
+
+
+def current_set() -> dict[str, Any]:
+    cset = _CURRENT_SET.get()
+    return cset if isinstance(cset, dict) and cset.get("denominations") else CURRENCY_SETS[DEFAULT_SET]
 
 
 # ---------------------------------------------------------------------------
@@ -558,10 +624,11 @@ def coin_pattern(cset: dict[str, Any]) -> str:
 _NUMBER_WORD_ALTERNATION = "|".join(
     sorted((w.replace(" ", r"\s+") for w in _NUMBER_WORDS), key=len, reverse=True)
 )
-_AMOUNT_RE = r"(?:\d{1,3}(?:,\d{3})+|\d{1,7}(?:\.\d{1,2})?|" + _NUMBER_WORD_ALTERNATION + r")"
+# "forty-six gold" is 46 (m1: the compound tens-and-units the prose readers read since 8B run 146).
+_AMOUNT_RE = r"(?:\d{1,3}(?:,\d{3})+|\d{1,7}(?:\.\d{1,2})?|" + _COMPOUND_AMOUNT + "|" + _NUMBER_WORD_ALTERNATION + r")"
 # A money phrase may not start inside a word, right after a currency symbol, after a hyphen ("twenty-five
-# gold" has a compound number the grammar cannot read, so it is None rather than 5 gold) or inside a
-# comma-grouped number ("1,234,567 credits" is never read from its second group).
+# gold" is read whole from "twenty", never as 5 gold from "five") or inside a comma-grouped number
+# ("1,234,567 credits" is never read from its second group).
 _START_RE = r"(?<![\w$-])(?<!\d,)"
 _JOIN_RE = r"(?:\s*,\s*and\s+|\s*,\s*|\s+and\s+)"
 
@@ -570,6 +637,9 @@ def _amount_value(text: str) -> Decimal | None:
     key = " ".join(text.strip().lower().split())
     if key in _NUMBER_WORDS:
         return Decimal(_NUMBER_WORDS[key])
+    compound = _number(key) if not any(ch.isdigit() for ch in key) else None
+    if compound is not None:
+        return Decimal(compound)
     key = key.replace(",", "")
     try:
         return Decimal(key)
@@ -699,6 +769,35 @@ def round_price(units: int) -> int:
     return sign * max(1, rounded)
 
 
+def legacy_value(units: int, cset: dict[str, Any]) -> int | float:
+    """Units on the legacy gold scale, whole when it is whole: 500 copper -> 0.05, 120000 -> 12."""
+    per = max(1, int(cset.get("per_legacy_gold") or 1))
+    units = int(units)
+    return units // per if units % per == 0 else float(Decimal(units) / Decimal(per))
+
+
+# The model's money command (Stell, 2026-10-24): "$69420" is 69420 base units. Not "$12.34" (a decimal set's
+# own price), not part of a word or a longer number.
+MONEY_COMMAND_RE = re.compile(r"(?<![\w$])\$(?P<units>\d{1,9})(?![\d\w]|[.,]\d)")
+
+
+def render_money_commands(text: str, cset: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """Every ``$<number>`` in model text as the world's coins ("$69420" -> "6 gold, 94 silver, 20 copper").
+    Returns the text and what was rendered. The model never splits a sum into coins; the engine does."""
+    rendered: list[dict[str, Any]] = []
+
+    def swap(match: re.Match) -> str:
+        units = int(match.group("units"))
+        words = format_amount(units, cset, "long")
+        if ", " in words:
+            head, _, last = words.rpartition(", ")
+            words = f"{head} and {last}"
+        rendered.append({"command": match.group(0), "units": units, "text": words})
+        return words
+
+    return MONEY_COMMAND_RE.sub(swap, str(text or "")), rendered
+
+
 def purse_view(units: int, cset: dict[str, Any]) -> dict[str, Any]:
     """What a UI or prompt packet shows for a purse: {"units", "set", "display", "short", "long",
     "breakdown", "legacy_gold"}."""
@@ -715,57 +814,59 @@ def purse_view(units: int, cset: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# The migration of the single gold number (documented, not executed)
+# The migration of the single gold number (m1: steps 1-11 done, 12 later)
 # ---------------------------------------------------------------------------
 
 MIGRATION_PLAN: tuple[dict[str, Any], ...] = (
     {"step": 1, "file": "app/db.py", "function": "_migrate_columns", "schema": True,
-     "change": "Add player.purse_units INTEGER NOT NULL DEFAULT 0 and player.currency_set TEXT NOT NULL "
-               "DEFAULT '' with the PRAGMA-guarded ALTER pattern. Backfill once: purse_units = gold * "
-               "per_legacy_gold of the active set, currency_set = the set id, guarded by currency_set = ''. "
-               "Old exports load through the same backfill in _restore_world after the INSERT."},
+     "change": "Done (m1): player.purse_units INTEGER NOT NULL DEFAULT 0 with the PRAGMA-guarded ALTER (no "
+               "currency_set column: the set is the settings row). db._migrate_purse_units backfills once, "
+               "purse_units = from_legacy_gold(gold, active_set), recorded in settings purse_units_migrated. "
+               "An old export restored without the column, or any writer of gold alone, is adopted by "
+               "purse.units_of_row (the gold beyond the mirror is added in units)."},
     {"step": 2, "file": "app/world.py", "function": "get_state", "schema": False,
-     "change": "state['purse'] = currency.purse_view(row['purse_units'], cset); player['gold'] becomes "
-               "to_legacy_gold(purse_units), derived and no longer authoritative. _action_context builds "
-               "player_limits_snapshot['purse'] from state['purse']['display']."},
+     "change": "Done (m1): state['purse'] = purse_view(units, cset) plus coin_words; player['gold'] is "
+               "to_legacy_gold(purse_units), derived; player_limits_snapshot carries purse (the coins) and "
+               "purse_units."},
     {"step": 3, "file": "app/world.py", "function": "resolve_turn_bands", "schema": False,
-     "change": "rng.DEFAULT_MAGNITUDE_TABLES['gold'] keeps its dice (they are in the display denomination); "
-               "the resolved gold_delta is multiplied by per_legacy_gold into money_delta (units); "
-               "band_contract_block names the display denomination from coin_words."},
-    {"step": 4, "file": "app/turn_dsl.py", "function": "_amount", "schema": False,
-     "change": "GOLD keeps its name (COIN and MONEY already alias it); a number followed by a coin word "
-               "goes through currency.parse_amount, so GOLD -5 silver means -500 copper. Result key "
-               "player['money_delta'] (units) beside the old gold_delta for one release."},
+     "change": "Done (m1): the gold dice keep legacy gold; _apply_player converts gold_delta with "
+               "from_legacy_gold; a die written over gold_delta drops a stale money_delta. band_contract_block "
+               "names gold only as the gold_band field, kept."},
+    {"step": 4, "file": "app/turn_dsl.py", "function": "_apply_op", "schema": False,
+     "change": "Done (m1): GOLD $500 is the money command, money_delta 500 (purse.put_money); a bare number "
+               "stays legacy gold. The trade_offer packet shows the coins and GOLD -$units."},
     {"step": 5, "file": "app/prose_state.py", "function": "stated_coin_amounts", "schema": False,
-     "change": "With a currency set, _COIN inside _PAID_RE / _PRICED_RE / _RECEIVED_RE becomes "
-               "currency.coin_pattern(cset) and each match is read with currency.parse_amount(match.group(0), "
-               "cset)['units'], so the paid / priced / received lists hold units and keep their split; without "
-               "a set keep today's behaviour. _settle_stated_gold passes the active set and writes money_delta."},
-    {"step": 6, "file": "app/quests.py", "function": "pay_quest_completion", "schema": False,
-     "change": "reward_gold stays and is read as the display denomination; create_quest also computes "
-               "reward_units; pay_quest_completion adds to purse_units, mirrors gold, and goes through the "
-               "same clamp helper _apply_player uses; quest_context_for_llm shows format_amount(reward_units, "
-               "cset, 'short')."},
+     "change": "Done (m1): every reader regex matches _ANY_COIN (coin_pattern over every set's words); "
+               "_match_value reads a match in the current set through parse_amount (joined parts one sum) "
+               "and returns the legacy gold scale the gates compare in (five silver = 0.05; a coin the world "
+               "does not use is no money). _settle_stated_gold and the gates write exact units with "
+               "purse.put_gold. The world's set reaches the pure readers by currency.use_set around "
+               "play_turn and apply_turn."},
+    {"step": 6, "file": "app/quests.py", "function": "pay_quest_reward", "schema": False,
+     "change": "Done (m1): reward_gold stays the job's whole legacy gold; the payout adds "
+               "from_legacy_gold(gold) units through purse.add_units (paid['money_units']); reward_text and "
+               "the packet's job pay show format_amount in the world's coins."},
     {"step": 7, "file": "app/world.py", "function": "start_playthrough", "schema": False,
-     "change": "The literal 12 becomes cset['starting_purse'] in purse_units and to_legacy_gold(...) in gold; "
-               "currency_set is written from detect_theme_set(options)."},
+     "change": "Done (m1): the set is set_for_options(options) (the setup's currency_set, else the theme), "
+               "stored in currency_config; purse_units = starting_purse, gold = to_legacy_gold."},
     {"step": 8, "file": "app/world.py", "function": "_apply_player", "schema": False,
-     "change": "Accept money_delta (units) or gold_delta (display denomination, converted); clamp per turn to "
-               "from_legacy_gold(-50000)..from_legacy_gold(5000) and the total to 0..from_legacy_gold(1000000); "
-               "one UPDATE of both columns. _settle_purse compares in units; _reconcile_prose_with_state "
-               "rewrites with format_amount and its clamp regex uses coin_pattern(cset)."},
+     "change": "Done (m1): money_delta (units) while it agrees with gold_delta, else gold_delta converted; "
+               "the per-turn and total caps in units; one UPDATE of both columns. _settle_purse, "
+               "_settle_trade, _settle_purchase, _void_unbought_spend compare in units; "
+               "_reconcile_prose_with_state writes format_amount."},
     {"step": 9, "file": "app/local_intel.py", "function": "_record_hint", "schema": False,
-     "change": "BRIBE_GOLD = 2 becomes from_legacy_gold(2); every other UPDATE player SET gold found by "
-               "grep -n 'SET gold' app/ goes through the step 8 helper."},
-    {"step": 10, "file": "static/app.js", "function": "appendTurnMeta", "schema": False,
-     "change": "Every player.gold read (character sheet, play dock, the rewards line) reads "
-               "state.purse.display; offer and quest cards show reward strings as given. No new fetch."},
+     "change": "Done (m1): the bribe is from_legacy_gold(BRIBE_GOLD) units through purse.add_units; "
+               "debug_commands' /stat gold writes the purse; no UPDATE player SET gold is left in app/ but "
+               "_apply_player's and the debug command's mirrored writes."},
+    {"step": 10, "file": "static/app.js", "function": "purseText", "schema": False,
+     "change": "Done (m1): the character sheet, the pack's seal and the play dock read state.purse; the "
+               "rewards banner shows money_gain_text. Offer and quest cards still show reward_gold as given."},
     {"step": 11, "file": "app/world.py", "function": "export_world", "schema": False,
-     "change": "The new columns ride with the player row in WORLD_TABLES; _save_snapshot already snapshots "
-               "the whole player row, so rewind is covered; currency_config exports with every settings row."},
+     "change": "Done (m1, nothing to add): purse_units rides with the player row; snapshots take the whole "
+               "row, so rewind is covered; currency_config exports with every settings row."},
     {"step": 12, "file": "app/world.py", "function": "_apply_player", "schema": False,
-     "change": "After one release drop the gold_delta handling and keep the gold column as a derived mirror, "
-               "or leave it unused in a later additive-only pass."},
+     "change": "Later: when nothing reads player.gold (titles, local_intel's direction hints, the quest "
+               "cards, older tools) drop the gold mirror, and move the gates' legacy gold scale to units."},
 )
 
 

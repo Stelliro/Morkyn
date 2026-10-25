@@ -16,6 +16,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from app import currency as _currency
+from app import purse as _purse
 from app import turn_ledger, venues
 from app.db import connect, row_to_dict, rows_to_dicts
 from app.narration_pipeline import _SENTENCE_SPLIT_RE as _TITLED_SENTENCE_SPLIT_RE, _TITLE_ABBREVIATIONS
@@ -4529,6 +4531,14 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
                 """
             ).fetchone()
         )
+        # The purse in the world's base units and its coins (m1); gold is the
+        # whole-gold mirror the older readers use.
+        world_set = _currency.active_set(conn)
+        purse_view = _currency.purse_view(_purse.units_of_row(player, world_set) if player else 0, world_set)
+        purse_view["coin_words"] = [str(d.get("plural") or d.get("id")) for d in world_set.get("denominations") or []]
+        if player:
+            player["purse_units"] = purse_view["units"]
+            player["gold"] = purse_view["legacy_gold"]
         locations = rows_to_dicts(
             conn.execute("SELECT * FROM locations ORDER BY name COLLATE NOCASE").fetchall()
         )
@@ -4865,6 +4875,7 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             "setup_complete": settings.get("setup_complete") == "true" or settings.get("setup_complete") is True,
             "settings": settings,
             "player": player,
+            "purse": purse_view,
             "resources": resources,
             "collapse": collapse,
             "resource_settings": res_settings,
@@ -5338,6 +5349,8 @@ def _clear_playthrough(conn) -> None:
     # game 2's opening draft as its GOAL and moved the new player to game 1's
     # "The Spindle at Edge".
     conn.executemany("DELETE FROM settings WHERE key = ?", [(key,) for key in SNAPSHOT_SETTING_KEYS])
+    # The last world's money is that world's: a new one re-detects its set (m1).
+    conn.execute("DELETE FROM settings WHERE key = 'currency_config'")
 
     for table in (
         "quest_steps",
@@ -5711,12 +5724,24 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             ),
         )
         start_id = int(cursor.lastrowid)
+        # The world's money is chosen with the world and stored with it (m1):
+        # the setup's pick, else the theme's set. The purse starts at the set's
+        # starting purse in base units; gold is its whole-gold mirror.
+        from app import currency
+
+        world_set = currency.set_for_options(options)
+        try:
+            currency.update_currency_config(conn, {"set": world_set["id"]})
+        except ValueError:
+            pass
+        start_units = int(world_set.get("starting_purse") or 0)
         conn.execute(
             """
-            INSERT INTO player (id, name, public_name, title, age, sex, previous_life_age, previous_life_sex, backstory_mode, backstory, memory_policy, health, max_health, level, xp, gold, karma, current_location_id)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO player (id, name, public_name, title, age, sex, previous_life_age, previous_life_sex, backstory_mode, backstory, memory_policy, health, max_health, level, xp, gold, karma, current_location_id, purse_units)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (player_name, public_name, player_title, player_age, player_sex, previous_life_age, previous_life_sex, backstory_mode, character_backstory, memory_policy, 20, 20, 1, 0, 12, 0, start_id),
+            (player_name, public_name, player_title, player_age, player_sex, previous_life_age, previous_life_sex, backstory_mode, character_backstory, memory_policy, 20, 20, 1, 0,
+             currency.to_legacy_gold(start_units, world_set), 0, start_id, start_units),
         )
         # Kept across games so the next character is not handed this name again.
         from app.example_pools import remember_player_name
@@ -6908,6 +6933,53 @@ def _settle_turn_start(start: dict[str, Any]) -> None:
         )
     if taken:
         turn_ledger.note("rewind", "turn_start_kept", snapshot_id=int(row["id"]), changed=taken[:40])
+
+
+def _render_money_commands(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """The model writes a sum as ``$<number>`` (base units); the player reads coins (m1, Stell 2026-10-24).
+
+    "$69420" in the narration and the summary becomes "6 gold, 94 silver and 20
+    copper" before any reader or the player sees it, so the readers read the
+    coins back into the same number. Idempotent: rendered text has no command."""
+    if not isinstance(result, dict):
+        return []
+    cset = _currency.current_set()
+    rendered: list[dict[str, Any]] = []
+    for key in ("narration", "turn_summary", "summary"):
+        value = result.get(key)
+        if isinstance(value, str) and "$" in value:
+            result[key], done = _currency.render_money_commands(value, cset)
+            rendered.extend(done)
+    for seg in result.get("narration_segments") or []:
+        if isinstance(seg, dict) and isinstance(seg.get("text"), str) and "$" in seg["text"]:
+            seg["text"], done = _currency.render_money_commands(seg["text"], cset)
+            rendered.extend(done)
+    unique = list({r["command"]: r for r in rendered}.values())
+    if unique:
+        turn_ledger.note("money", "command_rendered", set=cset.get("id"), sums=unique[:8])
+    return unique
+
+
+def _in_world_currency(fn):
+    """Around a turn entry point: the text readers (app/prose_state.py) read the world's money (m1).
+
+    They have no connection, so the world's currency set rides in a context
+    variable for the turn (app/currency.py use_set / current_set)."""
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            with connect().closing() as conn:
+                cset = _currency.active_set(conn)
+        except Exception:
+            cset = None
+        token = _currency.use_set(cset)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _currency.reset_set(token)
+
+    return wrapper
 
 
 def _turn_start_record(fn):
@@ -13070,7 +13142,10 @@ def _action_context(
             "max_health": player.get("max_health"),
             "level": player.get("level"),
             "karma": player.get("karma"),
-            "gold": player.get("gold"),
+            **(
+                {"purse": state["purse"].get("long"), "purse_units": state["purse"].get("units")}
+                if isinstance(state.get("purse"), dict) else {"gold": player.get("gold")}
+            ),
             "carrying": {
                 "effective_weight": inventory_summary.get("effective_weight"),
                 "weight_capacity": inventory_summary.get("weight_capacity"),
@@ -13402,6 +13477,58 @@ def _speech_memory(state: dict[str, Any], turns: int = 3, limit: int = 12) -> di
     }
 
 
+def money_line(purse: dict[str, Any] | None = None) -> str:
+    """The narrator's one line on money (m1): the world's coin words and the $<number> form.
+
+    "we can use the $ symbol as a command for the llm ... we should never rely on
+    the llm to work out the item cost by coin, just a single value" (Stell,
+    2026-10-24). The fewest plain words; the engine shows the coins."""
+    cset = _currency.current_set()
+    if isinstance(purse, dict) and purse.get("set") in _currency.CURRENCY_SETS:
+        cset = _currency.CURRENCY_SETS[str(purse["set"])]
+    denoms = cset.get("denominations") or []
+    words = ", ".join(str(d.get("plural") or d.get("id")) for d in denoms)
+    base = str((denoms[0] if denoms else {}).get("plural") or "units")
+    return f"Money is {words}. Write every sum as $ and its count in {base}, in the prose and in GOLD."
+
+
+def currency_config_view() -> dict[str, Any]:
+    """GET /api/currency-config: the stored choice, the world's set, the purse in it, and the sets to pick from."""
+    with connect().closing() as conn:
+        config = _currency.get_currency_config(conn)
+        cset = _currency.active_set(conn)
+        has_player = conn.execute("SELECT 1 FROM player WHERE id = 1").fetchone() is not None
+        units = _purse.purse_units(conn, cset) if has_player else 0
+    sets = [
+        {"id": sid, "label": str(s.get("label") or sid),
+         "coins": [str(d.get("plural") or d.get("id")) for d in s.get("denominations") or []]}
+        for sid, s in _currency.CURRENCY_SETS.items()
+    ]
+    return {"config": config, "active": cset.get("id"), "purse": _currency.purse_view(units, cset), "sets": sets}
+
+
+def update_world_currency(payload: dict[str, Any]) -> dict[str, Any]:
+    """POST /api/currency-config: store the choice; a purse already held keeps its worth in the new set.
+
+    ValueError for an unknown set or a negative starting purse (the route answers 400)."""
+    with connect().closing() as conn:
+        before = _currency.active_set(conn)
+        has_player = conn.execute("SELECT 1 FROM player WHERE id = 1").fetchone() is not None
+        units = _purse.purse_units(conn, before) if has_player else 0
+        _currency.update_currency_config(conn, payload)
+        after = _currency.active_set(conn)
+        if has_player and after.get("id") != before.get("id"):
+            # Through legacy gold as the exchange base (currency.convert).
+            moved = _purse.write_purse(conn, _currency.convert(units, before, after), after)
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (_turn_value(conn), "system",
+                 f"The purse is counted in {after.get('label')} now: {_currency.format_amount(moved, after)} "
+                 f"(was {_currency.format_amount(units, before)})."[:900]),
+            )
+    return currency_config_view()
+
+
 def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, Any]:
     _write_source_index(state)
     query = _tokens(player_input)
@@ -13512,6 +13639,13 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     if not state.get("equipment_effects"):
         state_abilities = [*state_abilities, *equipment_effects.get("granted_abilities", [])]
     context_player = dict(state.get("player") or {})
+    # The purse as the world's coins and its base units (m1); the whole-gold
+    # mirror is the engine's, not the model's.
+    purse_view = state.get("purse") if isinstance(state.get("purse"), dict) else {}
+    if purse_view:
+        context_player.pop("gold", None)
+        context_player["purse"] = purse_view.get("long")
+        context_player["purse_units"] = purse_view.get("units")
     context_player["effective_stats"] = equipment_effects.get("stat_modifiers") or {}
     context_player["equipment_ability_names"] = [ability.get("name") for ability in equipment_effects.get("granted_abilities", []) if ability.get("name")]
     inventory = _select_inventory_context(state.get("inventory", []), query, refs, intent, limits)
@@ -13582,6 +13716,8 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     prompt_context = {
         **state,
         "player": context_player,
+        # The one money line (m1, Stell 2026-10-24): the coin words and the $<number> form.
+        "money": money_line(state.get("purse")),
         "locations": locations,
         "events": events,
         "conversations": conversations,
@@ -13626,6 +13762,8 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             "source_hits": len(relevant_sources),
         },
     }
+    # The full purse view is the UI's; the model has player.purse and player.purse_units (m1).
+    prompt_context.pop("purse", None)
     if not map_space:
         prompt_context.pop("map_space", None)
     # Names, jobs and venue names drawn fresh for this turn (playtest #14):
@@ -17171,10 +17309,21 @@ def _coin_name_match(name: str) -> bool:
     # "scattered coins", "old coins": a short name headed by a coin word is
     # coin whatever describes it (8B run 149, T48).
     words = re.findall(r"[a-z]+", str(name or "").lower())
-    if not (0 < len(words) <= 3) or words[-1] not in {"coin", "coins", "gold", "silver", "silvers", "copper", "coppers", "crowns", "crown"}:
+    if not (0 < len(words) <= 3) or words[-1] not in _coin_head_words():
         return False
     # A kind of coin is a curio ("worn seagull coin"); a state of coin is coin.
     return all(w in _COIN_STATE_WORDS for w in words[:-1])
+
+
+def _coin_head_words() -> frozenset[str]:
+    """The one-word coin names an item may end in: the old coin words and every denomination of the world's set (m1)."""
+    words = {"coin", "coins", "gold", "silver", "silvers", "copper", "coppers", "crowns", "crown"}
+    for denom in _currency.current_set().get("denominations") or []:
+        for word in [*(denom.get("words") or []), denom.get("singular"), denom.get("plural")]:
+            key = str(word or "").strip().lower()
+            if key.isalpha() and key not in _COIN_WORDS_THAT_ARE_THINGS:
+                words.add(key)
+    return frozenset(words)
 
 
 _COIN_STATE_WORDS = frozenset({
@@ -17204,6 +17353,8 @@ _COIN_GENERIC_HEADS = frozenset({"coin", "coins", "money", "cash", "coinage", "f
 # Words a currency set lists that are things in their own right too.
 _COIN_WORDS_THAT_ARE_THINGS = frozenset({
     "purse", "note", "notes", "bundle", "bundles", "chit", "chits", "trade goods", "buck", "bucks",
+    # A cap is a hat as well as a bottle cap (the caps set, m1); "caps" with a number is money.
+    "cap",
 })
 # A metal named alone is what a thing is made of, not the thing (T14 "brass").
 # Only metals: "stone", "rope" or "leather" alone can be a thing carried.
@@ -17222,10 +17373,9 @@ _ITEM_QUALITY_WORDS = frozenset({
 })
 
 
-# The coin words of the game's one money today (copper, silver and gold; the
-# medieval set's denominations and generic words). The currency module holds a
-# world's own set but is not wired into the live game yet (TODO n17, its leaf
-# test): when it is, these come from that world's set (coin_words).
+# The coin words of the coin set (copper, silver and gold; the medieval set's
+# denominations and generic words). With m1 the world's own set adds its words
+# (credits, caps): _coin_heads reads currency.coin_words of the current set.
 _COIN_HEAD_WORDS = frozenset({
     "copper", "coppers", "silver", "silvers", "gold", "golds", "platinum", "crown", "crowns", "penny", "pennies",
     "gold coin", "gold coins", "gold piece", "gold pieces",
@@ -17234,7 +17384,8 @@ _COIN_HEAD_WORDS = frozenset({
 
 def _coin_heads(conn=None) -> frozenset[str]:
     """The world's coin words, lower case, without the words that are also things."""
-    return frozenset(w for w in _COIN_HEAD_WORDS if w not in _COIN_WORDS_THAT_ARE_THINGS)
+    world_words = {w for w in _currency.coin_words(_currency.current_set()) if w not in {"money", "purse"}}
+    return frozenset(w for w in (_COIN_HEAD_WORDS | world_words) if w not in _COIN_WORDS_THAT_ARE_THINGS)
 
 
 def _coin_phrase_head(words: list[str], heads: frozenset[str]) -> str:
@@ -17399,8 +17550,13 @@ def _not_a_thing_name(name: str, conn=None) -> dict[str, Any] | None:
     coin = _coin_phrase_head(words, _coin_heads(conn))
     if coin:
         # The amount text and its coin word, for the transaction parser (m0)
-        # to price; the purse is not moved here.
-        return {"decision": "coin_amount_not_an_item", "amount": raw, "coin": coin}
+        # to price; the purse is not moved here. ``units`` is what the text
+        # names in the world's set (m1), when it names a number.
+        parsed = _currency.parse_amount(raw, _currency.current_set())
+        note = {"decision": "coin_amount_not_an_item", "amount": raw, "coin": coin}
+        if parsed:
+            note["units"] = int(parsed["units"])
+        return note
     if len(words) == 1 and words[0] in _MATERIAL_WORDS:
         return {"decision": "material_not_an_item", "material": words[0]}
     if all(w in _ITEM_QUALITY_WORDS for w in words):
@@ -17444,11 +17600,18 @@ def _coins_to_gold(
             mentions = [m for m in coin_mentions(str(narration or "")) if 0 < m <= 500]
         except Exception:
             mentions = []
-        amount = mentions[0] if len(set(mentions)) == 1 else delta
-        conn.execute("UPDATE player SET gold = gold + ? WHERE id = 1", (int(amount),))
+        # In base units (m1): the one sum the prose names, else the item's own
+        # count in its own coin ("copper" x3 is three copper), else whole gold.
+        world_set = _currency.current_set()
+        if len(set(mentions)) == 1:
+            units = _currency.from_legacy_gold(mentions[0], world_set)
+        else:
+            parsed = _currency.parse_amount(f"{delta} {_coin_name_head(name)}", world_set)
+            units = int(parsed["units"]) if parsed else _currency.from_legacy_gold(delta, world_set)
+        _purse.add_units(conn, units, world_set)
         conn.execute(
             "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
-            (_turn_value(conn), "gold", f"Coins counted into the purse: +{int(amount)} ({name})."),
+            (_turn_value(conn), "gold", f"Coins counted into the purse: +{_currency.format_amount(units, world_set)} ({name})."),
         )
     return kept
 
@@ -19639,10 +19802,19 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     )
     level = clamp(int(player["level"]) + level_delta, 1, 100)
     xp = clamp(int(player["xp"]) + xp_delta, 0, 1_000_000)
-    gold_delta = clamp(int(player_patch.get("gold_delta") or 0), -50_000, 5_000)
+    # The purse is base units (m1, app/purse.py): the turn's exact money_delta
+    # when the engine settled one, else the legacy gold_delta converted. The
+    # per-turn and total caps are the old gold caps, in units.
+    world_set = _currency.active_set(conn)
+    money_delta = clamp(
+        _purse.turn_units(player_patch, world_set),
+        -_currency.from_legacy_gold(_purse.TURN_LOSS_MAX_GOLD, world_set),
+        _currency.from_legacy_gold(_purse.TURN_GAIN_MAX_GOLD, world_set),
+    )
     if not _play_system_enabled(conn, "economy_enabled", True):
-        gold_delta = 0
-    gold = clamp(int(player["gold"]) + gold_delta, 0, 1_000_000)
+        money_delta = 0
+    purse_units = _purse.clamp_purse(_purse.units_of_row(player, world_set) + money_delta, world_set)
+    gold = _currency.to_legacy_gold(purse_units, world_set)
     raw_karma_delta = clamp(int(player_patch.get("karma_delta") or 0), -25, 25)
     karma_reason = str(player_patch.get("karma_reason") or "Karma changed because of the player's action.")[:900]
     karma_visibility = str(player_patch.get("karma_visibility") or "local")[:80]
@@ -19718,10 +19890,10 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     conn.execute(
         """
         UPDATE player
-        SET health = ?, max_health = ?, level = ?, xp = ?, gold = ?, karma = ?, current_location_id = ?
+        SET health = ?, max_health = ?, level = ?, xp = ?, gold = ?, karma = ?, current_location_id = ?, purse_units = ?
         WHERE id = 1
         """,
-        (health, max_health, level, xp, gold, karma, location_id),
+        (health, max_health, level, xp, gold, karma, location_id, purse_units),
     )
     from app.progression import sync_level
 
@@ -22623,8 +22795,7 @@ def _apply_turn_npc_relationship_deltas(conn, result: dict[str, Any], player_inp
     from app.relationships import update_relationship, RELATIONSHIP_EVENTS
 
     player_patch = result.get("player") or {}
-    gold_delta = int(player_patch.get("gold_delta") or 0)
-    if gold_delta == 0:
+    if _purse.turn_units(player_patch if isinstance(player_patch, dict) else {}, _currency.current_set()) == 0:
         return
     intent, _ = _turn_intent(player_input)
     if intent != "trade":
@@ -23588,6 +23759,10 @@ def resolve_turn_bands(
         )
         if roll:
             rolls.append(roll)
+        if number_key == "gold_delta":
+            # The gold dice speak legacy gold (MIGRATION_PLAN step 3): an exact
+            # sum the engine had not settled is no longer this turn's money.
+            block.pop("money_delta", None)
         if value is None:
             block.pop(number_key, None)
         else:
@@ -23903,14 +24078,13 @@ def _void_unbought_spend(
     player = result.get("player") if isinstance(result, dict) else None
     if not isinstance(player, dict):
         return False
-    try:
-        gold = int(_float(player.get("gold_delta"), 0))
-    except (TypeError, ValueError):
-        return False
+    # In base units (m1); the notes keep the legacy gold scale ("five silver" is -0.05).
+    world_set = _currency.current_set()
+    gold = _purse.legacy_value(_purse.turn_units(player, world_set), world_set)
     if gold >= 0:
         return False
     if loss_shown is False:
-        player["gold_delta"] = 0
+        _purse.put_gold(player, 0)
         line = f"gold loss refused ({gold}): the scene shows no money leaving you"
         if isinstance(band_report, dict):
             band_report.setdefault("lines", []).append(line)
@@ -23963,7 +24137,7 @@ def _void_unbought_spend(
             return False
     except Exception:
         pass
-    player["gold_delta"] = 0
+    _purse.put_gold(player, 0)
     line = f"gold loss voided ({gold}): nothing was bought; {', '.join(bought[:4])} did not change hands"
     if isinstance(band_report, dict):
         band_report.setdefault("lines", []).append(line)
@@ -24017,7 +24191,8 @@ def _log_gold_shadow(
         from app import interpreter, prose_state
         from app.llm import _append_trace
 
-        final = int(_float((result.get("player") or {}).get("gold_delta"), 0)) if isinstance(result.get("player"), dict) else 0
+        world_set = _currency.current_set()
+        final = _purse.legacy_value(_purse.turn_units(result.get("player"), world_set), world_set)
         said = prose_state.stated_coin_amounts(narration)
         shown_out, shown_in = gold_read.get("out"), gold_read.get("in")
         engine_out, engine_in = settled < 0, settled > 0
@@ -24542,8 +24717,8 @@ def _drop_model_rewards(result: dict[str, Any]) -> list[str]:
     if player.get("xp_band"):
         player.pop("xp_band", None)
         dropped.append("xp_band")
-    if _float(player.get("gold_delta"), 0) > 0:
-        player.pop("gold_delta", None)
+    if _purse.turn_units(player, _currency.current_set()) > 0:
+        _purse.drop_gold(player)
         dropped.append("gold_delta")
     band = str(player.get("gold_band") or "").strip().lower()
     if band and not band.startswith(("-", "lose", "spend")):
@@ -24718,7 +24893,7 @@ def _settle_unopped_coin(
         if not amount:
             # Nothing names the price: the engine rolls a small spend, as for
             # any cost the model sizes by band (the price ledger is not wired yet).
-            player.pop("gold_delta", None)
+            _purse.drop_gold(player)
             player["gold_band"] = "-small"
             result["player"] = player
             turn_ledger.note("gold", "payment_unpriced_banded", band="-small")
@@ -24780,7 +24955,7 @@ def _settle_unopped_coin(
         turn_ledger.note("gold", "received_coin_named", amount=amount, span=(handed or {}).get("span"))
         return _set_settled_gold(result, player, amount, "prose_received_named")
     size = (handed or {}).get("band") or ("large" if amount else "small")
-    player.pop("gold_delta", None)
+    _purse.drop_gold(player)
     player["gold_band"] = size
     result["player"] = player
     turn_ledger.note("gold", "received_coin_banded", band=size, span=(handed or {}).get("span"))
@@ -24788,7 +24963,7 @@ def _settle_unopped_coin(
 
 
 def _set_settled_gold(result: dict[str, Any], player: dict[str, Any], value: int, source: str) -> dict[str, Any]:
-    player["gold_delta"] = value
+    _purse.put_gold(player, value)
     player.pop("gold_band", None)
     result["player"] = player
     authored = [str(p) for p in (result.get("_server_authored") or [])]
@@ -24957,8 +25132,12 @@ def _settle_stated_gold(
     narration = _narration_text(result)
     own = _player_line(player_input)
     band = str(player.get("gold_band") or "").strip()
+    # The amounts below are on the legacy gold scale, read from the prose in
+    # every coin of the world's set ("five silver" is 0.05); what moves is
+    # written in base units by _purse.put_gold (m1).
+    world_set = _currency.current_set()
     try:
-        raw = int(_float(player.get("gold_delta"), 0))
+        raw = _purse.legacy_value(_purse.turn_units(player, world_set), world_set)
     except (TypeError, ValueError):
         raw = 0
     losing = raw < 0 or band.lower().startswith(("-", "lose", "spend"))
@@ -24977,7 +25156,7 @@ def _settle_stated_gold(
             if raw > 0 and restated and raw != restated:
                 pass  # a different sum: new coin, the op stands
             else:
-                player.pop("gold_delta", None)
+                _purse.drop_gold(player)
                 player.pop("gold_band", None)
                 result["player"] = player
                 dropped.append(f"GOLD {raw or band}")
@@ -24993,7 +25172,7 @@ def _settle_stated_gold(
     # A payment to the giver of the sum a job offers, on a line that says yes,
     # is the model inverting who pays.
     if paid_once is not None and conn is not None and _accept_pays_nothing(conn, own, paid_once):
-        player.pop("gold_delta", None)
+        _purse.drop_gold(player)
         player.pop("gold_band", None)
         result["player"] = player
         turn_ledger.note("gold", "accept_is_no_payment", stated=paid_once)
@@ -25029,10 +25208,10 @@ def _settle_stated_gold(
         # cost thirty (8B run 148, T45).
         priced = said["priced"][0] if len(said["priced"]) == 1 else None
         if raw and (raw in mentioned or raw == priced):
-            player["gold_delta"] = -abs(raw)
+            _purse.put_gold(player, -abs(raw))
             player.pop("gold_band", None)
         elif priced:
-            player["gold_delta"] = -abs(priced)
+            _purse.put_gold(player, -abs(priced))
             player.pop("gold_band", None)
             authored = [str(p) for p in (result.get("_server_authored") or [])]
             if "player.gold_delta" not in authored:
@@ -25040,7 +25219,7 @@ def _settle_stated_gold(
             result["_server_authored"] = authored
         else:
             player["gold_band"] = "-" + (band.lstrip("+") if band else "small")
-            player.pop("gold_delta", None)
+            _purse.drop_gold(player)
         result["player"] = player
         turn_ledger.note("gold", "gain_op_on_a_purchase_flipped", stated=raw or band)
         return {"source": "purchase_gain_flipped", "band": player.get("gold_band"), "gold_delta": player.get("gold_delta"), "offer": offer}
@@ -25049,7 +25228,7 @@ def _settle_stated_gold(
         # forty-six gold out of your purse into Veyra's palm" came with GOLD
         # +moderate and the purse grew by 38 (8B run 146, T73). The payment
         # the narration shows is the coin that moves.
-        player["gold_delta"] = -paid_once
+        _purse.put_gold(player, -paid_once)
         player.pop("gold_band", None)
         result["player"] = player
         authored = [str(p) for p in (result.get("_server_authored") or [])]
@@ -25063,7 +25242,7 @@ def _settle_stated_gold(
         # A sum posted or offered is not coin received: '"Lower District, 20
         # coins for a flat-runner's work"' on the board paid GOLD 20 at once
         # (8B run 6, T2). Pay for work comes with the work, through the job.
-        player.pop("gold_delta", None)
+        _purse.drop_gold(player)
         player.pop("gold_band", None)
         result["player"] = player
         turn_ledger.note("gold", "offered_sum_not_received", stated=raw or band)
@@ -25078,7 +25257,7 @@ def _settle_stated_gold(
         # T68). The one price the scene names is the spend; none, a small one.
         priced = said["priced"][0] if len(said["priced"]) == 1 else None
         if priced:
-            player["gold_delta"] = -abs(priced)
+            _purse.put_gold(player, -abs(priced))
             player.pop("gold_band", None)
             authored = [str(p) for p in (result.get("_server_authored") or [])]
             if "player.gold_delta" not in authored:
@@ -25086,7 +25265,7 @@ def _settle_stated_gold(
             result["_server_authored"] = authored
         else:
             player["gold_band"] = "-small"
-            player.pop("gold_delta", None)
+            _purse.drop_gold(player)
         result["player"] = player
         turn_ledger.note("gold", "payment_shown_over_gain_op", paid=priced, stated=raw or band)
         return {"source": "prose_paid_over_gain", "gold_delta": player.get("gold_delta"), "band": player.get("gold_band"),
@@ -25124,7 +25303,7 @@ def _settle_stated_gold(
             if not _PROMISED_MONEY_RE.search(s) and not _OWN_COIN_RE.search(s)
         ))
         if not (said["received"] or narrated or money_words or prose_state.coin_handed_to_player(narration)):
-            player.pop("gold_delta", None)
+            _purse.drop_gold(player)
             player.pop("gold_band", None)
             result["player"] = player
             turn_ledger.note("gold", "gain_without_coin_dropped", stated=raw or band,
@@ -25169,7 +25348,7 @@ def _settle_stated_gold(
             value, source = raw, "stated_gain"
         elif raw > 0 and raw in mentioned and not backed and not quest_pays:
             # Only spoken: an offer, not pay (8B run 30, T3).
-            player.pop("gold_delta", None)
+            _purse.drop_gold(player)
             player.pop("gold_band", None)
             result["player"] = player
             turn_ledger.note("gold", "spoken_sum_not_received", stated=raw)
@@ -25215,7 +25394,7 @@ def _settle_stated_gold(
         value, source = -paid_once, "prose_paid"
     if value is None:
         return None
-    player["gold_delta"] = value
+    _purse.put_gold(player, value)
     player.pop("gold_band", None)
     result["player"] = player
     authored = [str(p) for p in (result.get("_server_authored") or [])]
@@ -25246,35 +25425,37 @@ def _settle_purse(
     player = result.get("player") if isinstance(result.get("player"), dict) else None
     if player is None:
         return kept_changes, None
-    try:
-        gold = int(_float(player.get("gold_delta"), 0))
-    except (TypeError, ValueError):
+    # In base units (m1): "five silver" on a purse of three silver is refused.
+    world_set = _currency.active_set(conn)
+    cost_units = _purse.turn_units(player, world_set)
+    if cost_units >= 0 or not _play_system_enabled(conn, "economy_enabled", True):
         return kept_changes, None
-    if gold >= 0 or not _play_system_enabled(conn, "economy_enabled", True):
+    purse_units = _purse.purse_units(conn, world_set)
+    if -cost_units <= purse_units:
         return kept_changes, None
-    row = conn.execute("SELECT gold FROM player WHERE id = 1").fetchone()
-    purse = int((row["gold"] if row else 0) or 0)
-    if -gold <= purse:
-        return kept_changes, None
+    cost_text = _currency.format_amount(-cost_units, world_set)
+    purse_text = _currency.format_amount(purse_units, world_set)
     gains = [c for c in kept_changes if isinstance(c, dict) and int(_float(c.get("quantity_delta"), 0)) > 0]
-    named = isinstance(gold_note, dict) and int(_float(gold_note.get("gold_delta"), 0)) < 0
+    named = isinstance(gold_note, dict) and _float(gold_note.get("gold_delta"), 0) < 0
     if not gains or not named:
-        player["gold_delta"] = -purse
-        return kept_changes, {"clamped": True, "cost": -gold, "purse": purse}
-    player["gold_delta"] = 0
+        _purse.put_money(player, -purse_units, world_set)
+        return kept_changes, {"clamped": True, "cost_text": cost_text, "cost_units": -cost_units,
+                              "purse_text": purse_text, "purse_units": purse_units}
+    _purse.put_gold(player, 0)
     names = [str(c.get("name") or "") for c in gains]
     for change in gains:
         name_l = str(change.get("name") or "").lower()
         rejected.append({"name": str(change.get("name") or ""), "tokens": _item_name_tokens(name_l), "outcome": "gain"})
-    line = f"purchase refused: {', '.join(names[:4])} cost {-gold} gold and the purse holds {purse}"
+    line = f"purchase refused: {', '.join(names[:4])} cost {cost_text} and the purse holds {purse_text}"
+    money = {"cost_text": cost_text, "cost_units": -cost_units, "purse_text": purse_text, "purse_units": purse_units}
     if isinstance(band_report, dict):
         band_report.setdefault("lines", []).append(line)
-        band_report["refused_purchase"] = {"cost": -gold, "purse": purse, "items": names[:8]}
+        band_report["refused_purchase"] = {**money, "items": names[:8]}
     try:
         conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (_turn_value(conn), "system", line[:900]))
     except Exception:
         pass
-    return [c for c in kept_changes if c not in gains], {"refused_purchase": True, "cost": -gold, "purse": purse, "items": names[:8]}
+    return [c for c in kept_changes if c not in gains], {"refused_purchase": True, **money, "items": names[:8]}
 
 
 # --- A trade is one unit: both halves or neither (trade-atomic, m0 slice 1) ---
@@ -25288,29 +25469,9 @@ def _settle_purse(
 # The two halves were decided apart: the gold by _settle_stated_gold and the
 # purse gates, the goods by _remove_shown_gives / the REMOVE op. This is the
 # one place they meet, after both have run and before anything is written.
-# The money math is the engine's: 1 silver = 100 copper, 1 gold = 10,000
-# copper; the save holds whole gold (player.gold) until the purse holds base
-# units (m1), so a price below a gold is noted with its copper and pays the
-# whole gold part (to_legacy_gold's rule: fractions toward zero).
-_TRADE_COIN_DENOMS = {
-    "gold": 10000, "golds": 10000, "crown": 10000, "crowns": 10000, "coin": 10000, "coins": 10000,
-    "silver": 100, "silvers": 100, "copper": 1, "coppers": 1,
-}
-_COPPER_PER_GOLD = 10000
-
-
-def _trade_coin_re() -> re.Pattern[str]:
-    from app.prose_state import _AMOUNT
-
-    return re.compile(
-        r"\b" + _AMOUNT + r"\s+(?P<denom>gold|golds|silver|silvers|copper|coppers|crowns?|coins?)\b"
-        r"(?:\s+(?:coins?|pieces?|crowns?))?",
-        re.I,
-    )
-
-
-_TRADE_COIN_RE = _trade_coin_re()
-_TRADE_COIN_JOIN_RE = re.compile(r"^\s*(?:,\s*(?:and\s+)?|and\s+)$", re.I)
+# The money math is the engine's (m1, app/currency.py): every sum is read in
+# the world's set as base units (in the coin set 1 silver = 100 copper, 1 gold
+# = 10,000 copper) and the purse holds base units, so "five silver" pays 500.
 # The player's line sells or trades one of their things: a sale verb, or an
 # ask what someone pays for it ("ask @I what he pays for a brass tide-reckoner").
 _TRADE_SALE_CUE_RE = re.compile(
@@ -25334,27 +25495,16 @@ _TRADE_WANT_RE = re.compile(
 _PLAYERS_OWN_TAKE_SOURCES = frozenset({"shown_take", "shown_take_named_by_player", "shown_freed"})
 
 
-def _coin_prices_copper(text: str) -> list[int]:
-    """Every coin sum the text names, in copper: "five silver" -> 500, "two gold
-    and five silver" -> 20500, "40 gold" -> 400000. Adjacent amounts joined by
-    "and" or a comma are one sum."""
-    from app.prose_state import _match_number
+def _coin_prices(text: str) -> list[dict[str, Any]]:
+    """Every money phrase the text names, in the world's set (currency.parse_all_amounts), units above 0."""
+    return [f for f in _currency.parse_all_amounts(str(text or ""), _currency.current_set()) if int(f["units"]) > 0]
 
-    out: list[int] = []
-    last_end = -1
-    for match in _TRADE_COIN_RE.finditer(str(text or "")):
-        number = _match_number(match)
-        per = _TRADE_COIN_DENOMS.get(str(match.group("denom") or "").lower())
-        if not number or not per:
-            last_end = -1
-            continue
-        value = int(number) * per
-        if out and last_end >= 0 and _TRADE_COIN_JOIN_RE.match(text[last_end:match.start()]):
-            out[-1] += value
-        else:
-            out.append(value)
-        last_end = match.end()
-    return out
+
+def _coin_prices_units(text: str) -> list[int]:
+    """Every coin sum the text names, in base units: "five silver" -> 500, "two gold
+    and five silver" -> 20500, "40 gold" -> 400000, "40 credits" -> 40 in a credits
+    world. Adjacent amounts joined by "and" or a comma are one sum."""
+    return [int(f["units"]) for f in _coin_prices(text)]
 
 
 def _line_trade(own: str) -> dict[str, Any] | None:
@@ -25365,18 +25515,16 @@ def _line_trade(own: str) -> dict[str, Any] | None:
     if not cue:
         return None
     want = _TRADE_WANT_RE.search(text)
-    if want and not _coin_prices_copper(want.group("want")):
+    if want and not _coin_prices(want.group("want")):
         phrase = re.sub(r"^(?:his|her|their|its|the|a|an|some|one\s+of\s+(?:his|her|their))\s+", "",
                         want.group("want").strip(), flags=re.I)
         phrase = re.split(r"\s+(?:and|so|then|but|while|as)\s+|\s+(?:from|off)\s+", phrase, maxsplit=1)[0].strip()
         if phrase:
             return {"kind": "barter", "want": phrase.lower()}
-    after = text[cue.start():]
-    match = _TRADE_COIN_RE.search(after)
-    prices = _coin_prices_copper(after)
-    if not prices or not match:
+    prices = _coin_prices(text[cue.start():])
+    if not prices:
         return None
-    return {"kind": "sale", "price": prices[0], "price_text": match.group(0)}
+    return {"kind": "sale", "price": int(prices[0]["units"]), "price_text": prices[0]["text"]}
 
 
 def _settle_trade(
@@ -25437,7 +25585,7 @@ def _settle_trade(
                          items=names, why=why)
         _trade_journal(conn, f"Hand-over held: {', '.join(names)} ({why}).")
         # Coin the gates let in for the held sale is that sale's price: held too.
-        paid_in = trade is not None and int(_float(player.get("gold_delta"), 0)) > 0
+        paid_in = trade is not None and _purse.turn_units(player, _currency.current_set()) > 0
         if paid_in:
             _set_trade_gold(result, player, 0)
         return [c for c in changes if c not in goods], {"decision": "trade_held_no_counterpart",
@@ -25474,38 +25622,46 @@ def _settle_trade(
     if quest_pays:
         # The coin is the job's payout, settled by the quest path.
         return changes, None
-    final = int(_float(player.get("gold_delta"), 0))
+    world_set = _currency.current_set()
+    final = _purse.turn_units(player, world_set)
     coin_in = final > 0 or _coin_reached_player_any(narration)
     line_price = int(trade["price"])
     if not coin_in:
         why = "no coin reached the player"
         turn_ledger.note("inventory", "trade_held_one_sided", items=names, price=trade["price_text"],
-                         price_copper=line_price, counterpart="coin", gold_delta=final, why=why)
+                         price_units=line_price, counterpart="coin", money_delta=final, why=why)
         _trade_journal(conn, f"Trade held: {', '.join(names)} for {trade['price_text']} ({why}).")
         return [c for c in changes if c not in goods], {"decision": "trade_held_one_sided", "kind": "sale", "items": names,
-                                                         "price_copper": line_price, "why": why}
+                                                         "price_units": line_price, "why": why}
     price, source = _stated_price(line_price, narration)
-    whole = price // _COPPER_PER_GOLD
-    note: dict[str, Any] = {"decision": "trade_settled", "kind": "sale", "items": names, "price_copper": price,
-                            "price_from": source, "gold_delta": whole, "was": final, "gold_changed": final != whole}
-    if whole > STATED_GAIN_CAP:
+    note: dict[str, Any] = {"decision": "trade_settled", "kind": "sale", "items": names, "price_units": price,
+                            "price": _currency.format_amount(price, world_set), "price_from": source,
+                            "money_delta": price, "gold_delta": _currency.to_legacy_gold(price, world_set),
+                            "was": final, "gold_changed": final != price}
+    if price > _currency.from_legacy_gold(STATED_GAIN_CAP, world_set):
         # A big named sum keeps its roll, as every named reward does (the 8B
         # inflates the sums it names); the goods go, the coin came.
         note["decision"] = "trade_price_over_cap_rolled"
-        note["gold_delta"] = final
-        turn_ledger.note("gold", "trade_price_over_cap_rolled", items=names, price_copper=price, applied=final)
+        note["money_delta"] = final
+        note["gold_delta"] = _currency.to_legacy_gold(final, world_set)
+        turn_ledger.note("gold", "trade_price_over_cap_rolled", items=names, price_units=price, applied=final)
         if final > 0:
             result["_trade_paid"] = True
         return changes, note
-    if price % _COPPER_PER_GOLD:
-        note["copper_not_held"] = price % _COPPER_PER_GOLD
-    _set_trade_gold(result, player, whole)
+    _set_trade_money(result, player, price, world_set)
     result["_trade_paid"] = True
     turn_ledger.note("gold", "trade_settled", **{k: v for k, v in note.items() if k != "decision"})
     return changes, note
 
 
-_ANY_COIN_WORD_RE = re.compile(r"\b(?:coins?|silvers?|coppers?|gold|crowns?)\b", re.I)
+def _any_coin_word_re() -> re.Pattern[str]:
+    from app.prose_state import _ANY_COIN
+
+    # Every coin word of every set (m1: credits and caps too), as the prose readers use.
+    return re.compile(r"(?:\b(?:coins?|silvers?|coppers?|gold|crowns?)\b|\b" + _ANY_COIN + r")", re.I)
+
+
+_ANY_COIN_WORD_RE = _any_coin_word_re()
 # Coin of any denomination reaching the player by someone else's hand: "He
 # counts out four silver coins and places them in your hand" (cheat100 T58;
 # prose_state's readers count gold only, so silver never reached them).
@@ -25569,20 +25725,27 @@ def _player_paid_any(narration: str) -> bool:
 
 def _stated_price(own_price: int, narration: str) -> tuple[int, str]:
     """The price that holds: the line's when the prose names it or names none, else the one the prose names."""
-    distinct = sorted(set(_coin_prices_copper(narration)))
+    distinct = sorted(set(_coin_prices_units(narration)))
     if own_price in distinct or not distinct or len(distinct) > 1:
         return own_price, "line"
     return distinct[0], "prose"
 
 
-def _set_trade_gold(result: dict[str, Any], player: dict[str, Any], whole: int) -> None:
-    player["gold_delta"] = whole
+def _set_trade_money(result: dict[str, Any], player: dict[str, Any], units: int, cset: dict[str, Any] | None = None) -> None:
+    """The trade's exact sum in base units moves (m1), marked server-authored so no die replaces it."""
+    _purse.put_money(player, int(units), cset or _currency.current_set())
     player.pop("gold_band", None)
     result["player"] = player
     authored = [str(p) for p in (result.get("_server_authored") or [])]
     if "player.gold_delta" not in authored:
         authored.append("player.gold_delta")
     result["_server_authored"] = authored
+
+
+def _set_trade_gold(result: dict[str, Any], player: dict[str, Any], whole: int) -> None:
+    _set_trade_money(result, player, _currency.from_legacy_gold(int(whole), _currency.current_set()))
+    if int(whole) == 0:
+        player.pop("money_delta", None)
 
 
 def _settle_purchase(conn, result, changes, own: str, narration: str, named_in_line):
@@ -25592,37 +25755,37 @@ def _settle_purchase(conn, result, changes, own: str, narration: str, named_in_l
     acts = venues.strip_speech(own)
     if not _LINE_PURCHASE_CUE_RE.search(acts) or _TRADE_SALE_CUE_RE.search(acts):
         return None
-    prices = _coin_prices_copper(acts)
+    prices = _coin_prices_units(acts)
     gains = [c for c in changes if isinstance(c, dict) and int(_float(c.get("quantity_delta"), 0)) > 0 and named_in_line(c)]
     if not prices or not gains:
         return None
+    world_set = _currency.current_set()
     player = result.get("player") if isinstance(result.get("player"), dict) else {}
     names = [str(c.get("name") or "") for c in gains]
-    final = int(_float(player.get("gold_delta"), 0))
+    final = _purse.turn_units(player, world_set)
     price, source = _stated_price(prices[0], narration)
-    whole = price // _COPPER_PER_GOLD
-    if whole > STATED_GAIN_CAP:
+    if price > _currency.from_legacy_gold(STATED_GAIN_CAP, world_set):
         return None  # a big sum keeps the gates' reading, as a named reward does
-    row = conn.execute("SELECT gold FROM player WHERE id = 1").fetchone()
-    purse = int((row["gold"] if row else 0) or 0)
+    held = _purse.purse_units(conn, world_set)
     paid = final < 0 or _player_paid_any(narration)
     why = "" if paid else "the scene shows no coin leaving the player"
-    if paid and whole > purse:
-        why = f"the price is {whole} gold and the purse holds {purse}"
+    if paid and price > held:
+        why = (f"the price is {_currency.format_amount(price, world_set)} and the purse holds "
+               f"{_currency.format_amount(held, world_set)}")
     if why:
-        turn_ledger.note("inventory", "trade_held_one_sided", kind="purchase", items=names, price_copper=price,
-                         counterpart="coin", gold_delta=final, why=why)
+        turn_ledger.note("inventory", "trade_held_one_sided", kind="purchase", items=names, price_units=price,
+                         counterpart="coin", money_delta=final, why=why)
         _trade_journal(conn, f"Purchase held: {', '.join(names)} ({why}).")
         if final < 0:
             _set_trade_gold(result, player, 0)
         return [c for c in changes if c not in gains], {"decision": "trade_held_one_sided", "kind": "purchase",
-                                                         "items": names, "price_copper": price, "why": why,
+                                                         "items": names, "price_units": price, "why": why,
                                                          "gold_changed": final < 0}
-    note: dict[str, Any] = {"decision": "trade_settled", "kind": "purchase", "items": names, "price_copper": price,
-                            "price_from": source, "gold_delta": -whole, "was": final, "gold_changed": final != -whole}
-    if price % _COPPER_PER_GOLD:
-        note["copper_not_held"] = price % _COPPER_PER_GOLD
-    _set_trade_gold(result, player, -whole)
+    note: dict[str, Any] = {"decision": "trade_settled", "kind": "purchase", "items": names, "price_units": price,
+                            "price": _currency.format_amount(price, world_set), "price_from": source,
+                            "money_delta": -price, "gold_delta": _currency.to_legacy_gold(-price, world_set),
+                            "was": final, "gold_changed": final != -price}
+    _set_trade_money(result, player, -price, world_set)
     turn_ledger.note("gold", "trade_settled", **{k: v for k, v in note.items() if k != "decision"})
     return changes, note
 
@@ -25635,7 +25798,7 @@ def _void_price_question(result: dict[str, Any], own: str, narration: str) -> di
     acts = _PRICE_QUESTION_RE.sub(" ", venues.strip_speech(own))
     player = result.get("player") if isinstance(result.get("player"), dict) else {}
     final = int(_float(player.get("gold_delta"), 0))
-    if final >= 0:
+    if _purse.turn_units(player, _currency.current_set()) >= 0:
         return None
     if (_BUY_VERB_RE.search(acts) or _PLAYER_PAYS_SUM_RE.search(acts) or _OWN_UNPRICED_PAY_RE.search(acts)
             or _player_paid_any(narration)):
@@ -25961,8 +26124,8 @@ def _reconcile_prose_with_state(
     # so the prose does not pay what the state kept (#69).
     if (
         isinstance(gold_note, dict)
-        and int(_float(gold_note.get("stated_delta"), 0)) < 0
-        and int(_float(gold_note.get("gold_delta"), 0)) == 0
+        and _float(gold_note.get("stated_delta"), 0) < 0
+        and _float(gold_note.get("gold_delta"), 0) == 0
         # The interpreter found no payment in the scene: there is no paying
         # sentence to take out, and a missed one is left, not cut (#41).
         and gold_note.get("changed_by") != "loss_not_shown"
@@ -25980,16 +26143,21 @@ def _reconcile_prose_with_state(
         stays = "stay where they are" if len(names) > 1 else "stays where it is"
         text = (
             text.rstrip()
-            + f"\n\nYou have {purse_note.get('purse', 0)} gold, short of the {purse_note.get('cost', 0)} "
-            + f"asked, so the {items} {stays}."
+            + f"\n\nYou have {purse_note.get('purse_text') or purse_note.get('purse', 0)}, short of the "
+            + f"{purse_note.get('cost_text') or purse_note.get('cost', 0)} asked, so the {items} {stays}."
         ).strip()
         report["trimmed"].append({"why": "purchase_refused", **purse_note})
     elif isinstance(purse_note, dict) and purse_note.get("clamped") and isinstance(gold_note, dict):
-        cost, purse = int(purse_note.get("cost") or 0), int(purse_note.get("purse") or 0)
-        pattern = re.compile(rf"\b{cost}(\s+(?:gold|coins?|crowns?))\b", re.I)
-        if pattern.search(text):
-            text = pattern.sub(rf"{purse}\1", text, count=1)
-            report["trimmed"].append({"why": "price_clamped_to_purse", "from": cost, "to": purse})
+        # The price the prose names, read in the world's coins, becomes what the purse paid (m1).
+        world_set = _currency.current_set()
+        cost_units, purse_units = int(purse_note.get("cost_units") or 0), int(purse_note.get("purse_units") or 0)
+        for found in _currency.parse_all_amounts(text, world_set):
+            if found["units"] == cost_units:
+                start, end = found["span"]
+                text = text[:start] + _currency.format_amount(purse_units, world_set) + text[end:]
+                report["trimmed"].append({"why": "price_clamped_to_purse", "from": found["text"],
+                                          "to": _currency.format_amount(purse_units, world_set)})
+                break
     if isinstance(gold_note, dict):
         report["gold"] = gold_note
 
@@ -26059,8 +26227,8 @@ def _reconcile_prose_with_state(
     # exact engine shapes are repaired; the rest of the scene stays as written.
     try:
         text, leaks = prose_state.repair_meta_leaks(text)
-        moved = abs(int(_float((result.get("player") or {}).get("gold_delta"), 0)))
-        text, coin = prose_state.settle_band_coin(text, moved)
+        moved = abs(_purse.turn_units(result.get("player"), _currency.current_set()))
+        text, coin = prose_state.settle_band_coin(text, 0, units=moved)
         if coin:
             leaks.append(coin)
         for entry in leaks:
@@ -26228,6 +26396,7 @@ def _reconcile_movement_report(report: Any, player_patch: Any) -> Any:
 TURN_STATE_TELEMETRY_KEYS: tuple[str, ...] = ("dice_rolls", "movement", "map_walk", "voice_check", "gear_check", "quest_report")
 
 
+@_in_world_currency
 def apply_turn(
     result: dict[str, Any],
     player_input: str,
@@ -26239,6 +26408,11 @@ def apply_turn(
     # Name repair rebinds `result` to a new dict. Gear and narration updates
     # after that have to land on the object the caller returns as the turn.
     caller_result = result
+    # A turn applied without play_turn (a tool, a replay) still shows coins, not "$69420" (m1).
+    try:
+        _render_money_commands(result)
+    except Exception:
+        pass
     map_report: dict[str, Any] = {"status": "skipped", "steps_taken": 0}
     quest_report: dict[str, Any] = {"status": "skipped", "created": [], "updated": [], "rejected": []}
     with connect().closing() as conn:
@@ -26726,7 +26900,7 @@ def apply_turn(
         # interpreter's gold asks, #41)? A loss it does not show is voided
         # below; both answers are logged beside _settle_stated_gold's.
         gold_read = _read_gold_evidence(conn, result)
-        gold_settled = int(_float((result.get("player") or {}).get("gold_delta"), 0)) if isinstance(result.get("player"), dict) else 0
+        gold_settled = _purse.legacy_value(_purse.turn_units(result.get("player"), _currency.current_set()), _currency.current_set())
         voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report, player_input, narration,
                                       loss_shown=(gold_read or {}).get("out"))
         purse_note = None
@@ -26753,10 +26927,17 @@ def apply_turn(
         # One record of the gold: the note says what finally moved and why,
         # so the prose trim and the trace read the same number (#69).
         if isinstance(gold_note, dict) and "gold_delta" in gold_note:
-            final = int(_float((result.get("player") or {}).get("gold_delta"), 0))
-            if final != int(_float(gold_note.get("gold_delta"), 0)):
+            # Compared in base units (m1): "five silver" stated and paid is no change.
+            world_set = _currency.current_set()
+            final_units = _purse.turn_units(result.get("player") if isinstance(result.get("player"), dict) else {}, world_set)
+            try:
+                stated_units = _currency.from_legacy_gold(_float(gold_note.get("gold_delta"), 0), world_set)
+            except ValueError:
+                stated_units = 0
+            gold_note["money_delta"] = final_units
+            if final_units != stated_units:
                 gold_note["stated_delta"] = gold_note.get("gold_delta")
-                gold_note["gold_delta"] = final
+                gold_note["gold_delta"] = _purse.legacy_value(final_units, world_set)
                 not_shown = (band_report or {}).get("voided_spend", {}).get("why") == "loss_not_shown" if isinstance(band_report, dict) else False
                 gold_note["changed_by"] = (
                     "trade" if (trade_note or {}).get("gold_changed")
@@ -26781,7 +26962,7 @@ def apply_turn(
             # GOLD op after its roll, a quest payout, coin the player restates)
             # is the coin a coin item shows: it pays once (7B run 6, T10).
             gold_moving = (
-                int(_float((result.get("player") or {}).get("gold_delta"), 0)) > 0
+                _purse.turn_units(result.get("player"), _currency.current_set()) > 0
                 or bool(result.get("_coin_restated"))
                 or bool(result.get("_trade_paid"))
                 or bool(finishing)
@@ -27711,9 +27892,14 @@ def _turn_reward_summary(before_state: dict[str, Any], after_state: dict[str, An
     # or a found purse all show (#85 review: on purpose, the player's own purse
     # is the one source, not the quest rows).
     gold_gain = max(0, int(after_player.get("gold") or 0) - int(before_player.get("gold") or 0))
+    # The rise in base units and in the world's coins (m1): "+5 silver" shows too.
+    money_gain = max(0, int(after_player.get("purse_units") or 0) - int(before_player.get("purse_units") or 0))
+    world_set = _currency.current_set()
     return {
         "xp_gain": xp_gain,
         "gold_gain": gold_gain,
+        "money_gain": money_gain,
+        "money_gain_text": _currency.format_amount(money_gain, world_set) if money_gain else "",
         "items_gained": items_gained,
         "quests_completed": quests_done,
     }
@@ -28592,6 +28778,7 @@ def _dead_talk_outcome(
 
 @turn_ledger.recorded("turn")
 @_turn_start_record
+@_in_world_currency
 def play_turn(
     player_input: str,
     input_kind: str = "player",
@@ -29570,6 +29757,12 @@ def play_turn(
         result["_model_trace"] = pre_trace + list(result.get("_model_trace") or [])
 
     result["_deterministic_combat"] = mechanics_context.get("combat") or {}
+    # "$69420" in the draft is base units; every reader below and the player
+    # read it as the world's coins (m1).
+    try:
+        _render_money_commands(result)
+    except Exception as exc:
+        turn_ledger.note("money", "command_render_failed", error=f"{type(exc).__name__}: {exc}"[:200])
     # The asks made before the draft go first in the turn's usage and trace.
     if pre_draft_usage:
         result["_model_usage"] = [*pre_draft_usage, *(result.get("_model_usage") or [])]

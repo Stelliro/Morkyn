@@ -13,9 +13,9 @@ shortsword 0 -> 1 from the engine's own take reader, nobody decided for the guar
 "five silver": the stated price was not read and a 2d6+3 die paid +15.
 
 Now: the goods leave only with their price; a sale pays the stated sum by the engine's coin math
-(1 silver = 100 copper, 1 gold = 10,000 copper; the save holds whole gold, so "five silver" = 500
-copper = 0.05 gold pays 0 whole gold and notes copper_not_held 500 until the purse holds base units,
-m1); a barter needs the other side's act (the draft's GRANT or the prose handing it over), not the
+(1 silver = 100 copper, 1 gold = 10,000 copper). Since m1 (2026-10-25) the purse holds base units:
+"five silver" pays money_delta 500 (gold_delta, the whole-gold mirror, 0), and the notes carry
+price_units (was price_copper) with copper_not_held retired; a barter needs the other side's act (the draft's GRANT or the prose handing it over), not the
 player's own take.
 
 Run:  cd tests && ../.venv/bin/python -m unittest test_cheat100_trade_atomic
@@ -150,7 +150,7 @@ class TheGoodsStayWhenNoCoinComes(unittest.TestCase):
         changes, note, result, notes = _settle(T23_LINE, T23_PROSE, [("sword", 1)])
         self.assertEqual(_moves(changes), [])
         self.assertEqual(note["decision"], "trade_held_one_sided")
-        self.assertEqual(note["price_copper"], 500 * 10000)
+        self.assertEqual(note["price_units"], 500 * 10000)
         held = [n for n in notes if n["decision"] == "trade_held_one_sided"]
         self.assertEqual(len(held), 1)
         self.assertEqual(held[0]["items"], ["sword"])
@@ -162,14 +162,14 @@ class TheGoodsStayWhenNoCoinComes(unittest.TestCase):
             T31_LINE, T31_PROSE, [("shortsword", 1)], ops=[{"name": "shortsword", "quantity_delta": -1}]
         )
         self.assertEqual(_moves(changes), [])
-        self.assertEqual((note["decision"], note["price_copper"]), ("trade_held_one_sided", 40 * 10000))
+        self.assertEqual((note["decision"], note["price_units"]), ("trade_held_one_sided", 40 * 10000))
 
     def test_t34_the_keepsake_stays_when_the_spend_is_voided(self):
         changes, note, _result, _notes = _settle(
             T34_LINE, T34_PROSE, [("mother's brass tide-reckoner", 1)], player={"gold_delta": 0}
         )
         self.assertEqual(_moves(changes), [])
-        self.assertEqual((note["decision"], note["price_copper"]), ("trade_held_one_sided", 300 * 10000))
+        self.assertEqual((note["decision"], note["price_units"]), ("trade_held_one_sided", 300 * 10000))
 
 
 class TheOtherSideDecidesABarter(unittest.TestCase):
@@ -201,21 +201,21 @@ class ThePriceIsTheStatedOne(unittest.TestCase):
     def test_coin_math(self):
         from app import world
 
-        self.assertEqual(world._coin_prices_copper("for five silver"), [500])
-        self.assertEqual(world._coin_prices_copper("two copper"), [2])
-        self.assertEqual(world._coin_prices_copper("40 gold"), [400000])
-        self.assertEqual(world._coin_prices_copper("two gold and five silver"), [20500])
-        self.assertEqual(world._coin_prices_copper("forty gold coins"), [400000])
-        self.assertEqual(world._coin_prices_copper("a silver pendant"), [])
+        self.assertEqual(world._coin_prices_units("for five silver"), [500])
+        self.assertEqual(world._coin_prices_units("two copper"), [2])
+        self.assertEqual(world._coin_prices_units("40 gold"), [400000])
+        self.assertEqual(world._coin_prices_units("two gold and five silver"), [20500])
+        self.assertEqual(world._coin_prices_units("forty gold coins"), [400000])
+        self.assertEqual(world._coin_prices_units("a silver pendant"), [])
 
     def test_t49_five_silver_pays_the_stated_sum_not_the_die(self):
-        # The die had paid +15 (2d6+3). Five silver is 500 copper, 0.05 gold: the save holds whole gold.
+        # The die had paid +15 (2d6+3). Five silver is 500 copper (m1: the purse holds base units).
         changes, note, result, _notes = _settle(T49_LINE, T49_PROSE, [("candle", 1)], player={"gold_delta": 15})
         self.assertEqual(_moves(changes), [("candle", -1)])
         self.assertEqual(note["decision"], "trade_settled")
-        self.assertEqual(note["price_copper"], 500)
-        self.assertEqual(result["player"]["gold_delta"], 0)
-        self.assertEqual(note["copper_not_held"], 500)
+        self.assertEqual(note["price_units"], 500)
+        self.assertEqual((result["player"]["money_delta"], result["player"]["gold_delta"]), (500, 0))
+        self.assertNotIn("copper_not_held", note)
         self.assertIn("player.gold_delta", result["_server_authored"])
 
     def test_a_whole_gold_price_is_paid_as_stated(self):
@@ -223,14 +223,13 @@ class ThePriceIsTheStatedOne(unittest.TestCase):
         prose = "He nods. \"Two gold, then.\" He counts out the coins and drops them into your hand."
         changes, note, result, _notes = _settle(line, prose, [("candle", 1)], player={"gold_delta": 9})
         self.assertEqual(_moves(changes), [("candle", -1)])
-        self.assertEqual(result["player"]["gold_delta"], 2)
-        self.assertNotIn("copper_not_held", note)
+        self.assertEqual((result["player"]["gold_delta"], result["player"]["money_delta"]), (2, 20000))
 
     def test_the_prose_haggled_price_wins(self):
         line = "I sell my candle to @A for five silver."
         prose = "He frowns. \"Three silver, no more.\" He counts out the coins and drops them into your hand."
         _changes, note, _result, _notes = _settle(line, prose, [("candle", 1)], player={"gold_delta": 4})
-        self.assertEqual((note["price_copper"], note["price_from"]), (300, "prose"))
+        self.assertEqual((note["price_units"], note["price_from"]), (300, "prose"))
 
 
 class OrdinaryShapesStillWork(unittest.TestCase):
@@ -301,14 +300,13 @@ T70_PROSE = (
 
 class SecondBatch(unittest.TestCase):
     def test_t57_the_ale_comes_as_two_copper_leave(self):
-        # Before: the -9 die voided (loss_not_shown), the ale kept. Two copper is 2 base units, 0 whole gold.
+        # Before: the -9 die voided (loss_not_shown), the ale kept. Two copper is 2 base units (m1: paid).
         changes, note, result, _notes = _settle(
             T57_LINE, T57_PROSE, [], player={"gold_delta": -9}, ops=[{"name": "mug of ale", "quantity_delta": 1}]
         )
         self.assertEqual(_moves(changes), [("mug of ale", 1)])
-        self.assertEqual((note["decision"], note["kind"], note["price_copper"]), ("trade_settled", "purchase", 2))
-        self.assertEqual(result["player"]["gold_delta"], 0)
-        self.assertEqual(note["copper_not_held"], 2)
+        self.assertEqual((note["decision"], note["kind"], note["price_units"]), ("trade_settled", "purchase", 2))
+        self.assertEqual((result["player"]["money_delta"], result["player"]["gold_delta"]), (-2, 0))
 
     def test_t57_shape_with_no_coin_put_down_is_held(self):
         prose = "He pours the dark, foaming brew from a large clay jug into a tankard and slides it to you."
@@ -329,11 +327,11 @@ class SecondBatch(unittest.TestCase):
 
     def test_t58_four_silver_counted_into_the_hand_settles_the_sale(self):
         # Z (Jasper Wayfarer) is a row: minted at T54 and present at the inn. The prose shows four silver
-        # placed in the player's hand, so the sale settles: the mug goes, 400 copper = 0 whole gold.
+        # placed in the player's hand, so the sale settles: the mug goes, 400 copper reach the purse (m1).
         changes, note, result, _notes = _settle(T58_LINE, T58_PROSE, [("mug of ale", 1)])
         self.assertEqual(_moves(changes), [("mug of ale", -1)])
-        self.assertEqual((note["decision"], note["price_copper"], note["copper_not_held"]), ("trade_settled", 400, 400))
-        self.assertEqual(result["player"]["gold_delta"], 0)
+        self.assertEqual((note["decision"], note["price_units"]), ("trade_settled", 400))
+        self.assertEqual((result["player"]["money_delta"], result["player"]["gold_delta"]), (400, 0))
 
     def test_t58_shape_with_a_code_no_row_holds_is_held(self):
         changes, note, _result, _notes = _settle(T58_LINE, T58_PROSE, [("mug of ale", 1)], people=PEOPLE[:3])

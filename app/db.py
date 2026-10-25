@@ -734,9 +734,46 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO pacing (key, value) VALUES ('turn', '0')")
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('setup_complete', 'false')")
         conn.execute("INSERT OR IGNORE INTO gm_notes (id, content) VALUES (1, '')")
+        _migrate_purse_units(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+PURSE_MIGRATED_KEY = "purse_units_migrated"
+
+
+def _migrate_purse_units(conn: sqlite3.Connection) -> None:
+    """An old save's gold becomes its purse in base units, once (m1).
+
+    ``purse_units = currency.from_legacy_gold(gold, set)`` with the world's set
+    (12 gold -> 120000 copper in the coin set), and a settings row records it so
+    it never runs twice. A save already holding units is left as it is.
+    """
+    import json
+
+    try:
+        if conn.execute("SELECT 1 FROM settings WHERE key = ?", (PURSE_MIGRATED_KEY,)).fetchone():
+            return
+        row = conn.execute("SELECT gold, purse_units FROM player WHERE id = 1").fetchone()
+        if row is None:
+            return
+        from app import currency
+
+        cset = currency.active_set(conn)
+        gold = int(row["gold"] or 0)
+        units = int(row["purse_units"] or 0)
+        if units == 0 and gold > 0:
+            units = currency.from_legacy_gold(gold, cset)
+            conn.execute("UPDATE player SET purse_units = ? WHERE id = 1", (units,))
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (PURSE_MIGRATED_KEY, json.dumps({"set": cset.get("id"), "from_gold": gold, "units": units})),
+        )
+    except sqlite3.Error:
+        # The purse reader adopts gold anyway (app/purse.py units_of_row); the
+        # explicit migration runs again on the next start.
+        return
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:
@@ -876,6 +913,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("max_mana", "INTEGER NOT NULL DEFAULT 0"),
         ("fatigue", "INTEGER NOT NULL DEFAULT 0"),
         ("max_fatigue", "INTEGER NOT NULL DEFAULT 20"),
+        # The purse in the world's base units (m1, app/purse.py); gold is its
+        # whole-gold mirror. Filled from gold once by _migrate_purse_units.
+        ("purse_units", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in player_columns:
             conn.execute(f"ALTER TABLE player ADD COLUMN {column} {definition}")

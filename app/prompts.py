@@ -722,14 +722,14 @@ def asked_job_pay(context: dict[str, Any], player_input: str) -> dict[str, Any] 
     for row in context.get("open_offers") or []:
         if isinstance(row, dict) and int(row.get("pays_gold") or 0) > 0 and str(row.get("status") or "") != "declined":
             rows.append({"job": str(row.get("title") or ""), "giver": str(row.get("giver") or ""),
-                         "pays": f"{int(row['pays_gold'])} gold"})
+                         "pays": _coins(row['pays_gold'])})
     for row in context.get("active_quests") or []:
         if not isinstance(row, dict):
             continue
         m = re.match(r"\s*(\d+)\s*g\b", str(row.get("reward") or ""))
         if m and int(m.group(1)) > 0:
             rows.append({"job": str(row.get("title") or ""), "giver": str(row.get("giver") or ""),
-                         "pays": f"{int(m.group(1))} gold"})
+                         "pays": _coins(m.group(1))})
     if len(rows) > 1:
         # Several: the one whose giver or title the line names.
         low = line.lower()
@@ -983,6 +983,17 @@ def _add_character_sheet(view: dict[str, Any], context: dict[str, Any], *, openi
     premise = _clip_sentences(options.get("custom_style"), 700)
     if premise:
         view["premise"] = premise
+
+
+def _coins(gold: Any) -> str:
+    """A job's pay (legacy whole gold) in the world's coins (m1): "11 gold", or "110 credits"."""
+    from app import currency
+
+    cset = currency.current_set()
+    try:
+        return currency.format_amount(currency.from_legacy_gold(int(gold), cset), cset)
+    except (TypeError, ValueError):
+        return f"{gold} gold"
 
 
 def _player_view(context: dict[str, Any]) -> dict[str, Any] | None:
@@ -1489,6 +1500,9 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
     voice = _voice_view(context)
     if voice:
         world["narrative_voice"] = voice
+    if context.get("money"):
+        # The one money line (m1): the coin words and the $<number> form.
+        world["money"] = context.get("money")
 
     hint = context.get("direction_hint") if isinstance(context.get("direction_hint"), dict) else None
     if hint:
@@ -1505,10 +1519,10 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                 if row.get("giver"):
                     slim["giver"] = row.get("giver")
                 if int(row.get("pays_gold") or 0) > 0:
-                    slim["pays"] = f"{int(row['pays_gold'])} gold"
+                    slim["pays"] = _coins(row['pays_gold'])
                 if int(row.get("paid_ahead_gold") or 0) > 0:
                     # Already handed over (7B run 29, T3): the giver does not pay it twice.
-                    slim["paid_already"] = f"{int(row['paid_ahead_gold'])} gold, before the work"
+                    slim["paid_already"] = f"{_coins(row['paid_ahead_gold'])}, before the work"
                 slim["status"] = {"declined": "turned_down", "accepted_now": "player_takes_it_now"}.get(
                     str(row.get("status") or ""), "waiting_for_answer"
                 )

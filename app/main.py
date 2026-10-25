@@ -545,6 +545,8 @@ class SetupRequest(BaseModel):
     npc_skill_frequency: str = Field(default="some trained NPCs", max_length=100)
     rank_scale: str = Field(default="F,E,D,C,B,A,S,SS,SSS", max_length=100)
     economy: str = Field(default="scarce", max_length=80)
+    # The world's money (m1, app/currency.py): "auto" detects it from the theme.
+    currency_set: str = Field(default="auto", max_length=40)
     loot_rarity: str = Field(default="earned and uncommon", max_length=80)
     inventory_weight_limit: int = Field(default=60)
     inventory_slot_limit: int = Field(default=24)
@@ -1391,6 +1393,32 @@ def api_tts_config():
 def api_update_tts_config(request: TtsConfigRequest):
     # Only apply fields the client actually sent; a full dump would reset keys on partial posts.
     return update_tts_config(request.model_dump(exclude_unset=True))
+
+
+class CurrencyConfigRequest(BaseModel):
+    # The world's money (m1, app/currency.py): "auto" or a set id; a decimal set's symbol; a starting purse in units.
+    set: str | None = Field(default=None, max_length=40)
+    symbol: str | None = Field(default=None, max_length=8)
+    starting_purse: int | None = Field(default=None, ge=0)
+
+
+@app.get("/api/currency-config")
+def api_currency_config():
+    """The world's currency set, the purse in it, and the sets the setup page can offer."""
+    from app.world import currency_config_view
+
+    return currency_config_view()
+
+
+@app.post("/api/currency-config")
+def api_update_currency_config(request: CurrencyConfigRequest):
+    # Only the fields sent change (the /api/tts-config pattern).
+    from app.world import update_world_currency
+
+    try:
+        return update_world_currency(request.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/tts-catalog")

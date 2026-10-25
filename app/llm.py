@@ -9879,7 +9879,7 @@ def _suggestion_world(context: dict[str, Any]) -> dict[str, Any]:
     settings = context.get("settings") or {}
     options = settings.get("playthrough_options") if isinstance(settings.get("playthrough_options"), dict) else {}
     player = context.get("player") if isinstance(context.get("player"), dict) else {}
-    keep_player = ("name", "public_name", "title", "race", "level", "health", "max_health", "gold")
+    keep_player = ("name", "public_name", "title", "race", "level", "health", "max_health", "gold", "purse")
     carried = context.get("carried_items")
     if not isinstance(carried, list):
         carried = [
