@@ -10367,6 +10367,22 @@ _JOURNEY_LINE_RE = re.compile(
 )
 
 
+def _line_leaves_town(line: str, town_name: str = "") -> bool:
+    """The player's line leaves the town: "leave town", "out of the city", "out the gate", "out of <town>"."""
+    from app.town_moves import _LEAVE_NOT_RE, _leave_asked
+
+    text = str(line or "")
+    if _leave_asked(text):
+        return True
+    name = re.sub(r"^(?:the|a|an)\s+", "", str(town_name or "").strip(), flags=re.I)
+    if len(name) < 3:
+        return False
+    for m in re.finditer(rf"\b(?:leave|leaving|exit|exiting|out\s+of)\s+(?:the\s+)?{re.escape(name)}\b", text, re.I):
+        if not _LEAVE_NOT_RE.search(text[max(0, m.start() - 48): m.start()]):
+            return True
+    return False
+
+
 def _adopt_new_place_into_town(conn, from_id: int, max_place_before: int, player_input: str = "") -> None:
     """A place made this turn and reached on foot from inside a town is part of that town.
 
@@ -10401,6 +10417,13 @@ def _adopt_new_place_into_town(conn, from_id: int, max_place_before: int, player
     # is not "in" the clearing ("The road to the Old Wharf" filed under "The
     # clearing", 8B run 146, T74).
     if not _is_settlement(conn, town):
+        return
+    # A walk the line takes out of the town ends outside it: "I walk out of
+    # town onto the mudflats toward the marsh edge" filed the marsh edge as a
+    # part of Saltmarrow (stage2 T5). Read by the town code's own leave reader,
+    # or the town's name after a leave ("out of Saltmarrow").
+    if _line_leaves_town(line, str(town["name"] or "")):
+        turn_ledger.note("place", "new_place_outside_town", place=str(new["name"] or ""), town=str(town["name"] or ""))
         return
     conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (int(town["id"]), now_id))
     turn_ledger.note("place", "new_place_in_town", place=str(new["name"] or ""), town=str(town["name"] or ""))
@@ -10585,9 +10608,10 @@ def _singular_word(word: str) -> str:
 
 
 def _clean_place_name(name: str) -> str:
-    """A place name without the sentence around it: no closing stop or quote marks, one space between words."""
+    """A place name without the sentence around it: no quote marks or closing stop, no leading
+    lower-case preposition ("to Marsh Edge", stage2 T5), one space between words."""
     text = " ".join(str(name or "").split())
-    return re.sub(r"^[\"'“‘\s]+|[\s\"'”’.,;:!?]+$", "", text)
+    return strip_leading_preposition(re.sub(r"^[\"'“‘\s]+|[\s\"'”’.,;:!?]+$", "", text))
 
 
 def _place_family_ids(conn) -> set[int]:
@@ -13929,6 +13953,22 @@ def _next_turn(conn) -> int:
     return turn
 
 
+# The sentence's own preposition in front of a place name: "MOVE to Marsh
+# Edge" filed a place called "to Marsh Edge" (stage2 T5). A short list of
+# leading prepositions (a phrase list for the place-name class), lower case
+# only: a name that starts with a capital ("At the Sign of the Boar") is a name.
+_LEADING_PREPOSITION_RE = re.compile(
+    r"^(?:(?:out|back|over|up|down|on|off)\s+)?(?:to|toward|towards|into|onto|at)\s+(?:(?:the|a|an)\s+)?(?=\S)"
+)
+
+
+def strip_leading_preposition(name: str) -> str:
+    """``name`` without a lower-case leading preposition ("to Marsh Edge" -> "Marsh Edge"), else unchanged."""
+    text = str(name or "")
+    bare = _LEADING_PREPOSITION_RE.sub("", text, count=1)
+    return bare if bare.strip() else text
+
+
 def humanize_place_name(name: str) -> str:
     """
     Turn an identifier-shaped destination into a readable place name.
@@ -13952,6 +13992,7 @@ def humanize_place_name(name: str) -> str:
         text = norm_name(unwrapped.group(1))
     if not text:
         return text
+    text = strip_leading_preposition(text)
     if re.search(r"[_]|(?<=[a-z])-(?=[a-z])", text):
         text = norm_name(re.sub(r"[_-]+", " ", text))
     if text and not any(ch.isupper() for ch in text):
