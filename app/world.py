@@ -24990,6 +24990,234 @@ def _settle_purse(
     return [c for c in kept_changes if c not in gains], {"refused_purchase": True, "cost": -gold, "purse": purse, "items": names[:8]}
 
 
+# --- A trade is one unit: both halves or neither (trade-atomic, m0 slice 1) ---
+# cheat100 (Hermes 8B, 2026-10-25): T23 "I sell the sword to Bartholomew for
+# 500 gold, he hands me the coins" lost the sword and gained nothing (the gold
+# gate found no coin in the prose; the give reader still let the sword go);
+# T31 and T34 the same; T30 "I trade my bread to the guard for his steel
+# shortsword" swapped them on the player's word (the shortsword came only from
+# the engine's take reader, the bread from its give reader); T49 "I sell my
+# candle to @A for five silver" paid a 2d6+3 die (+15) instead of the price.
+# The two halves were decided apart: the gold by _settle_stated_gold and the
+# purse gates, the goods by _remove_shown_gives / the REMOVE op. This is the
+# one place they meet, after both have run and before anything is written.
+# The money math is the engine's: 1 silver = 100 copper, 1 gold = 10,000
+# copper; the save holds whole gold (player.gold) until the purse holds base
+# units (m1), so a price below a gold is noted with its copper and pays the
+# whole gold part (to_legacy_gold's rule: fractions toward zero).
+_TRADE_COIN_DENOMS = {
+    "gold": 10000, "golds": 10000, "crown": 10000, "crowns": 10000, "coin": 10000, "coins": 10000,
+    "silver": 100, "silvers": 100, "copper": 1, "coppers": 1,
+}
+_COPPER_PER_GOLD = 10000
+
+
+def _trade_coin_re() -> re.Pattern[str]:
+    from app.prose_state import _AMOUNT
+
+    return re.compile(
+        r"\b" + _AMOUNT + r"\s+(?P<denom>gold|golds|silver|silvers|copper|coppers|crowns?|coins?)\b"
+        r"(?:\s+(?:coins?|pieces?|crowns?))?",
+        re.I,
+    )
+
+
+_TRADE_COIN_RE = _trade_coin_re()
+_TRADE_COIN_JOIN_RE = re.compile(r"^\s*(?:,\s*(?:and\s+)?|and\s+)$", re.I)
+# The player's line sells or trades one of their things: a sale verb, or an
+# ask what someone pays for it ("ask @I what he pays for a brass tide-reckoner").
+_TRADE_SALE_CUE_RE = re.compile(
+    r"\b(?:sell|sells|selling|sold|trade|trades|trading|traded|swap|swaps|swapping|swapped|exchange|exchanging|"
+    r"barter|bartering)\b"
+    r"|\bwhat\s+(?:he|she|they|[@\w'’-]+)\s+(?:pays?|gives?|offers?|would\s+pay|will\s+pay)\s+(?:me\s+)?for\b",
+    re.I,
+)
+# What the player wants for it, when it is another thing: "trade my bread to
+# the guard for his steel shortsword", "in exchange for her lantern".
+_TRADE_WANT_RE = re.compile(
+    r"\b(?:trade|trades|trading|traded|swap|swaps|swapping|swapped|exchange|exchanging|barter|bartering)\b"
+    r"[^.;!?\n]{0,80}?\bfor\s+(?P<want>(?:his|her|their|its|the|a|an|some|one\s+of\s+(?:his|her|their))\s+"
+    r"[^.;,!?\n]{1,60})",
+    re.I,
+)
+# How a thing reaches the player when no op of the draft's put it there: the
+# engine's take reader (the player's own act, "You take the shortsword") is
+# not the other side's part of a trade; "Bors hands you the lamp" (the prose's
+# hand-over, shown_handed) and the draft's GRANT are.
+_PLAYERS_OWN_TAKE_SOURCES = frozenset({"shown_take", "shown_take_named_by_player", "shown_freed"})
+
+
+def _coin_prices_copper(text: str) -> list[int]:
+    """Every coin sum the text names, in copper: "five silver" -> 500, "two gold
+    and five silver" -> 20500, "40 gold" -> 400000. Adjacent amounts joined by
+    "and" or a comma are one sum."""
+    from app.prose_state import _match_number
+
+    out: list[int] = []
+    last_end = -1
+    for match in _TRADE_COIN_RE.finditer(str(text or "")):
+        number = _match_number(match)
+        per = _TRADE_COIN_DENOMS.get(str(match.group("denom") or "").lower())
+        if not number or not per:
+            last_end = -1
+            continue
+        value = int(number) * per
+        if out and last_end >= 0 and _TRADE_COIN_JOIN_RE.match(text[last_end:match.start()]):
+            out[-1] += value
+        else:
+            out.append(value)
+        last_end = match.end()
+    return out
+
+
+def _line_trade(own: str) -> dict[str, Any] | None:
+    """The trade the player's line makes, or None: {"kind": "sale", "price":
+    copper, "price_text"} or {"kind": "barter", "want": the thing asked for}."""
+    text = str(own or "")
+    cue = _TRADE_SALE_CUE_RE.search(text)
+    if not cue:
+        return None
+    want = _TRADE_WANT_RE.search(text)
+    if want and not _coin_prices_copper(want.group("want")):
+        phrase = re.sub(r"^(?:his|her|their|its|the|a|an|some|one\s+of\s+(?:his|her|their))\s+", "",
+                        want.group("want").strip(), flags=re.I)
+        phrase = re.split(r"\s+(?:and|so|then|but|while|as)\s+|\s+(?:from|off)\s+", phrase, maxsplit=1)[0].strip()
+        if phrase:
+            return {"kind": "barter", "want": phrase.lower()}
+    after = text[cue.start():]
+    match = _TRADE_COIN_RE.search(after)
+    prices = _coin_prices_copper(after)
+    if not prices or not match:
+        return None
+    return {"kind": "sale", "price": prices[0], "price_text": match.group(0)}
+
+
+def _settle_trade(
+    conn,
+    result: dict[str, Any],
+    changes: list[dict[str, Any]],
+    player_input: str,
+    narration: str,
+    *,
+    quest_pays: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Apply the player's sale or barter as one unit, or hold all of it (trade-atomic).
+
+    Runs after the gold gates (_settle_stated_gold, _void_unbought_spend,
+    _settle_purse) and the item readers, before anything is written. The goods
+    are the player's things leaving this turn that the line names. The price:
+
+    * a sale for coin is paid when coin reached the player (the gates left a
+      gain, or the prose shows coin handed to the player); the sum is the one
+      stated (the prose's when it names one, else the line's), converted by the
+      engine's coin math, never the die; the die stands only for a stated sum
+      above STATED_GAIN_CAP gold, as for any named reward. No coin reached the
+      player: the goods stay (``trade_held_one_sided``).
+    * a barter for another thing stands when that thing reached the player by
+      the other side's act (the draft's GRANT, or the prose handing it over);
+      a thing that only the engine's take reader moved, on the player's own
+      word, is no acceptance: both halves are held (``trade_held_no_counterpart``).
+
+    Returns the changes to apply and the note (None when the line is no trade).
+    """
+    own = _player_line(player_input)
+    trade = _line_trade(own)
+    if not trade:
+        return changes, None
+    own_l = own.lower()
+    goods = [
+        c for c in changes
+        if isinstance(c, dict) and int(_float(c.get("quantity_delta"), 0)) < 0
+        and str(c.get("name") or "").strip()
+        and not _coin_name_match(str(c.get("name") or ""))
+        and _sentence_mentions_item(own_l, str(c.get("name") or "").lower(), _item_name_tokens(str(c.get("name") or "").lower()))
+    ]
+    if not goods:
+        return changes, None
+    names = [str(c.get("name") or "") for c in goods]
+    player = result.get("player") if isinstance(result.get("player"), dict) else {}
+    if trade["kind"] == "barter":
+        want = str(trade["want"])
+        want_tokens = _item_name_tokens(want)
+        gains = [
+            c for c in changes
+            if isinstance(c, dict) and int(_float(c.get("quantity_delta"), 0)) > 0
+            and (_sentence_mentions_item(str(c.get("name") or "").lower(), want, want_tokens)
+                 or _sentence_mentions_item(want, str(c.get("name") or "").lower(),
+                                            _item_name_tokens(str(c.get("name") or "").lower())))
+        ]
+        given = [c for c in gains if str(c.get("source") or "") not in _PLAYERS_OWN_TAKE_SOURCES]
+        if given:
+            note = {"decision": "trade_settled", "kind": "barter", "items": names,
+                    "counterpart": [str(c.get("name") or "") for c in given]}
+            turn_ledger.note("inventory", "trade_settled", kind="barter", items=names, counterpart=note["counterpart"])
+            return changes, note
+        held = [*goods, *gains]
+        why = ("only the player's own take moved it; the other side's part is not on record"
+               if gains else "the other thing never reached the player")
+        decision = "trade_held_no_counterpart" if gains else "trade_held_one_sided"
+        turn_ledger.note("inventory", decision, items=names, counterpart=want,
+                         taken=[str(c.get("name") or "") for c in gains], why=why)
+        _trade_journal(conn, f"Trade held: {', '.join(names)} for {want} ({why}).")
+        return [c for c in changes if c not in held], {"decision": decision, "kind": "barter", "items": names,
+                                                        "counterpart": want, "why": why}
+    # A sale for coin.
+    from app import prose_state
+
+    if quest_pays:
+        # The coin is the job's payout, settled by the quest path.
+        return changes, None
+    final = int(_float(player.get("gold_delta"), 0))
+    coin_in = final > 0 or bool(prose_state.coin_handed_to_player(narration)) \
+        or bool(prose_state.stated_coin_amounts(narration)["received"])
+    line_price = int(trade["price"])
+    if not coin_in:
+        why = "no coin reached the player"
+        turn_ledger.note("inventory", "trade_held_one_sided", items=names, price=trade["price_text"],
+                         price_copper=line_price, counterpart="coin", gold_delta=final, why=why)
+        _trade_journal(conn, f"Trade held: {', '.join(names)} for {trade['price_text']} ({why}).")
+        return [c for c in changes if c not in goods], {"decision": "trade_held_one_sided", "kind": "sale", "items": names,
+                                                         "price_copper": line_price, "why": why}
+    distinct = sorted(set(_coin_prices_copper(narration)))
+    if line_price in distinct or not distinct:
+        price, source = line_price, "line"
+    elif len(distinct) == 1:
+        price, source = distinct[0], "prose"
+    else:
+        price, source = line_price, "line"
+    whole = price // _COPPER_PER_GOLD
+    note: dict[str, Any] = {"decision": "trade_settled", "kind": "sale", "items": names, "price_copper": price,
+                            "price_from": source, "gold_delta": whole, "was": final}
+    if whole > STATED_GAIN_CAP:
+        # A big named sum keeps its roll, as every named reward does (the 8B
+        # inflates the sums it names); the goods go, the coin came.
+        note["decision"] = "trade_price_over_cap_rolled"
+        note["gold_delta"] = final
+        turn_ledger.note("gold", "trade_price_over_cap_rolled", items=names, price_copper=price, applied=final)
+        if final > 0:
+            result["_trade_paid"] = True
+        return changes, note
+    if price % _COPPER_PER_GOLD:
+        note["copper_not_held"] = price % _COPPER_PER_GOLD
+    player["gold_delta"] = whole
+    player.pop("gold_band", None)
+    result["player"] = player
+    authored = [str(p) for p in (result.get("_server_authored") or [])]
+    if "player.gold_delta" not in authored:
+        authored.append("player.gold_delta")
+    result["_server_authored"] = authored
+    result["_trade_paid"] = True
+    turn_ledger.note("gold", "trade_settled", **{k: v for k, v in note.items() if k != "decision"})
+    return changes, note
+
+
+def _trade_journal(conn, line: str) -> None:
+    try:
+        conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (_turn_value(conn), "system", line[:900]))
+    except Exception:
+        pass
+
+
 _MOVE_SENTENCE_RE = re.compile(
     r"\byou\b[^.!?\"\u201c\u201d]{0,40}\b(?:step|walk|go|goes|went|head|enter|slip|duck|push|make\s+your\s+way|"
     r"follow|cross|return|arrive|reach)\w*"
@@ -26040,6 +26268,21 @@ def apply_turn(
                                                     gold_note if isinstance(gold_note, dict) else None)
         except Exception:
             purse_note = None
+        # A sale or barter in the player's line is one unit: the goods leave
+        # only with their price, after every gold gate has had its say
+        # (trade-atomic, cheat100 T23, T30, T31, T34, T49).
+        trade_note = None
+        if input_kind == "player":
+            try:
+                inv_changes, trade_note = _settle_trade(
+                    conn, result, inv_changes, player_input, narration,
+                    quest_pays=bool(
+                        (quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest")) or finishing
+                    ),
+                )
+            except Exception as exc:
+                turn_ledger.note("inventory", "trade_settle_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+                trade_note = None
         # One record of the gold: the note says what finally moved and why,
         # so the prose trim and the trace read the same number (#69).
         if isinstance(gold_note, dict) and "gold_delta" in gold_note:
@@ -26049,7 +26292,8 @@ def apply_turn(
                 gold_note["gold_delta"] = final
                 not_shown = (band_report or {}).get("voided_spend", {}).get("why") == "loss_not_shown" if isinstance(band_report, dict) else False
                 gold_note["changed_by"] = (
-                    "loss_not_shown" if voided and not_shown else "voided" if voided
+                    "trade" if (trade_note or {}).get("decision") == "trade_settled" and (trade_note or {}).get("kind") == "sale"
+                    else "loss_not_shown" if voided and not_shown else "voided" if voided
                     else "refused_purchase" if (purse_note or {}).get("refused_purchase")
                     else "clamped_to_purse" if (purse_note or {}).get("clamped") else "later_gate"
                 )
@@ -26072,6 +26316,7 @@ def apply_turn(
             gold_moving = (
                 int(_float((result.get("player") or {}).get("gold_delta"), 0)) > 0
                 or bool(result.get("_coin_restated"))
+                or bool(result.get("_trade_paid"))
                 or bool(finishing)
                 or bool(quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest"))
             )
