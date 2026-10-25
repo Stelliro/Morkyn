@@ -296,6 +296,15 @@ belong to, with the date).
   person's name; a length note and the player's line echoed), fixed the same way
   (tests/test_stage1_*.py), not yet checked live. Stell's stage rules: short stages, Sonnet as the
   player, Opus agents for the fixes, fix agents never load the 8B, no 100-turn run until asked.
+  The cheat100 run (2026-10-25, docs/showcase/hermes-cheat100-findings-2026-10-25.md; Stell: "play it
+  like ai dungeon ... try and 'cheat'"; four Sonnet players, context 16384 so the FULL contract for the
+  first time, build 59a03d0): median turn 14.4 s, no fallbacks, no stalls; gold claims, items from
+  nowhere, powers, fake ops, time, injection and death all held; declared moves, one-sided trades,
+  attacks at bystanders or from declared blows, codes and slot words as items, and code travel got
+  through and were fixed the same day (F204-F207, tests/test_cheat100_*.py; none checked live yet).
+  Found on the way: the engine's budget window was below the loaded one (F203, fixed), so the three
+  earlier runs used the compact contract; the next live stage is the first on the full contract with
+  these fixes, and should also try `repeat_penalty=1.1` (F205).
   The earlier long runs were measured on Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf` on
   Windows; also in the catalog), so compare Hermes against that. Check `/api/model-status` →
   `file` to see which GGUF actually loaded. On the RTX 4070 Ti a turn takes about 10-40 s on the 8B and about 15 s on
