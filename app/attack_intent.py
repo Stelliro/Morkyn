@@ -264,38 +264,99 @@ _PLAYER_SUBJECTS = frozenset({"i", "we", "let", "i'll", "i’ll", "i'm", "i’m"
 _PLAYER_OBJECTS = frozenset({"me", "us", "myself", "ourselves"})
 
 
-def blow_not_players(line: str) -> bool:
-    """Every blow in the line is someone else's act on the player: "A guard stabs me through the heart" (cheat100 T16).
+# What the blow reaches is the player: "me" / "us" after its verb, or a part of them behind a preposition
+# ("into my ribs", "across my skull", "in our backs"). "swings my sword" is the player's sword, no target.
+_ON_PLAYER_RE = re.compile(
+    r"\b(?:me|us|myself|ourselves)\b|\b(?:into|across|in|on|at|through|against|to|onto|upon|over|off)\s+(?:my|our)\b",
+    re.I,
+)
+
+
+def _first_word(clause: str) -> str:
+    words = clause.split()
+    return words[0].lower().strip(".,;:!?\"'") if words else ""
+
+
+def declared_blows(line: str) -> list[dict[str, Any]]:
+    """Every blow in the line is someone else's on the player; each with its subject words, else [] (cheat100 T16, T41).
 
     Grammar: in each clause holding a blow, the words before the blow's verb
-    (attack_line.hostile_act) are its subject and the word after it its
-    object. The blow is another's when its subject is there and is not the
-    player ("A guard", "Brann", "he") and its object is the player ("me",
-    "us"). A line with any blow of the player's own ("i stab him", "stab at the
-    boar") is not this; nor is a blow whose verb the hostile acts do not hold.
+    (attack_line.hostile_act) are its subject. The blow is another's when its
+    subject is there and is not the player ("A guard", "Bartholomew", "he"),
+    and it reaches the player when the rest of its clause, or a clause of the
+    same sentence that goes on with no subject of the player's own ("... and
+    cracks it across my skull"), has the player as its object (_ON_PLAYER_RE).
+    A line with any blow of the player's own ("i stab him", "stab at the boar"),
+    a blow at someone else, or a blow whose verb the hostile acts do not hold
+    gives [].
     """
     from app.interpreter import plain
 
     try:
         from app.attack_line import hostile_act
     except Exception:
-        return False
+        return []
     text = plain(line)
-    clauses = [c.strip() for c in _LINE_CLAUSE_RE.split(text) if c and c.strip()]
-    found = False
-    for clause in clauses:
-        if not _blow_clause(clause):
-            continue
-        tokens = clause.split()
-        at = next((k for k in range(len(tokens)) if hostile_act(" ".join(tokens[k:]))), None)
-        if at is None:
-            return False
-        subject = [t.lower().strip(".,;:!?\"'") for t in tokens[:at]]
-        after = tokens[at + 1].lower().strip(".,;:!?\"'") if at + 1 < len(tokens) else ""
-        if not subject or _PLAYER_SUBJECTS & set(subject) or after not in _PLAYER_OBJECTS:
-            return False
-        found = True
+    found: list[dict[str, Any]] = []
+    for sentence in re.split(r"[.;!?]", text):
+        clauses = [c.strip() for c in _LINE_CLAUSE_RE.split(sentence) if c and c.strip()]
+        for i, clause in enumerate(clauses):
+            if not _blow_clause(clause):
+                continue
+            tokens = clause.split()
+            at = next((k for k in range(len(tokens)) if hostile_act(" ".join(tokens[k:]))), None)
+            if at is None:
+                return []
+            subject = [t.lower().strip(".,;:!?\"'") for t in tokens[:at]]
+            if not subject or _PLAYER_SUBJECTS & set(subject):
+                return []
+            reached = bool(_ON_PLAYER_RE.search(" ".join(tokens[at + 1:])))
+            if not reached:
+                for nxt in clauses[i + 1:]:
+                    if _first_word(nxt) in _PLAYER_SUBJECTS:
+                        break
+                    if _ON_PLAYER_RE.search(nxt):
+                        reached = True
+                        break
+            if not reached:
+                return []
+            found.append({"subject": " ".join(subject), "clause": clause})
     return found
+
+
+def blow_not_players(line: str) -> bool:
+    """Every blow in the line is someone else's act on the player: "A guard stabs me through the heart" (cheat100 T16).
+
+    "Bartholomew swings a cudgel and cracks it across my skull" (T41) too; see declared_blows.
+    """
+    return bool(declared_blows(line))
+
+
+# Another's act on the player, as the player's own line tells it: a verb in its third-person form with the
+# player as its object ("hands me his sword", "pays me", "stabs me"). The player's own act is "I hand ..."; these
+# words end in -s and are no such verb.
+_NOT_THIRD_PERSON = frozenset({
+    "is", "was", "has", "does", "as", "us", "his", "its", "this", "yes", "thus", "plus", "less", "unless",
+    "across", "towards", "upwards", "always", "perhaps", "besides", "whereas", "afterwards", "sometimes",
+})
+_THIRD_PERSON_ON_PLAYER_RE = re.compile(r"\b([a-z]+s)\s+(?:me|us)\b", re.I)
+
+
+def others_act_on_player(line: str) -> bool:
+    """The player's line tells what another does to them: a blow on them (declared_blows) or a third-person
+    verb with "me" / "us" as its object outside speech ("The guard's captain ... hands me his sword", cheat100
+    T10; T16, T41). That is the player's telling, not something the engine resolved."""
+    from app.interpreter import plain
+
+    text = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", plain(line))
+    if declared_blows(text):
+        return True
+    for hit in _THIRD_PERSON_ON_PLAYER_RE.finditer(text):
+        word = hit.group(1).lower()
+        if word in _NOT_THIRD_PERSON or word.endswith(("ss", "us")):
+            continue
+        return True
+    return False
 
 
 def _meant_in(text: str, person: dict[str, Any]) -> bool:
