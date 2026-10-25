@@ -43,8 +43,10 @@ MAX_CONTEXT_TOKENS = 131072
 CONTEXT_STEP = 2048
 # The full story contract plus turn headroom needs about this much; auto sizing
 # keeps it when the memory allows, and the notice in app/failsafe.py speaks
-# when it cannot.
-PREFERRED_MIN_CONTEXT = 12288
+# when it cannot. It was 12288 until the contract grew to ~10,272 tokens:
+# 10,272 + 2,048 = 12,320, one step past it (2026-10-25).
+# full_contract_context() derives the live number; a test keeps this at or above it.
+PREFERRED_MIN_CONTEXT = 14336
 # Room a turn needs beyond the contract (the world packet plus the reply);
 # the same number as app.llm.MIN_TURN_HEADROOM_TOKENS, which a test pins.
 TURN_HEADROOM_TOKENS = 2048
@@ -376,6 +378,18 @@ def turn_minimum_context() -> int:
     return max(MIN_CONTEXT_TOKENS, -(-needed // CONTEXT_STEP) * CONTEXT_STEP)
 
 
+def full_contract_context() -> int:
+    """The smallest window that holds the full contract plus the turn's headroom, rounded up a step."""
+    try:
+        from app.prompts import SYSTEM_PROMPT
+
+        contract = (len(SYSTEM_PROMPT) + 3) // 4
+    except Exception:
+        return PREFERRED_MIN_CONTEXT
+    needed = contract + TURN_HEADROOM_TOKENS
+    return max(MIN_CONTEXT_TOKENS, -(-needed // CONTEXT_STEP) * CONTEXT_STEP)
+
+
 def auto_context_tokens(facts: dict[str, Any], gpu: dict[str, int] | None) -> tuple[int, str]:
     """The context window to open the model with, and one line saying why."""
     chosen, why, _fits = _auto_context(facts, gpu)
@@ -596,6 +610,19 @@ def resolve_limits(config: dict[str, Any] | None = None, *, with_facts: bool = T
         if held:
             gpu = {**gpu, "held_bytes": held}
     auto = auto_limits(facts, gpu)
+    pinned = _loaded_auto_context(facts)
+    if pinned:
+        # Our own model is open from this file at the automatic size. That is
+        # the window it has; a re-fit now reads the free memory its own buffers
+        # took. The held_bytes estimate above undercounts the real use (CUDA
+        # context, scratch), so the re-fit came out 10,240 or 8,192 on a model
+        # opened at 14,336, and every turn took the compact contract (stage1,
+        # stage2, sonnet100 runs, 2026-10-25).
+        auto = {**auto, "context_tokens": pinned, "basis": {**(auto.get("basis") or {}), "context": f"the window the loaded model opened with ({pinned:,})"}}
+        if pinned > turn_minimum_context():
+            auto.pop("short_of_memory", None)
+        elif auto.get("short_of_memory"):
+            auto["short_of_memory"] = {**auto["short_of_memory"], "opened": pinned}
     custom = stored_limits(str(facts.get("key") or "")) or {}
     env_values = {
         "context_tokens": _env_positive_int("AI_RPG_LLAMA_CPP_CONTEXT", "AI_RPG_CONTEXT_TOKENS")
@@ -637,6 +664,23 @@ def resolve_limits(config: dict[str, Any] | None = None, *, with_facts: bool = T
         }
         out["gpu"] = gpu
     return out
+
+
+def _loaded_auto_context(facts: dict[str, Any]) -> int:
+    """The window our in-process model opened with, when it is this file at the automatic size; else 0."""
+    mle = sys.modules.get("app.mle")
+    if mle is None or getattr(mle, "_MODEL", None) is None or not getattr(mle, "_MODEL_CTX_AUTO", False):
+        return 0
+    n_ctx = int(getattr(mle, "_MODEL_CTX", 0) or 0)
+    path = str(getattr(mle, "_MODEL_PATH", "") or "")
+    mine = str(facts.get("path") or "")
+    if n_ctx <= 0 or not path or not mine:
+        return 0
+    try:
+        same = Path(mine).resolve() == Path(path).resolve()
+    except OSError:
+        same = False
+    return n_ctx if same else 0
 
 
 def _held_by_loaded_model(facts: dict[str, Any]) -> int:
