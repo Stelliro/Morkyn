@@ -188,6 +188,11 @@ belong to, with the date).
   setup and stored with it; `$<number>` is always base units and the engine shows it in that
   world's coins. Bartering (trading goods for goods) is wanted too but is harder and comes
   after the currency work.
+  **Built 2026-10-25** (Stell: "go ahead"; merge 02d7e36): `player.purse_units` in base units, the set
+  stored with the world and picked in setup (auto by default), every money path in units, every
+  denomination read, `$<number>` rendered as coins, the purse in the UI and the packet, one prompt line
+  (`money_line`) naming the coin words and the `$` form. An old save's gold becomes units once. Left:
+  m2 bartering, retiring the `gold` mirror, the full m0. Not yet seen live on the 8B.
 - **Transactions are settled before the draft, and the narrator is told the result** (2026-10-25,
   Stell: "what if we were to do the transactions and confirm them before we finish the draft?"
   ... "sounds good"). The attack line's pattern, applied to money and items. (1) Before the draft
@@ -304,7 +309,8 @@ belong to, with the date).
   through and were fixed the same day (F204-F207, tests/test_cheat100_*.py; none checked live yet).
   Found on the way: the engine's budget window was below the loaded one (F203, fixed), so the three
   earlier runs used the compact contract; the next live stage is the first on the full contract with
-  these fixes, and should also try `repeat_penalty=1.1` (F205).
+  these fixes; MLE now passes `repeat_penalty` 1.1 for prose (F205; `MORKYN_REPEAT_PENALTY` turns it
+  off), also unmeasured live. Stell (2026-10-25, twice): no 8B testing until they say so.
   The earlier long runs were measured on Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf` on
   Windows; also in the catalog), so compare Hermes against that. Check `/api/model-status` →
   `file` to see which GGUF actually loaded. On the RTX 4070 Ti a turn takes about 10-40 s on the 8B and about 15 s on
