@@ -11316,6 +11316,26 @@ def _destination_is_a_person(conn, name: str) -> bool:
     return key in names or key in {n.split()[0] for n in names}
 
 
+def _player_code_travel(result: dict[str, Any], player_patch: dict[str, Any], rows: list[Any], row: Any,
+                        current_code: str) -> dict[str, Any]:
+    """Make the place the player's line typed the code of the move (rule ``player_code``)."""
+    code = str(row["code"] or "").upper()
+    name = str(row["name"] or "")
+    model_code = str(player_patch.get("move_to_location_code") or "").strip().upper()
+    model_name = str(player_patch.get("move_to_location") or "").strip()
+    model_row = next((r for r in rows if model_code and str(r["code"] or "").upper() == model_code), None)
+    model_label = str(model_row["name"] or "") if model_row is not None else (model_name or model_code)
+    replaced = model_label if model_label and model_code != code and norm_name(model_label) != norm_name(name) else ""
+    player_patch["move_to_location"] = None
+    player_patch["move_to_location_code"] = code
+    result["map_walk"] = None
+    turn_ledger.note("movement", "player_code_travel", code=code, destination=name, replaced=replaced)
+    report = {"status": "repaired", "rule": "player_code", "from": current_code, "destination": name, "code": code}
+    if replaced:
+        report["replaced"] = replaced
+    return report
+
+
 def _resolve_movement(
     conn,
     result: dict[str, Any],
@@ -11379,7 +11399,30 @@ def _resolve_movement(
 
     bound = entity_kinds.place_by_reference(result, rows, current_name)
 
-    unasked = _unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration,
+    # The player's own place code is the turn's destination, over the draft's
+    # MOVE, a place it minted and the where-ended answer (cheat100, Hermes 3
+    # 8B): T63 "I walk to #L5 Dunstan's General Store and ask @I ..." went to
+    # the inn the draft filed (new_location), T33/T34 "I walk to #L5 ..." were
+    # held by a "still in Saltmarrow" answer, T85 "#L5" read as no travel.
+    # The venue gate still decides how far the journey gets (a shop filed in
+    # another place is entered from that place), and a line that only declares
+    # the place is still held (where_ended.hold_declared_move).
+    typed = entity_kinds.place_by_reference(result, rows, current_name, typed_only=True)
+    if typed is not None and int(typed["id"]) not in _places_denied_in(rows, player_input):
+        return _player_code_travel(result, player_patch, rows, typed, current_code)
+    # A line that is only a code no place has (#L99) asks for nowhere: the
+    # draft's own place does not stand in for it.
+    bare = entity_kinds.bare_code(player_input)
+    if bare and bare not in known_codes:
+        dropped = str(player_patch.get("move_to_location") or player_patch.get("move_to_location_code") or "")
+        player_patch["move_to_location"] = None
+        player_patch["move_to_location_code"] = None
+        result["map_walk"] = None
+        turn_ledger.note("movement", "unknown_code_no_move", code=bare, dropped=dropped)
+        return {"status": "dropped_unshown", "from": current_code, "destination": dropped, "rule": "unknown_code",
+                "code": bare}
+
+    unasked =_unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration,
                                     current_name=current_name)
     if unasked:
         player_patch["move_to_location"] = None
