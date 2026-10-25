@@ -17513,6 +17513,128 @@ def _line_item_owner_code(player_input: str, name_l: str, tokens: list[str]) -> 
     return ""
 
 
+# A search of a person's body: the act and the part of them it goes through (cheat100 T35: "I kneel and
+# search his body for his purse"; "searching through his pockets"). A shelf, a chest or the ground is no body.
+_BODY_SEARCH_RE = re.compile(
+    r"\b(?:search(?:es|ed|ing)?|loot(?:s|ed|ing)?|rifl(?:e|es|ed|ing)|frisk(?:s|ed|ing)?|rummag(?:e|es|ed|ing)"
+    r"|go(?:es|ing)?\s+through|went\s+through|gone\s+through|pat(?:s|ted|ting)?\s+(?:\w+\s+)?down"
+    r"|empt(?:y|ies|ied|ying)|turn(?:s|ed|ing)?\s+out|strip(?:s|ped|ping)?|check(?:s|ed|ing)?)\b"
+    r"(?P<obj>[^.!?]{0,60}?)\b(?P<what>body|bodies|corpse|corpses|remains|pockets?|belongings|clothes|clothing)\b",
+    re.I,
+)
+_BODY_PRONOUN_RE = re.compile(r"\b(?:his|her|their|its)\s+(?:[\w'’-]+\s+){0,2}?(?:body|bodies|corpse|corpses|remains|pockets?|belongings|clothes|clothing)\b", re.I)
+
+
+def _body_search_people(conn, player_input: str, narration: str) -> list[dict[str, Any]]:
+    """The people whose body the line or the prose searches (cheat100 T35), each with the prose sentence it starts at.
+
+    Engine records only: a person is a row the search sentence names (its
+    code, "@I" or "[[I]]", or its full name), or the one row its own text
+    names when the search goes through "his body" / "her pockets". "the body"
+    named by no row (sonnet100 T60, a dead stranger with no row) is no
+    person's: the find stays as today. [{"code", "name", "dead", "at"}], where
+    ``at`` is the index of the prose sentence of the search (0 when the line
+    does it, so everything the prose then shows taken came off the body).
+    """
+    from app import interpreter
+
+    try:
+        records = interpreter.load_records(conn)
+        rows = {str(r["code"] or ""): r for r in conn.execute("SELECT * FROM npcs").fetchall()}
+    except Exception:
+        return []
+    people = [p for p in records.get("people") or [] if p.get("code")]
+    if not people:
+        return []
+    match = interpreter.Matcher(people, records.get("places"))
+    skip = records.get("player_names")
+
+    def coded(text: str) -> str:
+        return re.sub(r"(?<![\w@#!&])@([A-Z]{1,2})\b", r"[[\1]]", str(text or ""))
+
+    found: dict[str, dict[str, Any]] = {}
+
+    def read(text: str, from_line: bool) -> None:
+        sentences = [s for _a, _b, s in prose_state_sentence_spans(venues.strip_speech(coded(text)))]
+        for index, sentence in enumerate(sentences):
+            if not _BODY_SEARCH_RE.search(sentence):
+                continue
+            named = match.named(sentence, people, skip)
+            if not named and _BODY_PRONOUN_RE.search(sentence):
+                # "search his body": the person the text around it names, when it names one only.
+                around = " ".join(sentences) if from_line else " ".join(sentences[max(0, index - 2): index + 1])
+                named = match.named(around, people, skip)
+                if len(named) != 1:
+                    named = []
+            for person in named:
+                code = str(person.get("code") or "")
+                row = rows.get(code)
+                if not code or code in found:
+                    continue
+                found[code] = {"code": code, "name": str(person.get("name") or ""),
+                               "dead": bool(row is not None and interpreter.is_dead(row)), "at": 0 if from_line else index}
+
+    read(_player_line(player_input) if player_input else "", True)
+    # The line's search starts where the prose shows a search of a body, if it does: a thing picked up before
+    # it ("You pick up a lantern from the floor. Then you search ...") is no loot.
+    shown = [i for i, (_a, _b, s) in enumerate(prose_state_sentence_spans(venues.strip_speech(coded(narration))))
+             if _BODY_SEARCH_RE.search(s)]
+    for entry in found.values():
+        entry["at"] = shown[0] if shown else 0
+    read(narration, False)
+    return list(found.values())
+
+
+def _hold_loot_from_living(
+    conn,
+    changes: list[dict[str, Any]],
+    narration: str,
+    player_input: str,
+    *,
+    killed: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Gains taken off the body of a person who is alive on record are held (cheat100 T35).
+
+    "I drive my knife into Dunstan's heart and he falls dead ... I kneel and
+    search his body" rolled nothing, gave Dunstan no dead flag, and GRANT
+    "candle" put the candle in the pack. A thing taken by searching a person's
+    body is the player's only when that person is dead on record (dead = 1, the
+    dead leave a body) or the engine's own combat killed them this turn
+    (``killed``: the codes it defeated); otherwise it is held, with a ledger
+    note (loot_from_living_person_held). A thing handed over, or one the prose
+    shows before the search (found on the ground, on a shelf), stands as
+    before. The prose is not trimmed. Losses and edits pass untouched.
+    """
+    gains = [c for c in changes or [] if isinstance(c, dict) and _float(c.get("quantity_delta"), 0) > 0]
+    if not gains:
+        return changes
+    searched = _body_search_people(conn, player_input, narration)
+    killed = {str(c).upper() for c in killed or set()}
+    living = [p for p in searched if not p["dead"] and p["code"].upper() not in killed]
+    if not living:
+        return changes
+    start = min(p["at"] for p in living)
+    sentences = [s.lower() for _a, _b, s in prose_state_sentence_spans(venues.strip_speech(str(narration or "")))]
+    out: list[dict[str, Any]] = []
+    for change in changes:
+        if change not in gains:
+            out.append(change)
+            continue
+        name_l = str(change.get("name") or "").strip().lower()
+        tokens = _item_name_tokens(name_l)
+        owned = bool(_inventory_row_named(conn, name_l))
+        if _prose_item_handed_over(str(narration or ""), name_l, tokens, owned=owned):
+            out.append(change)
+            continue
+        first = next((i for i, s in enumerate(sentences) if _sentence_mentions_item(s, name_l, tokens)), None)
+        if first is not None and first < start:
+            out.append(change)
+            continue
+        turn_ledger.note("inventory", "loot_from_living_person_held", item=str(change.get("name") or ""),
+                         person=living[0]["code"], name=living[0]["name"])
+    return out
+
+
 def _not_a_thing_name(name: str, conn=None) -> dict[str, Any] | None:
     """Why a GRANT/TAKE name is no thing to file, or None when it is one (F194).
 
@@ -26896,6 +27018,15 @@ def apply_turn(
                 inv_changes = _remove_shown_gives(conn, inv_changes, narration, player_input)
             except Exception:
                 pass
+            # Off the body of someone alive on record: held (cheat100 T35). The engine's own
+            # kill this turn (the fight it resolved, applied below) counts as dead.
+            try:
+                fight = result.get("_deterministic_combat") if isinstance(result.get("_deterministic_combat"), dict) else {}
+                won = fight.get("resolution") if isinstance(fight.get("resolution"), dict) else {}
+                killed = {str((fight.get("target") or {}).get("code") or "").upper()} if won.get("target_defeated") else set()
+                inv_changes = _hold_loot_from_living(conn, inv_changes, narration, player_input, killed=killed - {""})
+            except Exception as exc:
+                turn_ledger.note("inventory", "loot_hold_failed", error=f"{type(exc).__name__}: {exc}"[:200])
         # Does the scene show money leaving or reaching the player (the
         # interpreter's gold asks, #41)? A loss it does not show is voided
         # below; both answers are logged beside _settle_stated_gold's.
@@ -28553,11 +28684,13 @@ def _attack_check_for_line(
     usage: list[dict[str, Any]],
     trace: list[dict[str, Any]],
     ask: Any = None,
+    report_out: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """The attack check for the player's line, if it attacks someone here (#85, #129; app/attack_intent.py).
 
     Marks an inferred blow already aimed at a person as the attack on them.
-    Every ask and the outcome are noted in the turn ledger.
+    Every ask and the outcome are noted in the turn ledger. ``report_out``
+    gets the reader's report (the caller reads "ability_not_held" from it).
     """
     from app import attack_intent
 
@@ -28571,9 +28704,15 @@ def _attack_check_for_line(
     minter = _attack_creature_minter(context, trace, usage, attack_intent.player_line(model_input)) if (
         chosen is not None or entity_kinds._ASK_OVERRIDE[0]) else None
     check, report = attack_intent.decide(model_input, context, inferred, chosen, minter=minter)
+    if isinstance(report_out, dict):
+        report_out.update(report)
     if report.get("no_act"):
         # "⚔️🔥💰🗡️👑🐉", "." (cheat100 T91, T90): no word in the line, so no one is asked about.
         turn_ledger.note("check", "attack_ask_no_act", line=attack_intent.player_line(model_input)[:80])
+    if report.get("ability_not_held"):
+        # "I cast fireball at the rat-catcher" with Tidecount the one power on record (cheat100 T89): no roll.
+        turn_ledger.note("check", "attack_ability_not_held", word=report.get("ability_not_held"),
+                         at=report.get("claimed_at"), line=attack_intent.player_line(model_input)[:200])
     if report.get("absent"):
         # "I attack Bartholomew" with Bartholomew at his inn (cheat100 T93): the blow is at no one here.
         turn_ledger.note("check", "attack_target_absent", absent=report.get("absent"),
@@ -28624,6 +28763,28 @@ def _attack_check_for_line(
             people=report.get("people") or [],
         )
     return check
+
+
+def _combat_off_ability_not_held(mechanics_context: Any, report: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The mechanics without the fight the intent reader built, when the line's attack is a power not held (T89).
+
+    "I cast fireball at the rat-catcher": the attack reader found no power of
+    that name on record (attack_intent.ability_not_held), so the act is no
+    attack of the player's. A fight block the keyword reader built from the
+    same line ("fire", "strike") would still take health off a row before the
+    draft; it is set to not_combat. Returns the new mechanics, or None.
+    """
+    word = str((report or {}).get("ability_not_held") or "")
+    if not word or not isinstance(mechanics_context, dict):
+        return None
+    combat = mechanics_context.get("combat") if isinstance(mechanics_context.get("combat"), dict) else {}
+    status = str(combat.get("status") or "")
+    if status in {"", "not_combat"}:
+        return None
+    out = dict(mechanics_context)
+    out["combat"] = {"status": "not_combat", "action_kind": "not_combat"}
+    turn_ledger.note("check", "combat_off_ability_not_held", word=word, was=status)
+    return out
 
 
 def _attack_creature_minter(context: dict[str, Any], trace: list[dict[str, Any]], usage: list[dict[str, Any]],
@@ -29202,11 +29363,18 @@ def play_turn(
                 # (app/attack_intent.py). The roll decides it, not the line.
                 attack = None
                 if check_cfg.get("auto_check_on_risky_actions"):
-                    attack = _attack_check_for_line(model_input, context, inferred, pre_draft_usage, pre_draft_trace)
+                    attack_report: dict[str, Any] = {}
+                    attack = _attack_check_for_line(model_input, context, inferred, pre_draft_usage, pre_draft_trace,
+                                                    report_out=attack_report)
+                    off = _combat_off_ability_not_held(mechanics_context, attack_report)
+                    if off is not None:
+                        mechanics_context = off
+                        context["mechanics_context"] = mechanics_context
                     if attack and attack.pop("replaces_inferred", False):
                         inferred, attack = attack, None
-                    if isinstance(inferred, dict) and inferred.get("not_the_players_act"):
-                        # The line's blow is someone else's on the player (cheat100 T16): no roll of theirs.
+                    if isinstance(inferred, dict) and (inferred.get("not_the_players_act") or inferred.get("ability_not_held")):
+                        # The line's blow is someone else's on the player (cheat100 T16), or made with a power
+                        # the player does not hold (T89): no roll of theirs.
                         inferred = None
                 for candidate in (attack, inferred, also):
                     if isinstance(candidate, dict) and (
