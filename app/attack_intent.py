@@ -1381,6 +1381,130 @@ def unknown_codes(model_input: str, context: dict[str, Any] | None) -> list[str]
     return [c for c in codes if c not in known]
 
 
+_LETTER_RE = re.compile(r"[^\W\d_]")
+
+
+def line_has_act(line: str) -> bool:
+    """Whether the player's line holds any word at all (a letter of any script): "." and "⚔️🔥💰" hold none.
+
+    cheat100 T91: "⚔️🔥💰🗡️👑🐉" was asked "Does the player try to hurt the
+    rat-catcher?", the 8B said "Yes, the player's message contains emojis",
+    and a critical hit landed. A line with no words has no act of the player's
+    to read, so it is never asked about (the asks are where a blow is found).
+    """
+    return bool(_LETTER_RE.search(str(line or "")))
+
+
+def _present_codes(ctx: dict[str, Any]) -> set[str]:
+    """Every code the engine has at the player's place: the scene record, the keeper, the rows filed here, the party."""
+    out: set[str] = set()
+    conv = ctx.get("conversation_turn") if isinstance(ctx.get("conversation_turn"), dict) else {}
+    for key in ("addressed", "present", "listening"):
+        out |= {str(c or "").strip().upper() for c in conv.get(key) or []}
+    here = ctx.get("current_location") if isinstance(ctx.get("current_location"), dict) else {}
+    keeper = here.get("keeper") if isinstance(here.get("keeper"), dict) else {}
+    out.add(str(keeper.get("code") or "").strip().upper())
+    here_id = here.get("id")
+    for npc in here.get("npcs") or []:
+        if isinstance(npc, dict):
+            out.add(str(npc.get("code") or "").strip().upper())
+    for location in ctx.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        for npc in location.get("npcs") or []:
+            if isinstance(npc, dict) and here_id is not None and npc.get("location_id") == here_id:
+                out.add(str(npc.get("code") or "").strip().upper())
+    for member in ctx.get("party") or []:
+        if isinstance(member, dict):
+            out.add(str(member.get("code") or "").strip().upper())
+    out.discard("")
+    return out
+
+
+def _absent_name_words(person: dict[str, Any]) -> list[str]:
+    """The words of a name that name only that person: not a job or kind word ("Innkeeper" of "Bartholomew's
+    Innkeeper" is any innkeeper), not a possessive (the "Bartholomew's" of a name is the other one's)."""
+    jobs = _job_words_all() | _role_words(person)[1] | _kinds_of(person)
+    from app.unnamed import singular
+
+    return [w for w in name_words(person)
+            if not re.search(r"['’]s?$", w) and singular(w.lower()) not in jobs and w.lower() not in jobs]
+
+
+def absent_named(line: str, context: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The person on the roster the blow names by name who is not at the player's place, when it names no one here.
+
+    cheat100 T93: "I attack Bartholomew with my sword, striking him down where
+    he stands." Bartholomew [[A]] is filed at Bartholomew's Inn; the player is
+    outside the city with Rat-catcher 1 [[AA]]. The trigger tables aimed the
+    melee roll at AA (the one in the scene) and nothing said the name was
+    someone else's. A name resolves to its row (CLAUDE.md, rosters): the blow is
+    at A, who is not here, so at no one here. Read from the blow's own clauses
+    (attack_clauses) with the known places' names taken out ("at Bartholomew's
+    Inn" names a place). Positive evidence only: a code or a name word of a
+    row elsewhere, and no code, name, kind or job of anyone here in the blow
+    (the T93 "him" is Bartholomew's, named in the same clause). Two rows
+    elsewhere that the words fit, or a row here sharing them, resolve to
+    nothing (None): the old reading stands. Returns {code, name, place}.
+    """
+    ctx = context if isinstance(context, dict) else {}
+    text = str(line or "")
+    if not text.strip():
+        return None
+    from app.interpreter import is_dead, plain
+
+    focus = plain(" ".join(attack_clauses(text)) or text)
+    places = _places_here(ctx)
+    for place in sorted({_clean(p.get("name")) for p in places if _clean(p.get("name"))}, key=len, reverse=True):
+        focus = re.sub(rf"(?<!\w){re.escape(place)}(?!\w)", " ", focus, flags=re.I)
+    if not focus.strip():
+        return None
+    rows: dict[str, dict[str, Any]] = {}
+    for location in places:
+        for npc in location.get("npcs") or []:
+            code = str(npc.get("code") or "").strip().upper() if isinstance(npc, dict) else ""
+            if code and code not in rows:
+                rows[code] = {**npc, "_place": location}
+    try:
+        from app.skill_checks import _npc_pool_from_context
+
+        for npc in _npc_pool_from_context(ctx):
+            code = str(npc.get("code") or "").strip().upper() if isinstance(npc, dict) else ""
+            if code and code not in rows:
+                rows[code] = dict(npc)
+    except Exception:
+        pass
+    present = _present_codes(ctx)
+    conv = ctx.get("conversation_turn") if isinstance(ctx.get("conversation_turn"), dict) else {}
+    names = conv.get("names") if isinstance(conv.get("names"), dict) else {}
+    nouns = set(object_nouns(focus))
+    for code in present:
+        person = rows.get(code) or {"code": code, "name": _clean(names.get(code) or names.get(code.lower()) or "")}
+        # Anyone here the blow can mean by code, name, kind or job: not a blow at someone away.
+        if line_names_person(focus, person) or nouns & ((_kinds_of(person) | _role_words(person)[1]) - {""}):
+            return None
+    hits: list[dict[str, Any]] = []
+    for code, person in rows.items():
+        if code in present or not _clean(person.get("name")):
+            continue
+        from app.interpreter import line_names
+
+        if line_names(focus, person) or any(
+                re.search(rf"(?<!\w){re.escape(w)}(?!\w)", focus, re.I) for w in _absent_name_words(person)):
+            hits.append(person)
+    if len(hits) != 1:
+        return None
+    person = hits[0]
+    place = person.get("_place") if isinstance(person.get("_place"), dict) else {}
+    return {
+        "code": str(person.get("code") or "").strip().upper(),
+        "name": _clean(person.get("name")),
+        "place": str(place.get("code") or person.get("location_code") or ""),
+        "place_name": _clean(place.get("name") or person.get("location_name") or ""),
+        "dead": bool(is_dead(person)),
+    }
+
+
 Minter = Callable[[str], Any]
 
 
@@ -1412,9 +1536,28 @@ def decide(
     inferred = inferred if isinstance(inferred, dict) else None
     try:
         line = player_line(model_input)
-        people = people_here(context)
         ctx = context if isinstance(context, dict) else {}
         report["attack_roll"] = bool(inferred and inferred.get("skill_code") in ATTACK_SKILLS)
+        if line.strip() and not line_has_act(line):
+            # "⚔️🔥💰🗡️👑🐉", "." (cheat100 T91, T90): no word, so no act of the player's to ask about.
+            report["no_act"] = True
+            return None, report
+        # (A blow the line gives another, "a guard stabs me", is no roll of the player's: read below.)
+        absent = None if report["attack_roll"] and blow_not_players(line) else absent_named(line, context)
+        if absent:
+            # "I attack Bartholomew ..." with Bartholomew filed at his inn and the player outside the city
+            # (cheat100 T93): the blow is at someone not here, so at no one here. The trigger's roll stands
+            # untargeted (one roll decides, as with an unknown code); no one here is asked about.
+            report["absent"] = absent
+            if report["attack_roll"] and inferred is not None:
+                ref = inferred.get("npc_ref") if isinstance(inferred.get("npc_ref"), dict) else {}
+                if ref.get("code"):
+                    report["not_the_lines"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
+                    inferred["not_at"] = [str(ref.get("code")).upper()]
+                inferred["npc_ref"] = None
+                inferred["opposition"] = None
+            return None, report
+        people = people_here(context)
         if not people:
             # No one in the scene record, but a creature at the player's place the blow names (stage1
             # T12: "I swing my fist at the creature" with the serpent filed at the lair, its entrance
