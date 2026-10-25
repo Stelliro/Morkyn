@@ -947,11 +947,17 @@ def context_window_tokens(config: dict[str, Any] | None = None) -> int:
     # (app/model_limits.py). get_model_config() already resolved it into
     # context_window; a bare config dict resolves here.
     window = _int_value(model_config.get("context_window"), 0)
+    source = str((((model_config.get("model_limits") or {}).get("source") or {}).get("context_tokens")) or "")
+    if window > 0 and not source:
+        # A caller's own number with no record of where it came from: a cap.
+        source = "explicit"
     if window <= 0:
         try:
             from app.model_limits import resolve_limits
 
-            window = int(resolve_limits(model_config, with_facts=False)["context_tokens"])
+            limits = resolve_limits(model_config, with_facts=False)
+            window = int(limits["context_tokens"])
+            source = str((limits.get("source") or {}).get("context_tokens") or "auto")
         except Exception:
             window = 0
     if window <= 0:
@@ -970,6 +976,13 @@ def context_window_tokens(config: dict[str, Any] | None = None) -> int:
         except Exception:
             loaded = 0
         if loaded > 0:
+            # The loaded window is the truth. An automatic number is never
+            # allowed to shrink it: a re-fit after the load read the memory the
+            # model's own buffers took and said 8,192 for a model opened at
+            # 14,336. A number someone set (env, the player's custom value, a
+            # caller's config) stays a cap; the loader reopens at it anyway.
+            if window <= 0 or source == "auto":
+                return loaded
             return min(window, loaded)
     return window
 
@@ -996,11 +1009,9 @@ def fitting_system_prompts(config: dict[str, Any] | None = None) -> tuple[str, s
     # window size, a leftover from when that provider meant a small GGUF at
     # 8192. With the window resolved per model it is judged like MLE: the
     # full contract when it fits, the compact one when it does not.
-    window = int(
-        model_config.get("context_window")
-        or context_window_tokens(model_config)
-        or DEFAULT_CONTEXT_TOKENS
-    )
+    # context_window_tokens reads the config's window first and, for MLE,
+    # answers with the window the model really loaded.
+    window = int(context_window_tokens(model_config) or DEFAULT_CONTEXT_TOKENS)
     if estimated_tokens(SYSTEM_PROMPT) + MIN_TURN_HEADROOM_TOKENS > window:
         return COMPACT_SYSTEM_PROMPT, COMPACT_VERIFY_PROMPT, True
     return SYSTEM_PROMPT, VERIFY_PROMPT, False
@@ -1117,9 +1128,19 @@ def _warn_compact_contract_once(window: int) -> None:
     if _WARNED_COMPACT_CONTRACT:
         return
     _WARNED_COMPACT_CONTRACT = True
+    contract = estimated_tokens(SYSTEM_PROMPT)
+    loaded = 0
+    try:
+        from app.mle import loaded_context
+
+        loaded = int(loaded_context() or 0)
+    except Exception:
+        loaded = 0
+    opened = f" (the model opened with {loaded})" if loaded and loaded != window else ""
     print(
-        f"[morkyn] context window {window} is too small for the full system contract "
-        f"(~{estimated_tokens(SYSTEM_PROMPT)} tokens). Using the compact contract. "
+        f"[morkyn] context window {window}{opened} is too small for the full system contract "
+        f"(~{contract} tokens + {MIN_TURN_HEADROOM_TOKENS} for the turn = {contract + MIN_TURN_HEADROOM_TOKENS}). "
+        f"Using the compact contract. "
         f"Raise the context size in the launcher (Advanced -> context) for richer turns.",
         file=sys.stderr,
         flush=True,
