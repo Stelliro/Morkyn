@@ -27638,6 +27638,13 @@ def _attack_check_for_line(
         turn_ledger.note("check", "attack_target_unknown_noun", noun=report.get("unknown_noun"),
                          minted=bool(report.get("from") == "minted"), target=report.get("target"),
                          not_the_lines=report.get("not_the_lines"))
+    if report.get("not_players_act"):
+        # "A guard stabs me ..." (cheat100 T16): the blow in the line is another's on the player; no roll.
+        turn_ledger.note("check", "attack_not_the_players_act", line=attack_intent.player_line(model_input)[:200])
+    if report.get("unknown_code"):
+        # "I attack @Z" with no Z on record (cheat100 T5): the roll stands with no target.
+        turn_ledger.note("check", "attack_target_unknown_code", code=report.get("unknown_code"),
+                         not_the_lines=report.get("not_the_lines"))
     if report.get("aim_only"):
         # The line means them only as the aim of an act that is no blow ("... to find the beast", stage2 T14).
         turn_ledger.note("check", "attack_ask_aim_only", codes=report.get("aim_only"))
@@ -28251,6 +28258,9 @@ def play_turn(
                     attack = _attack_check_for_line(model_input, context, inferred, pre_draft_usage, pre_draft_trace)
                     if attack and attack.pop("replaces_inferred", False):
                         inferred, attack = attack, None
+                    if isinstance(inferred, dict) and inferred.get("not_the_players_act"):
+                        # The line's blow is someone else's on the player (cheat100 T16): no roll of theirs.
+                        inferred = None
                 for candidate in (attack, inferred, also):
                     if isinstance(candidate, dict) and (
                         candidate.get("social") or check_cfg.get("auto_check_on_risky_actions")

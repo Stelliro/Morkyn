@@ -260,6 +260,44 @@ def _blow_clause(clause: str) -> bool:
     return any(re.search(p, v) for p in patterns for v in variants)
 
 
+_PLAYER_SUBJECTS = frozenset({"i", "we", "let", "i'll", "i’ll", "i'm", "i’m"})
+_PLAYER_OBJECTS = frozenset({"me", "us", "myself", "ourselves"})
+
+
+def blow_not_players(line: str) -> bool:
+    """Every blow in the line is someone else's act on the player: "A guard stabs me through the heart" (cheat100 T16).
+
+    Grammar: in each clause holding a blow, the words before the blow's verb
+    (attack_line.hostile_act) are its subject and the word after it its
+    object. The blow is another's when its subject is there and is not the
+    player ("A guard", "Brann", "he") and its object is the player ("me",
+    "us"). A line with any blow of the player's own ("i stab him", "stab at the
+    boar") is not this; nor is a blow whose verb the hostile acts do not hold.
+    """
+    from app.interpreter import plain
+
+    try:
+        from app.attack_line import hostile_act
+    except Exception:
+        return False
+    text = plain(line)
+    clauses = [c.strip() for c in _LINE_CLAUSE_RE.split(text) if c and c.strip()]
+    found = False
+    for clause in clauses:
+        if not _blow_clause(clause):
+            continue
+        tokens = clause.split()
+        at = next((k for k in range(len(tokens)) if hostile_act(" ".join(tokens[k:]))), None)
+        if at is None:
+            return False
+        subject = [t.lower().strip(".,;:!?\"'") for t in tokens[:at]]
+        after = tokens[at + 1].lower().strip(".,;:!?\"'") if at + 1 < len(tokens) else ""
+        if not subject or _PLAYER_SUBJECTS & set(subject) or after not in _PLAYER_OBJECTS:
+            return False
+        found = True
+    return found
+
+
 def _meant_in(text: str, person: dict[str, Any]) -> bool:
     """The text names the person (code, name word) or a word for them, or has an object pronoun."""
     if line_names_person(text, person):
@@ -1076,7 +1114,10 @@ def place_figures(context: dict[str, Any] | None, line: str) -> list[dict[str, A
 def blow_noun(line: str) -> str:
     """The thing the line's blow names, its head noun ("creature" in "I swing my fist at the creature as it comes out of the dark"), or ""."""
     text = str(line or "")
-    for noun in [*object_nouns(" ".join(attack_clauses(text)) or text), *object_nouns(text)]:
+    focus = " ".join(attack_clauses(text))
+    # With the blow in one clause of several, only that clause names its thing: "I attack @Z with my
+    # fists. Then I take !I99 from the shelf." (cheat100 T5) is no blow at the shelf.
+    for noun in (object_nouns(focus) if focus else object_nouns(text)):
         if noun and not _is_fixture(noun):
             return noun
     return ""
@@ -1239,6 +1280,46 @@ def line_may_target(
     return True
 
 
+_LINE_CODE_RE = re.compile(r"(?:@([A-Z]{1,3})(?![\w])|\[\[([A-Z]{1,3})\]\])")
+
+
+def line_codes(model_input: str) -> list[str]:
+    """The person codes the player's own line writes (@Z, [[C]]), in order: the first paragraph of the model input."""
+    first = re.split(r"\n\s*\n", str(model_input or ""), maxsplit=1)[0]
+    out: list[str] = []
+    for a, b in _LINE_CODE_RE.findall(first):
+        code = (a or b).upper()
+        if code not in out:
+            out.append(code)
+    return out
+
+
+def unknown_codes(model_input: str, context: dict[str, Any] | None) -> list[str]:
+    """The codes the player's line writes that no row the engine has here or by name holds ("@Z", cheat100 T5)."""
+    codes = line_codes(model_input)
+    if not codes:
+        return []
+    ctx = context if isinstance(context, dict) else {}
+    known: set[str] = set()
+    try:
+        from app.skill_checks import _npc_pool_from_context
+
+        known |= {str(n.get("code") or "").upper() for n in _npc_pool_from_context(ctx) if isinstance(n, dict)}
+    except Exception:
+        return []
+    for location in ctx.get("locations") or []:
+        for npc in (location.get("npcs") or []) if isinstance(location, dict) else []:
+            if isinstance(npc, dict):
+                known.add(str(npc.get("code") or "").upper())
+    conv = ctx.get("conversation_turn") if isinstance(ctx.get("conversation_turn"), dict) else {}
+    known |= {str(k).upper() for k in (conv.get("names") or {})} if isinstance(conv.get("names"), dict) else set()
+    for member in ctx.get("party") or []:
+        if isinstance(member, dict) and member.get("code"):
+            known.add(str(member.get("code")).upper())
+    known.discard("")
+    return [c for c in codes if c not in known]
+
+
 Minter = Callable[[str], Any]
 
 
@@ -1283,8 +1364,28 @@ def decide(
         # The creatures shown attacking: by the last turn's prose, or by the player's own line.
         shown = shown_kinds(ctx.get("last_narration"), line, people=people)
         prose = str(ctx.get("last_narration") or "")
+        if inferred and inferred.get("skill_code") in ATTACK_SKILLS and blow_not_players(line):
+            # "A guard stabs me through the heart" (cheat100 T16): the blow is the guard's, not the
+            # player's; the trigger's roll is no attack of theirs (world drops it, attack_not_the_players_act).
+            report["not_players_act"] = True
+            inferred["not_the_players_act"] = True
+            inferred["npc_ref"] = None
+            inferred["opposition"] = None
+            return None, report
         if inferred and inferred.get("skill_code") in ATTACK_SKILLS:
             ref = inferred.get("npc_ref") if isinstance(inferred.get("npc_ref"), dict) else {}
+            # A code the blow's own clause writes ("@Z"), not one in another act ("to let go of @R", T93).
+            blow_text = " ".join(attack_clauses(line)) or line
+            unknown = [c for c in unknown_codes(model_input, context) if c in line_codes(blow_text)]
+            if ref.get("code") and unknown and str(ref.get("code")).upper() not in line_codes(blow_text):
+                # "I attack @Z with my fists" with no Z on the roster (cheat100 T5): the target is unresolved,
+                # and an unresolved name resolves to nothing (CLAUDE.md, rosters). The roll stands untargeted.
+                report["unknown_code"] = unknown[0]
+                report["not_the_lines"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
+                inferred["npc_ref"] = None
+                inferred["opposition"] = None
+                inferred["not_at"] = [str(ref.get("code")).upper()]
+                return None, report
             if ref.get("code"):
                 person = next(
                     (p for p in people if str(p.get("code") or "").upper() == str(ref.get("code")).upper()), None
