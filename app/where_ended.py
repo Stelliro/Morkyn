@@ -40,7 +40,9 @@ rules decided:
   player set off with (T6). "Still here" leaves them where they are.
 
 Moves into a building (the venue rules), moves the draft wrote, and map walks keep their own rules (a
-disagreement is noted in the ledger). A missing, failed, unclear or unconfirmed reply changes nothing.
+disagreement is noted in the ledger). A missing, failed or unclear reply changes nothing; an unconfirmed
+one changes nothing either, except that a move the server read from the prose alone (narration_code,
+follow_named) is held as an offer instead of made (stage2 T10).
 Both asks go through app.llm._chat_text with the turn's own usage and trace lists, so their prompts, raw
 replies and times are in the turn's trace file and model_logs (phase ``where_ended``).
 """
@@ -68,6 +70,10 @@ _CHECKED_RULES = frozenset({
     "venue_exit", "venue_exit_to", "player_input", "venue_return", "narration_code", "follow_named",
     "player_named",
 })
+# Of those, the moves read from the prose alone (a [[code]] in an arrival
+# sentence, a known place named after a follow), not from a place the line
+# asked for: one of these needs a confirmed answer to stand (stage2 T10).
+_PROSE_READ_RULES = frozenset({"narration_code", "follow_named"})
 # What the movement rules return when they left the player where they were.
 _STAYED = frozenset({"unresolved", "not_travel"})
 
@@ -357,6 +363,25 @@ def attacked_here(conn, result: dict[str, Any], here_id: int) -> str:
     return ""
 
 
+def _hold(conn, result: dict[str, Any], report: dict[str, Any], choice: dict[str, Any], decision: str) -> dict[str, Any]:
+    """Hold the server's move as an offer: no move this turn, the place stays on record (ask-before-move)."""
+    patch = result.get("player") if isinstance(result.get("player"), dict) else {}
+    dest = _destination_row(conn, patch)
+    held = str(dest["name"] or "") if dest is not None else str(report.get("destination") or "")
+    turn_ledger.note("movement", decision, destination=held, answer=choice["label"], rule=str(report.get("rule") or ""))
+    patch["move_to_location"] = None
+    patch["move_to_location_code"] = None
+    result["map_walk"] = None
+    out = {"status": "dropped_unshown", "from": report.get("from"), "destination": held,
+           "rule": "where_ended_here", "dropped_rule": str(report.get("rule") or ""), "held_offer": held,
+           "where_ended": report.get("where_ended")}
+    if report.get("where_ended_choice"):
+        out["where_ended_choice"] = report["where_ended_choice"]
+    if "where_ended_confirmed" in report:
+        out["where_ended_confirmed"] = report["where_ended_confirmed"]
+    return out
+
+
 def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: str) -> dict[str, Any]:
     """Act on a checked answer: refuse an unshown server move, or move a player the rules left in place."""
     record = result.pop("_where_ended", None)
@@ -375,6 +400,14 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
         turn_ledger.note("movement", "where_ended_not_confirmed", answer=choice["label"],
                          confirm=str(record.get("confirm_reply") or ""))
         report["where_ended_confirmed"] = False
+        if str(report.get("status") or "") == "repaired" and str(report.get("rule") or "") in _PROSE_READ_RULES:
+            # A move the server read from the prose alone, not from a place the
+            # line asked for, is not made over a check that does not confirm a
+            # move (stage2 T10: "follow the clawed prints deeper into the reeds",
+            # the prose's "deeper into the heart of Saltmarrow" walked the player
+            # back to the town; letter B, "Yes, you are" still in the marsh).
+            # Ask-before-move: the place stays on record as an offer.
+            return _hold(conn, result, report, choice, "move_held_where_ended_unconfirmed")
         return report
     # The checked answer rides on the report: a part of a place reached this
     # turn is filed where the scene ended, not in the place left (drift eval, combined T2).
@@ -447,15 +480,7 @@ def settle(conn, result: dict[str, Any], report: dict[str, Any], player_input: s
     # place stays on record for the player to go to; the move is held, as the
     # ask-before-move design offers a move instead of making it.
     if status == "repaired" and rule == "venue_requested" and choice["kind"] == "here":
-        dest = _destination_row(conn, patch)
-        held = str(dest["name"] or "") if dest is not None else str(report.get("destination") or "")
-        turn_ledger.note("movement", "move_held_where_ended_confirmed", destination=held, answer=choice["label"])
-        patch["move_to_location"] = None
-        patch["move_to_location_code"] = None
-        result["map_walk"] = None
-        return {"status": "dropped_unshown", "from": report.get("from"), "destination": held,
-                "rule": "where_ended_here", "dropped_rule": rule, "held_offer": held,
-                "where_ended": report["where_ended"], "where_ended_choice": report["where_ended_choice"]}
+        return _hold(conn, result, report, choice, "move_held_where_ended_confirmed")
 
     # The draft's own MOVE, a walk into a building, a map walk: their rules
     # stand. A different answer is kept for measurement.
