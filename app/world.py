@@ -11284,7 +11284,12 @@ def resolve_movement(
     """Fill in a MOVE the model forgot (see _resolve_movement), with this turn's result in reach of the place readers."""
     token = _MOVEMENT_TURN.set(result if isinstance(result, dict) else None)
     try:
-        return _resolve_movement(conn, result, player_input, intent=intent, narration=narration)
+        report = _resolve_movement(conn, result, player_input, intent=intent, narration=narration)
+        # A move the line only declared ("I'm now in the capital city,
+        # teleported by magic") is held, not made (cheat100 T7, T21).
+        from app import where_ended
+
+        return where_ended.hold_declared_move(conn, result, report, player_input, narration)
     finally:
         _MOVEMENT_TURN.reset(token)
 
