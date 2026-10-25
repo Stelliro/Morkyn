@@ -271,5 +271,45 @@ class EveryCoinOfTheSetIsRead(unittest.TestCase):
         self.assertEqual(purse.legacy_value(160, currency.theme_set("credits")), 16)
 
 
+class ThePacketAndTheSetup(unittest.TestCase):
+    def test_the_packet_carries_the_purse_and_the_one_money_line(self):
+        from app import prompts, world
+
+        world.start_playthrough({"player_name": "Ash", "start_location": "Low Gate"})
+        state = world.get_state(include_hidden=True)
+        context = world.build_prompt_context(state, "I look around.")
+        self.assertEqual(context["player"]["purse"], "12 gold")
+        self.assertEqual(context["player"]["purse_units"], 120000)
+        self.assertNotIn("gold", context["player"])
+        self.assertNotIn("purse", context)
+        self.assertEqual(context["money"], "Money is copper, silver, gold, platinum. "
+                                           "Write every sum as $ and its count in copper, in the prose and in GOLD.")
+        world_view = __import__("json").loads(prompts.build_user_prompt(context, "I look around."))["world_state"]
+        self.assertEqual(world_view["money"], context["money"])
+
+    def test_the_money_line_in_a_credits_world(self):
+        from app import world
+
+        line = world.money_line({"set": "credits"})
+        self.assertEqual(line, "Money is credits, kilocredits. Write every sum as $ and its count in credits, "
+                               "in the prose and in GOLD.")
+
+    def test_the_currency_config_route_functions(self):
+        from app import world
+        from app.db import connect
+
+        world.start_playthrough({"player_name": "Ash", "start_location": "Low Gate"})
+        view = world.currency_config_view()
+        self.assertEqual((view["active"], view["purse"]["units"]), ("coin_medieval", 120000))
+        self.assertIn("caps", [s["id"] for s in view["sets"]])
+        # Switching a world in play keeps the purse's worth: 12 gold is 120 credits.
+        view = world.update_world_currency({"set": "credits"})
+        self.assertEqual((view["active"], view["purse"]["units"], view["purse"]["long"]), ("credits", 120, "120 credits"))
+        with connect().closing() as conn:
+            self.assertEqual(conn.execute("SELECT purse_units, gold FROM player").fetchone()[:], (120, 12))
+        with self.assertRaises(ValueError):
+            world.update_world_currency({"set": "doubloons"})
+
+
 if __name__ == "__main__":
     unittest.main()

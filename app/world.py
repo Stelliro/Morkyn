@@ -13142,7 +13142,10 @@ def _action_context(
             "max_health": player.get("max_health"),
             "level": player.get("level"),
             "karma": player.get("karma"),
-            "gold": player.get("gold"),
+            **(
+                {"purse": state["purse"].get("long"), "purse_units": state["purse"].get("units")}
+                if isinstance(state.get("purse"), dict) else {"gold": player.get("gold")}
+            ),
             "carrying": {
                 "effective_weight": inventory_summary.get("effective_weight"),
                 "weight_capacity": inventory_summary.get("weight_capacity"),
@@ -13474,6 +13477,58 @@ def _speech_memory(state: dict[str, Any], turns: int = 3, limit: int = 12) -> di
     }
 
 
+def money_line(purse: dict[str, Any] | None = None) -> str:
+    """The narrator's one line on money (m1): the world's coin words and the $<number> form.
+
+    "we can use the $ symbol as a command for the llm ... we should never rely on
+    the llm to work out the item cost by coin, just a single value" (Stell,
+    2026-10-24). The fewest plain words; the engine shows the coins."""
+    cset = _currency.current_set()
+    if isinstance(purse, dict) and purse.get("set") in _currency.CURRENCY_SETS:
+        cset = _currency.CURRENCY_SETS[str(purse["set"])]
+    denoms = cset.get("denominations") or []
+    words = ", ".join(str(d.get("plural") or d.get("id")) for d in denoms)
+    base = str((denoms[0] if denoms else {}).get("plural") or "units")
+    return f"Money is {words}. Write every sum as $ and its count in {base}, in the prose and in GOLD."
+
+
+def currency_config_view() -> dict[str, Any]:
+    """GET /api/currency-config: the stored choice, the world's set, the purse in it, and the sets to pick from."""
+    with connect().closing() as conn:
+        config = _currency.get_currency_config(conn)
+        cset = _currency.active_set(conn)
+        has_player = conn.execute("SELECT 1 FROM player WHERE id = 1").fetchone() is not None
+        units = _purse.purse_units(conn, cset) if has_player else 0
+    sets = [
+        {"id": sid, "label": str(s.get("label") or sid),
+         "coins": [str(d.get("plural") or d.get("id")) for d in s.get("denominations") or []]}
+        for sid, s in _currency.CURRENCY_SETS.items()
+    ]
+    return {"config": config, "active": cset.get("id"), "purse": _currency.purse_view(units, cset), "sets": sets}
+
+
+def update_world_currency(payload: dict[str, Any]) -> dict[str, Any]:
+    """POST /api/currency-config: store the choice; a purse already held keeps its worth in the new set.
+
+    ValueError for an unknown set or a negative starting purse (the route answers 400)."""
+    with connect().closing() as conn:
+        before = _currency.active_set(conn)
+        has_player = conn.execute("SELECT 1 FROM player WHERE id = 1").fetchone() is not None
+        units = _purse.purse_units(conn, before) if has_player else 0
+        _currency.update_currency_config(conn, payload)
+        after = _currency.active_set(conn)
+        if has_player and after.get("id") != before.get("id"):
+            # Through legacy gold as the exchange base (currency.convert).
+            moved = _purse.write_purse(conn, _currency.convert(units, before, after), after)
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (_turn_value(conn), "system",
+                 f"The purse is counted in {after.get('label')} now: {_currency.format_amount(moved, after)} "
+                 f"(was {_currency.format_amount(units, before)})."[:900]),
+            )
+    return currency_config_view()
+
+
 def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, Any]:
     _write_source_index(state)
     query = _tokens(player_input)
@@ -13584,6 +13639,13 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     if not state.get("equipment_effects"):
         state_abilities = [*state_abilities, *equipment_effects.get("granted_abilities", [])]
     context_player = dict(state.get("player") or {})
+    # The purse as the world's coins and its base units (m1); the whole-gold
+    # mirror is the engine's, not the model's.
+    purse_view = state.get("purse") if isinstance(state.get("purse"), dict) else {}
+    if purse_view:
+        context_player.pop("gold", None)
+        context_player["purse"] = purse_view.get("long")
+        context_player["purse_units"] = purse_view.get("units")
     context_player["effective_stats"] = equipment_effects.get("stat_modifiers") or {}
     context_player["equipment_ability_names"] = [ability.get("name") for ability in equipment_effects.get("granted_abilities", []) if ability.get("name")]
     inventory = _select_inventory_context(state.get("inventory", []), query, refs, intent, limits)
@@ -13654,6 +13716,8 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     prompt_context = {
         **state,
         "player": context_player,
+        # The one money line (m1, Stell 2026-10-24): the coin words and the $<number> form.
+        "money": money_line(state.get("purse")),
         "locations": locations,
         "events": events,
         "conversations": conversations,
@@ -13698,6 +13762,8 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             "source_hits": len(relevant_sources),
         },
     }
+    # The full purse view is the UI's; the model has player.purse and player.purse_units (m1).
+    prompt_context.pop("purse", None)
     if not map_space:
         prompt_context.pop("map_space", None)
     # Names, jobs and venue names drawn fresh for this turn (playtest #14):
@@ -27826,9 +27892,14 @@ def _turn_reward_summary(before_state: dict[str, Any], after_state: dict[str, An
     # or a found purse all show (#85 review: on purpose, the player's own purse
     # is the one source, not the quest rows).
     gold_gain = max(0, int(after_player.get("gold") or 0) - int(before_player.get("gold") or 0))
+    # The rise in base units and in the world's coins (m1): "+5 silver" shows too.
+    money_gain = max(0, int(after_player.get("purse_units") or 0) - int(before_player.get("purse_units") or 0))
+    world_set = _currency.current_set()
     return {
         "xp_gain": xp_gain,
         "gold_gain": gold_gain,
+        "money_gain": money_gain,
+        "money_gain_text": _currency.format_amount(money_gain, world_set) if money_gain else "",
         "items_gained": items_gained,
         "quests_completed": quests_done,
     }

@@ -11952,6 +11952,14 @@ function renderPartyPanel() {
     .join("");
 }
 
+// The purse in the world's own coins (m1): the engine's state.purse, never coin math here.
+function purseText(from, style = "long") {
+  const purse = from?.purse;
+  if (purse && purse[style]) return String(purse[style]);
+  const gold = from?.player?.gold ?? from?.player?.money;
+  return gold == null ? "" : `${gold} gold`;
+}
+
 function renderPlayer() {
   const player = state.player || {};
   const skills = state.skills || [];
@@ -11998,7 +12006,7 @@ function renderPlayer() {
       ${fatigue != null || maxFatigue != null ? statCard(fatigueBand && fatigueBand !== "fresh" ? `Fatigue (${fatigueBand})` : "Fatigue", `${fatigue ?? 0}/${maxFatigue ?? 0}`) : ""}
       ${statCard("Level", options.leveling_system === false ? "Off" : player.level ?? 1)}
       ${statCard("XP", options.leveling_system === false ? "Off" : player.xp ?? 0)}
-      ${statCard("Gold", player.gold ?? 0)}
+      ${statCard("Purse", purseText(state))}
       ${statCard("Karma", player.karma ?? 0)}
     </div>
     ${collapseNote ? card("Condition", collapseNote, collapse.band || "strain") : ""}
@@ -12244,7 +12252,7 @@ function renderInventory() {
   const modifiers = state.inventory_capacity_modifiers || [];
   const summary = state.inventory_summary || {};
   const options = state.settings?.playthrough_options || {};
-  const gold = state.player?.gold ?? state.player?.money ?? null;
+  const gold = purseText(state) || null;
   const slotItems = new Map();
   inventory.forEach((item) => {
     if (!item.equipped_slot) return;
@@ -12345,7 +12353,7 @@ function renderInventory() {
           <span>${escapeHtml(inventory.length)} items · ${escapeHtml(equippedCount)} equipped · ${escapeHtml(options.loot_rarity || "earned loot")}</span>
         </div>
         <div class="inventoryHeaderBadges">
-          ${gold !== null && gold !== undefined ? `<div class="inventorySeal inventoryGold">${escapeHtml(gold)} gold</div>` : ""}
+          ${gold !== null && gold !== undefined ? `<div class="inventorySeal inventoryGold">${escapeHtml(gold)}</div>` : ""}
           <div class="inventorySeal">${summary.dimensional_spaces ? "Dimensional" : "Mundane"}</div>
         </div>
       </header>
@@ -19950,9 +19958,11 @@ function turnRewardsHtml(payload) {
     .filter((item) => item.name && item.quantity > 0);
   // A quest the engine finished this turn and what it paid (playtest #85b).
   const goldGain = Math.max(0, Number(rewards.gold_gain || 0) || 0);
+  // The rise in the world's coins (m1): "+5 silver" shows though no whole gold came.
+  const moneyGain = String(rewards.money_gain_text || "").trim();
   const questsDone = (Array.isArray(rewards.quests_completed) ? rewards.quests_completed : [])
     .filter((row) => row && row.code);
-  if (!xpGain && !items.length && !goldGain && !questsDone.length) return "";
+  if (!xpGain && !items.length && !goldGain && !moneyGain && !questsDone.length) return "";
   const questRows = questsDone.map((row) => `
       <li>
         <span class="rewardName">Quest complete: ${escapeHtml(row.code)}</span>
@@ -19975,7 +19985,8 @@ function turnRewardsHtml(payload) {
       <strong>Rewards Gained</strong>
       <div class="rewardSummary">
         ${xpGain ? `<div class="rewardPill"><span>XP</span><b>+${escapeHtml(Math.round(xpGain))}</b></div>` : ""}
-        ${goldGain ? `<div class="rewardPill"><span>Gold</span><b>+${escapeHtml(Math.round(goldGain))}</b></div>` : ""}
+        ${moneyGain ? `<div class="rewardPill"><span>Purse</span><b>+${escapeHtml(moneyGain)}</b></div>`
+          : goldGain ? `<div class="rewardPill"><span>Gold</span><b>+${escapeHtml(Math.round(goldGain))}</b></div>` : ""}
         ${items.length ? `<div class="rewardPill"><span>Items</span><b>+${escapeHtml(items.reduce((total, item) => total + item.quantity, 0))}</b></div>` : ""}
       </div>
       ${questRows ? `<ul class="rewardItems">${questRows}</ul>` : ""}
@@ -20495,6 +20506,8 @@ async function startGame(event) {
       npc_skill_frequency: setupValueText(formData, "npc_skill_frequency", "some trained NPCs", 100),
       rank_scale: setupValueText(formData, "rank_scale", "F,E,D,C,B,A,S,SS,SSS", 100),
       economy: readListSetting(formData, "economy", "scarce"),
+      // The world's money (m1): "auto" lets the engine pick it from the theme.
+      currency_set: setupValueText(formData, "currency_set", "auto", 40),
       loot_rarity: setupValueText(formData, "loot_rarity", "earned and uncommon", 80),
       inventory_weight_limit: intField(formData, "inventory_weight_limit", 60, 1, 100000),
       inventory_slot_limit: intField(formData, "inventory_slot_limit", 24, 1, 10000),
@@ -28815,7 +28828,8 @@ function paintPlayDock() {
   if (vitalsEl) {
     const bits = [];
     if (player.health != null) bits.push(`HP ${player.health}/${player.max_health ?? player.health}`);
-    if (player.gold != null) bits.push(`Gold ${player.gold}`);
+    const purse = purseText(state, "short");
+    if (purse) bits.push(purse);
     if (player.level != null) bits.push(`Lv ${player.level}`);
     vitalsEl.textContent = bits.join(" · ");
   }

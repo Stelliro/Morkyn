@@ -2285,9 +2285,16 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
         # directions was never paid). The engine takes the sum when it is accepted.
         offer = player_trade_offer(own)
         if offer:
-            packet["trade_offer"] = {"gold": offer}
+            # The offer in the world's coins and as the money command (m1): the
+            # model never does the coin math, and "three silver" is no "0.03 gold".
+            from app import currency
+
+            cset = currency.current_set()
+            offer_units = currency.from_legacy_gold(offer, cset)
+            coins = currency.format_amount(offer_units, cset)
+            packet["trade_offer"] = {"coins": coins, "units": offer_units}
             instructions.append(
-                f"trade_offer: the player offers {offer} gold. If the other side accepts, ===OPS=== has GOLD -{offer} "
+                f"trade_offer: the player offers {coins}. If the other side accepts, ===OPS=== has GOLD -${offer_units} "
                 "and ===NAR=== shows the coin handed over; if they refuse, there is no GOLD line and ===NAR=== says so."
             )
     # How the player's last act turned out, so this scene does not redo or
