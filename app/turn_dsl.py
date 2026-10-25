@@ -1031,6 +1031,122 @@ def _no_value(entry: dict[str, Any], what: str) -> None:
     raise TurnDslError(f"{entry['op']} requires {what} on line {entry['line']}")
 
 
+# Cheat100 T93 (Hermes 3 8B): every op on the list written back with the words
+# that name its parts in place of values ('EVENT: EVENT_TITLE, LOC, NPC,
+# SUMMARY', 'GM: TRIGGER, NOTE', 'GRANT: ITEM_NAME, QTY, BAND', 'SKILL:
+# SKILL_NAME, DELTA, BAND'); the save got an event "EVENT_TITLE", a GM note
+# "NOTE", dice rolled for "item:ITEM NAME" and "skill:SKILL_NAME". MOVE already
+# refused its slot word; every other op took one. The class: a value made only
+# of the words the op list uses to describe the parts (read from the op list
+# itself, so it cannot drift), written as a slot (capitals, an underscore, or
+# wrapped in <>, {} or single []), is no value. The op's own choice words
+# (SCENE action, QUEST_DONE accept, VERDICT unverified), the bands and the
+# values the list says to write as shown (PLAYER) stay values; a one- or
+# two-letter part can be a code (AA, L1) and is never read as a slot word.
+def _slot_vocabulary(text: str) -> tuple[frozenset[str], dict[str, frozenset[str]], frozenset[str]]:
+    """The op list's words for parts, each op's choice words, and the values
+    written as shown (bands, PLAYER), all lower case."""
+    words: set[str] = set()
+    choices: dict[str, frozenset[str]] = {}
+    for m in re.finditer(r"^([A-Z_]+(?:, [A-Z_]+)*): (.+)$", text, re.M):
+        ops = [op for op in m.group(1).split(", ") if op in OPCODES]
+        if not ops:
+            continue
+        body = m.group(2)
+        for op in ops:
+            words.update(part.lower() for part in op.split("_"))
+        words.update(w.lower() for w in re.findall(r"[A-Za-z]+", body))
+        mine: set[str] = set()
+        for listed in re.finditer(r"\bone of ([\w, ]+?)(?:,? then\b|[.;)]|$)", body):
+            mine.update(w.strip().lower() for w in listed.group(1).split(",") if re.fullmatch(r"\s*\w+\s*", w))
+        mine.update(w.lower() for w in re.findall(r"\bor (\w+), then\b", body))
+        for op in ops:
+            choices[op] = frozenset(mine)
+    shown: set[str] = set()
+    bands = re.search(r"bands, never numbers: ([\w, ]+)\.", text)
+    if bands:
+        shown.update(w.strip().lower() for w in bands.group(1).split(","))
+    shown.update(w.lower() for w in re.findall(r"\bWrite ([A-Z]{2,}) for\b", text))
+    return frozenset(words), choices, frozenset(shown)
+
+
+_SLOT_WORDS, _OP_CHOICE_WORDS, _SHOWN_VALUES = _slot_vocabulary(DSL_SYSTEM_PROMPT)
+_OP_NAME_WORDS = frozenset(part.lower() for op in OPCODES for part in op.split("_"))
+_SLOT_WRAP_RE = re.compile(r"^\s*(?:<([^<>]+)>|\{([^{}]+)\}|\[([^\[\]]+)\])\s*$")
+_CODE_SHAPE_RE = re.compile(r"[A-Za-z]{1,2}\d*")
+
+
+def op_slot_word(op: str, value: Any) -> str:
+    """The slot word ``value`` is on ``op``'s line ("EVENT_TITLE"), or ""."""
+    raw = str(value or "").strip().strip("\"'“”").strip()
+    wrapped = _SLOT_WRAP_RE.match(raw)
+    inner = next((g for g in wrapped.groups() if g), "") if wrapped else raw
+    inner = inner.strip().strip("\"'").strip(" ,;:.")
+    if not inner or _CODE_SHAPE_RE.fullmatch(inner):
+        return ""
+    if not (wrapped or "_" in inner or not re.search(r"[a-z]", inner)):
+        return ""
+    tokens = [t for t in re.split(r"[\s_\-:=]+", inner.lower()) if t]
+    if not tokens or len(tokens) > 5 or not all(re.fullmatch(r"[a-z]+", t) for t in tokens):
+        return ""
+    key = inner.lower().lstrip("+-")
+    if key in _OP_CHOICE_WORDS.get(op, frozenset()) or key in _SHOWN_VALUES:
+        return ""
+    if all(t in _SLOT_WORDS for t in tokens):
+        return inner
+    # One identifier joined by underscores that opens on an op's name or ends
+    # on a part's word ("GOLD_AMOUNT", "RELATIONSHIP_CODE"); "rope_ladder"
+    # stays a value.
+    if re.fullmatch(r"[A-Za-z]+(?:_[A-Za-z]+)+", inner) and (tokens[0] in _OP_NAME_WORDS or tokens[-1] in _SLOT_WORDS):
+        return inner
+    return ""
+
+
+def _drop_slot_words(entry: dict[str, Any]) -> str:
+    """Take slot words out of one op line. A flag holding one loses that flag
+    (its parts are "may add"); a part holding one drops the op, returned as
+    its error. Each one goes in the ledger as op_value_is_slot_word."""
+    op = entry["op"]
+    found: list[tuple[str, str]] = []
+    flags = dict(entry.get("flags") or {})
+    for key, value in list(flags.items()):
+        word = op_slot_word(op, value)
+        if word:
+            found.append((key, word))
+            del flags[key]
+    entry["flags"] = flags
+    part_word = ""
+    args = list(entry.get("args") or [])
+    words = [op_slot_word(op, value) for value in args]
+    for at, word in enumerate(words):
+        if not word or word.upper() == op:
+            # The op's own word again ('GOLD: -2 GOLD') is the unit, not a slot.
+            continue
+        following = str(args[at + 1]).strip().strip("\"'").lower() if at + 1 < len(args) else ""
+        if (
+            following
+            and not words[at + 1]
+            and following not in _OP_CHOICE_WORDS.get(op, frozenset())
+            and following.upper() not in _ALL_FIELD_KEYS | _OP_FIELDS.get(op, frozenset())
+        ):
+            # A label before its value ('QUEST: TITLE "Kitchen Helper"',
+            # 'WALK: south STEPS 1'): the value is there, the parser reads it.
+            continue
+        found.append(("part", word))
+        part_word = part_word or word
+    if found:
+        from app import turn_ledger
+
+        turn_ledger.note(
+            "ops", "op_value_is_slot_word", op=op, word=(part_word or found[0][1])[:60],
+            words=[f"{where}={word[:60]}" for where, word in found][:12],
+            dropped="op" if part_word else "field", line=str(entry.get("raw") or "")[:160],
+        )
+    if part_word:
+        return f"{op} holds the slot word {part_word}, not a value, on line {entry['line']}"
+    return ""
+
+
 def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     """
     Apply one opcode to the turn under construction.
@@ -1728,6 +1844,10 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
             if len(key.split()) >= 4:
                 other_values.setdefault(key, set()).add(entry["op"])
     for entry in ops:
+        slot_error = _drop_slot_words(entry)
+        if slot_error:
+            malformed_ops.append(slot_error)
+            continue
         if entry["op"] == "GM":
             repeated = [
                 (re.sub(r"\W+", " ", str(value)).strip().lower(), value) for value in entry.get("args") or []
