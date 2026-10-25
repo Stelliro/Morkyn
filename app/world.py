@@ -6935,6 +6935,31 @@ def _settle_turn_start(start: dict[str, Any]) -> None:
         turn_ledger.note("rewind", "turn_start_kept", snapshot_id=int(row["id"]), changed=taken[:40])
 
 
+def _render_money_commands(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """The model writes a sum as ``$<number>`` (base units); the player reads coins (m1, Stell 2026-10-24).
+
+    "$69420" in the narration and the summary becomes "6 gold, 94 silver and 20
+    copper" before any reader or the player sees it, so the readers read the
+    coins back into the same number. Idempotent: rendered text has no command."""
+    if not isinstance(result, dict):
+        return []
+    cset = _currency.current_set()
+    rendered: list[dict[str, Any]] = []
+    for key in ("narration", "turn_summary", "summary"):
+        value = result.get(key)
+        if isinstance(value, str) and "$" in value:
+            result[key], done = _currency.render_money_commands(value, cset)
+            rendered.extend(done)
+    for seg in result.get("narration_segments") or []:
+        if isinstance(seg, dict) and isinstance(seg.get("text"), str) and "$" in seg["text"]:
+            seg["text"], done = _currency.render_money_commands(seg["text"], cset)
+            rendered.extend(done)
+    unique = list({r["command"]: r for r in rendered}.values())
+    if unique:
+        turn_ledger.note("money", "command_rendered", set=cset.get("id"), sums=unique[:8])
+    return unique
+
+
 def _in_world_currency(fn):
     """Around a turn entry point: the text readers (app/prose_state.py) read the world's money (m1).
 
@@ -25563,7 +25588,14 @@ def _settle_trade(
     return changes, note
 
 
-_ANY_COIN_WORD_RE = re.compile(r"\b(?:coins?|silvers?|coppers?|gold|crowns?)\b", re.I)
+def _any_coin_word_re() -> re.Pattern[str]:
+    from app.prose_state import _ANY_COIN
+
+    # Every coin word of every set (m1: credits and caps too), as the prose readers use.
+    return re.compile(r"(?:\b(?:coins?|silvers?|coppers?|gold|crowns?)\b|\b" + _ANY_COIN + r")", re.I)
+
+
+_ANY_COIN_WORD_RE = _any_coin_word_re()
 # Coin of any denomination reaching the player by someone else's hand: "He
 # counts out four silver coins and places them in your hand" (cheat100 T58;
 # prose_state's readers count gold only, so silver never reached them).
@@ -26310,6 +26342,11 @@ def apply_turn(
     # Name repair rebinds `result` to a new dict. Gear and narration updates
     # after that have to land on the object the caller returns as the turn.
     caller_result = result
+    # A turn applied without play_turn (a tool, a replay) still shows coins, not "$69420" (m1).
+    try:
+        _render_money_commands(result)
+    except Exception:
+        pass
     map_report: dict[str, Any] = {"status": "skipped", "steps_taken": 0}
     quest_report: dict[str, Any] = {"status": "skipped", "created": [], "updated": [], "rejected": []}
     with connect().closing() as conn:
@@ -29649,6 +29686,12 @@ def play_turn(
         result["_model_trace"] = pre_trace + list(result.get("_model_trace") or [])
 
     result["_deterministic_combat"] = mechanics_context.get("combat") or {}
+    # "$69420" in the draft is base units; every reader below and the player
+    # read it as the world's coins (m1).
+    try:
+        _render_money_commands(result)
+    except Exception as exc:
+        turn_ledger.note("money", "command_render_failed", error=f"{type(exc).__name__}: {exc}"[:200])
     # The asks made before the draft go first in the turn's usage and trace.
     if pre_draft_usage:
         result["_model_usage"] = [*pre_draft_usage, *(result.get("_model_usage") or [])]

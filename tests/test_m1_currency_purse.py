@@ -206,5 +206,70 @@ class QuestRewardsPayUnits(unittest.TestCase):
             conn.rollback()
 
 
+class TheMoneyCommand(unittest.TestCase):
+    def test_render(self):
+        from app import currency
+
+        coin = currency.theme_set("coin_medieval")
+        text, done = currency.render_money_commands("A fee of $69420, or $5.", coin)
+        self.assertEqual(text, "A fee of 6 gold, 94 silver and 20 copper, or 5 copper.")
+        self.assertEqual([d["units"] for d in done], [69420, 5])
+        # The rendered words read back as the same number.
+        self.assertEqual(currency.parse_amount(text, coin)["units"], 69420)
+        # A decimal set's own price is no command; a credits world shows credits.
+        self.assertEqual(currency.render_money_commands("$12.50", currency.theme_set("cash"))[0], "$12.50")
+        self.assertEqual(currency.render_money_commands("$40", currency.theme_set("credits"))[0], "40 credits")
+
+    def test_a_draft_with_69420_reaches_the_player_as_coins(self):
+        from app.db import connect
+
+        prose = "The clerk tallies the debt on his slate: $69420, owed by the end of the month."
+        _units, _gold, _held, out = _play("I ask the clerk what I owe.", prose, [], {})
+        with connect().closing() as conn:
+            shown = conn.execute("SELECT content FROM journal WHERE kind = 'narration' ORDER BY id DESC LIMIT 1").fetchone()[0]
+        self.assertIn("6 gold, 94 silver and 20 copper", shown)
+        self.assertNotIn("$69420", shown)
+        self.assertNotIn("$69420", str(out.get("narration") or ""))
+
+    def test_the_gold_op_takes_the_command_as_units(self):
+        from app import turn_dsl
+
+        turn = turn_dsl.ops_to_turn("You pay.", turn_dsl.parse_ops("GOLD -$500"), "")
+        self.assertEqual((turn["player"]["money_delta"], turn["player"]["gold_delta"]), (-500, 0))
+
+
+class EveryCoinOfTheSetIsRead(unittest.TestCase):
+    def test_the_readers_in_the_coin_set(self):
+        from app import prose_state
+
+        said = prose_state.stated_coin_amounts("You pay the innkeeper five silver and two copper.")
+        self.assertEqual(said["paid"], [0.0502])
+        self.assertEqual(prose_state.coin_mentions("forty-six gold"), [46])
+
+    def test_a_credits_world_reads_40_credits(self):
+        from app import currency, prose_state, world
+
+        token = currency.use_set(currency.theme_set("credits"))
+        try:
+            self.assertEqual(prose_state.stated_coin_amounts("The broker hands you 40 credits.")["received"], [4])
+            # Gold is no money here.
+            self.assertEqual(prose_state.coin_mentions("five gold"), [])
+            self.assertEqual(world._coin_prices_units("I sell it for 40 credits"), [40])
+        finally:
+            currency.reset_set(token)
+
+    def test_a_credits_world_sale_pays_40_units(self):
+        from app import currency, purse, world
+
+        line ="I sell my scanner to @A for 40 credits; he transfers the credits to me and takes the scanner."
+        prose = "Bartholomew nods and hands you 40 credits, then takes the scanner."
+        units, gold, held, _out = _play(line, prose, [("scanner", 1)], {"gold_band": "small"},
+                                        options={"world_style": "space frontier salvage",
+                                                 "tech_level": "spacefaring salvage"})
+        self.assertEqual((units, held.get("scanner", 0)), (160, 0))
+        self.assertEqual(world.get_state()["purse"]["long"], "160 credits")
+        self.assertEqual(purse.legacy_value(160, currency.theme_set("credits")), 16)
+
+
 if __name__ == "__main__":
     unittest.main()

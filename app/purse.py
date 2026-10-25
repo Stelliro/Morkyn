@@ -160,8 +160,4 @@ def drop_gold(player: dict[str, Any]) -> None:
 
 def legacy_value(units: int, cset: dict[str, Any]) -> int | float:
     """Units on the legacy gold scale, a whole number when it is one: 500 copper -> 0.05."""
-    per = max(1, int(cset.get("per_legacy_gold") or 1))
-    units = int(units)
-    if units % per == 0:
-        return units // per
-    return float(Decimal(units) / Decimal(per))
+    return currency.legacy_value(units, cset)

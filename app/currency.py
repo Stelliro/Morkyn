@@ -49,7 +49,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from app.prose_state import _NUMBER_WORDS
+from app.number_words import _COMPOUND_AMOUNT, _NUMBER_WORDS, _number
 
 CONFIG_KEY = "currency_config"
 DEFAULT_SET = "coin_medieval"
@@ -614,10 +614,11 @@ def coin_pattern(cset: dict[str, Any]) -> str:
 _NUMBER_WORD_ALTERNATION = "|".join(
     sorted((w.replace(" ", r"\s+") for w in _NUMBER_WORDS), key=len, reverse=True)
 )
-_AMOUNT_RE = r"(?:\d{1,3}(?:,\d{3})+|\d{1,7}(?:\.\d{1,2})?|" + _NUMBER_WORD_ALTERNATION + r")"
+# "forty-six gold" is 46 (m1: the compound tens-and-units the prose readers read since 8B run 146).
+_AMOUNT_RE = r"(?:\d{1,3}(?:,\d{3})+|\d{1,7}(?:\.\d{1,2})?|" + _COMPOUND_AMOUNT + "|" + _NUMBER_WORD_ALTERNATION + r")"
 # A money phrase may not start inside a word, right after a currency symbol, after a hyphen ("twenty-five
-# gold" has a compound number the grammar cannot read, so it is None rather than 5 gold) or inside a
-# comma-grouped number ("1,234,567 credits" is never read from its second group).
+# gold" is read whole from "twenty", never as 5 gold from "five") or inside a comma-grouped number
+# ("1,234,567 credits" is never read from its second group).
 _START_RE = r"(?<![\w$-])(?<!\d,)"
 _JOIN_RE = r"(?:\s*,\s*and\s+|\s*,\s*|\s+and\s+)"
 
@@ -626,6 +627,9 @@ def _amount_value(text: str) -> Decimal | None:
     key = " ".join(text.strip().lower().split())
     if key in _NUMBER_WORDS:
         return Decimal(_NUMBER_WORDS[key])
+    compound = _number(key) if not any(ch.isdigit() for ch in key) else None
+    if compound is not None:
+        return Decimal(compound)
     key = key.replace(",", "")
     try:
         return Decimal(key)
@@ -753,6 +757,35 @@ def round_price(units: int) -> int:
     step = 10 ** (digits - 3)
     rounded = int(math.floor(magnitude / step + 0.5)) * step
     return sign * max(1, rounded)
+
+
+def legacy_value(units: int, cset: dict[str, Any]) -> int | float:
+    """Units on the legacy gold scale, whole when it is whole: 500 copper -> 0.05, 120000 -> 12."""
+    per = max(1, int(cset.get("per_legacy_gold") or 1))
+    units = int(units)
+    return units // per if units % per == 0 else float(Decimal(units) / Decimal(per))
+
+
+# The model's money command (Stell, 2026-10-24): "$69420" is 69420 base units. Not "$12.34" (a decimal set's
+# own price), not part of a word or a longer number.
+MONEY_COMMAND_RE = re.compile(r"(?<![\w$])\$(?P<units>\d{1,9})(?![\d\w]|[.,]\d)")
+
+
+def render_money_commands(text: str, cset: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """Every ``$<number>`` in model text as the world's coins ("$69420" -> "6 gold, 94 silver, 20 copper").
+    Returns the text and what was rendered. The model never splits a sum into coins; the engine does."""
+    rendered: list[dict[str, Any]] = []
+
+    def swap(match: re.Match) -> str:
+        units = int(match.group("units"))
+        words = format_amount(units, cset, "long")
+        if ", " in words:
+            head, _, last = words.rpartition(", ")
+            words = f"{head} and {last}"
+        rendered.append({"command": match.group(0), "units": units, "text": words})
+        return words
+
+    return MONEY_COMMAND_RE.sub(swap, str(text or "")), rendered
 
 
 def purse_view(units: int, cset: dict[str, Any]) -> dict[str, Any]:

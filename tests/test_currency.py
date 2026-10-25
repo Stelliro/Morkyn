@@ -292,9 +292,10 @@ class ParseTests(unittest.TestCase):
         self.assertIsNone(currency.parse_amount("The gold light fades.", MEDIEVAL))
         self.assertEqual(currency.parse_amount("a hundred coins", MEDIEVAL)["units"], 1000000)
         self.assertEqual(currency.parse_amount("12 money", MEDIEVAL)["units"], 120000)
-        # A hyphenated compound is a number the grammar cannot read: None, not the last word.
-        self.assertIsNone(currency.parse_amount("twenty-five gold", MEDIEVAL))
-        self.assertIsNone(currency.parse_amount("pay twenty-five gold for it", MEDIEVAL))
+        # m1 (2026-10-25): a hyphenated compound is read whole, as prose_state reads it since 8B run 146
+        # ("forty-six gold" was read as six); never as the last word alone.
+        self.assertEqual(currency.parse_amount("twenty-five gold", MEDIEVAL)["units"], 250000)
+        self.assertEqual(currency.parse_amount("pay twenty-five gold for it", MEDIEVAL)["text"], "twenty-five gold")
 
     def test_parse_cash_symbol(self):
         parsed = currency.parse_amount("It costs $4.50 at the diner.", CASH)
@@ -349,7 +350,7 @@ class ParseTests(unittest.TestCase):
         from app import prose_state
 
         self.assertTrue(hasattr(prose_state, "_COIN"), "prose_state._COIN moved; update the design note")
-        self.assertTrue(hasattr(prose_state, "_NUMBER_WORDS"), "prose_state._NUMBER_WORDS moved; currency imports it")
+        self.assertIs(prose_state._NUMBER_WORDS, currency._NUMBER_WORDS, "both read the one table in app/number_words.py")
         legacy = re.compile(prose_state._COIN, re.I)
         ours = re.compile(currency.coin_pattern(MEDIEVAL), re.I)
         for phrase in ("gold", "gold coin", "gold coins", "gold piece", "gold pieces", "gold crown", "gold crowns",
@@ -547,10 +548,10 @@ class CurrencyDbTests(unittest.TestCase):
 
 class LeafTests(unittest.TestCase):
     # m1 (2026-10-25) wired the module: the game imports it (world, purse, db, prose_state, quests ...).
-    # The leaf rule that stays: currency imports nothing of the game at module level but prose_state's
-    # number words, so world -> currency never loops. The one game import is app.world.resolve_world_era,
+    # The leaf rule that stays: currency imports nothing of the game at module level but the number words
+    # (app/number_words.py, shared with prose_state), so world -> currency and prose_state -> currency never loop. The one game import is app.world.resolve_world_era,
     # inside detect_theme_set, at call time.
-    _MODULE_LEVEL_APP_IMPORTS = {"app.prose_state"}
+    _MODULE_LEVEL_APP_IMPORTS = {"app.number_words"}
 
     def test_module_is_a_leaf(self):
         import ast

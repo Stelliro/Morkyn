@@ -187,7 +187,9 @@ class ASingleGoldPieceIsOne(unittest.TestCase):
     def test_coin_mentions_reads_one(self):
         from app.prose_state import coin_mentions
 
-        self.assertEqual(coin_mentions("He dropped a handful of coins into your palm: three silver, two copper, and a single gold piece."), [1])
+        # m1 (2026-10-25): every coin of the set is read and the joined parts are one sum, on the legacy gold
+        # scale: 1 gold, 3 silver and 2 copper is 1.0302 (10302 copper), no longer the gold piece alone.
+        self.assertEqual(coin_mentions("He dropped a handful of coins into your palm: three silver, two copper, and a single gold piece."), [1.0302])
         self.assertEqual(coin_mentions("She counts out one gold coin."), [1])
 
 

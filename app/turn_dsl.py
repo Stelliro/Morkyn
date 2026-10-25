@@ -1355,7 +1355,16 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             }
         )
     elif op == "GOLD":
-        _apply_amount(turn["player"], band_key="gold_band", number_key="gold_delta", token=args[0] if args else None)
+        token = args[0] if args else None
+        command = re.fullmatch(r"\s*([+-]?)\s*\$(\d{1,9})\s*", str(token or ""))
+        if command:
+            # GOLD $500 is the money command: base units, exact (m1, app/purse.py).
+            from app import currency, purse
+
+            units = int(command.group(2)) * (-1 if command.group(1) == "-" else 1)
+            purse.put_money(turn["player"], units, currency.current_set())
+        else:
+            _apply_amount(turn["player"], band_key="gold_band", number_key="gold_delta", token=token)
     elif op == "XP":
         _apply_amount(turn["player"], band_key="xp_band", number_key="xp_delta", token=args[0] if args else None)
     elif op == "HP":

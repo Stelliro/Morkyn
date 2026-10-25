@@ -18,28 +18,35 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-_NUMBER_WORDS = {
-    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
-    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
-    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
-    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
-    "a hundred": 100, "hundred": 100,
-    # "three silver, two copper, and a single gold piece" dropped into the palm
-    # read as no stated sum, and GOLD moderate rolled 31 (8B run 150, T52).
-    "a single": 1, "single": 1, "a lone": 1, "lone": 1,
-}
-# "forty-six gold" read as "six gold" and the purse grew by a rolled gain
-# while the player paid (8B run 146, T73): tens and units together are one number.
-_COMPOUND_AMOUNT = (
-    r"(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[-\s]+(?:one|two|three|four|five|six|seven|eight|nine)"
-)
+# The number words live in app/number_words.py so app/currency.py shares them
+# without importing this module (m1).
+from app.number_words import _COMPOUND_AMOUNT, _NUMBER_WORDS, _number  # noqa: E402,F401
+from app import currency  # noqa: E402
+
 _AMOUNT = (
     r"(?P<n>\d{1,5}|" + _COMPOUND_AMOUNT + r"|"
     + "|".join(sorted((w.replace(" ", r"\s+") for w in _NUMBER_WORDS), key=len, reverse=True)) + r")"
 )
-# The player's purse is "gold" (player.gold). Silver and copper are other
-# units, so a "5 silver" fee is not read as 5 gold.
+# The legacy reader of the purse in whole gold ("gold", "gold coins", "coins").
+# Since m1 the readers below use _ANY_COIN and _match_value: "5 silver" is read
+# as 5 silver (0.05 on the legacy gold scale), not as 5 gold and not as nothing.
 _COIN = r"(?:gold(?:\s+(?:coins?|pieces?|crowns?))?|coins?|crowns?)\b"
+
+
+def _any_coin_pattern() -> str:
+    """Every coin word of every currency set (currency.coin_pattern over their union), with an optional
+    "coins" / "pieces" after it. A match is money only when its word is a coin of the world's set: the
+    value step (_match_value) asks the current set."""
+    words: set[str] = set()
+    for cset in currency.CURRENCY_SETS.values():
+        words.update(currency.coin_words(cset))
+    # Words that are money only as a mass, never after a count.
+    words -= {"money", "purse", "cash", "trade goods"}
+    union = {"denominations": [{"id": "any", "value": 1, "words": sorted(words)}], "generic_words": []}
+    return r"(?:" + currency.coin_pattern(union) + r"(?:\s+(?:coins?|pieces?|crowns?)\b)?)"
+
+
+_ANY_COIN = _any_coin_pattern()
 _AP = r"['\u2019]"
 
 # The player pays: "you pay 7 gold", "You thank him and pay 7 gold", "you
@@ -49,7 +56,7 @@ _PAID_RE = re.compile(
     r"\byou\s+(?:(?!(?:he|she|they|we)\b)[\w']+,?\s+){0,4}?"
     r"(?:pay|paid|hand(?:ed)?(?:\s+over)?|give|gave|count(?:ed|s)?(?:\s+out)?|slide|slid|place[sd]?|drop(?:ped)?|"
     r"spend|spent|part(?:ed)?\s+with|fish(?:ed)?\s+out|dig\s+out|dug\s+out|press(?:ed)?)\b"
-    r"[^.!?\n\"\u201c\u201d]{0,40}?\b" + _AMOUNT + r"\s+" + _COIN,
+    r"[^.!?\n\"\u201c\u201d]{0,40}?\b" + _AMOUNT + r"\s+" + _ANY_COIN,
     re.I,
 )
 # Money put down: "You put two gold coins on the bar" (7B run 5, T94). The
@@ -57,16 +64,16 @@ _PAID_RE = re.compile(
 _PAID_PUT_RE = re.compile(
     r"\byou\s+(?:\w+ly\s+)?(?:put|puts|set|sets|lay|lays|laid|push|pushes|pushed|toss|tosses|tossed)\s+"
     r"(?:down\s+)?(?:(?:the|your|my)\s+)?(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT.replace("?P<n>", "?P<n2>")
-    + r"\s+" + _COIN + r"(?![^.!?\n]{0,30}\b(?:into|in)\s+your\b)",
+    + r"\s+" + _ANY_COIN + r"(?![^.!?\n]{0,30}\b(?:into|in)\s+your\b)",
     re.I,
 )
 # A price named: "That'll be 7 gold", "it costs seven coins", "seven gold for the lot".
 _PRICED_RE = re.compile(
     r"(?:\b(?:costs?|cost\s+you|price\s+(?:is|of)|priced\s+at|that" + _AP + r"?ll\s+be|it" + _AP + r"?s|comes\s+to|"
     r"charges?(?:\s+you)?|fee\s+(?:is|of)|toll\s+(?:is|of)|owe\s+(?:me|us|him|her)?|for)\s+"
-    r"(?:just\s+|only\s+|a\s+mere\s+)?" + _AMOUNT + r"\s+" + _COIN + r")"
+    r"(?:just\s+|only\s+|a\s+mere\s+)?" + _AMOUNT + r"\s+" + _ANY_COIN + r")"
     # A day rate is a price too: "Three gold a day, paid at dusk" (7B run 18, T7).
-    r"|(?:\b" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN
+    r"|(?:\b" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _ANY_COIN
     + r"\s+(?:for|each|apiece|a\s+piece|a\s+day|per\s+day|each\s+day|a\s+shift|per\s+shift|daily)\b)",
     re.I,
 )
@@ -74,25 +81,11 @@ _PRICED_RE = re.compile(
 # "I'll pay you 20 gold" is a promise, so only the -s and past forms count.
 _RECEIVED_RE = re.compile(
     r"\b(?:hands|handed|handing|gives|gave|giving|pays|paid|paying|tosses|tossed|passes|passed|slides|slid|presses|pressed|"
-    r"counts\s+out|counted\s+out|drops|dropped)\s+you\b[^.!?\n\"\u201c\u201d]{0,30}?\b" + _AMOUNT + r"\s+" + _COIN
+    r"counts\s+out|counted\s+out|drops|dropped)\s+you\b[^.!?\n\"\u201c\u201d]{0,30}?\b" + _AMOUNT + r"\s+" + _ANY_COIN
     + r"|\byou\s+(?:receive|received|earn|earned|are\s+paid|were\s+paid|get|got|pocket|pocketed|collect|collected)\s+"
-    r"[^.!?\n\"\u201c\u201d]{0,20}?\b" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN,
+    r"[^.!?\n\"\u201c\u201d]{0,20}?\b" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _ANY_COIN,
     re.I,
 )
-
-
-def _number(token: str | None) -> int | None:
-    text = " ".join(str(token or "").lower().split())
-    if not text:
-        return None
-    if text.isdigit():
-        return int(text)
-    if text in _NUMBER_WORDS:
-        return _NUMBER_WORDS[text]
-    parts = [p for p in re.split(r"[-\s]+", text) if p]
-    if len(parts) == 2 and _NUMBER_WORDS.get(parts[0], 0) in {20, 30, 40, 50, 60, 70, 80, 90} and 1 <= _NUMBER_WORDS.get(parts[1], 0) <= 9:
-        return _NUMBER_WORDS[parts[0]] + _NUMBER_WORDS[parts[1]]
-    return None
 
 
 def _match_number(match: re.Match) -> int | None:
@@ -100,7 +93,57 @@ def _match_number(match: re.Match) -> int | None:
     return _number(groups.get("n") or groups.get("n2"))
 
 
-_MENTION_RE = re.compile(r"\b" + _AMOUNT + r"\s+" + _COIN, re.I)
+def _denomination_after(tail: str, cset: dict[str, Any]) -> dict[str, Any] | None:
+    """The coin of ``cset`` the words after an amount name: "gold coins", "silver pieces", "credits"; a
+    generic coin word ("coins") is the set's display coin. None: not a coin of this world."""
+    words = re.findall(r"[a-z]+", str(tail or "").lower())[:4]
+    for size in range(min(3, len(words)), 0, -1):
+        for at in range(0, len(words) - size + 1):
+            found = currency.denomination(cset, " ".join(words[at:at + size]))
+            if found is not None:
+                return found
+    generic = {" ".join(str(w).lower().split()) for w in cset.get("generic_words") or []}
+    for size in range(min(2, len(words)), 0, -1):
+        for at in range(0, len(words) - size + 1):
+            if " ".join(words[at:at + size]) in generic:
+                return currency._display(cset)
+    return None
+
+
+def _legacy_value(units: int, cset: dict[str, Any]) -> int | float:
+    per = max(1, int(cset.get("per_legacy_gold") or 1))
+    return units // per if units % per == 0 else units / per
+
+
+def _match_value(match: re.Match, cset: dict[str, Any] | None = None) -> int | float | None:
+    """The sum a "<amount> <coin>" match names, on the legacy gold scale the gates compare in (m1): "7 gold"
+    is 7, "five silver" 0.05, "40 credits" 4 in a credits world; a coin this world does not use is None."""
+    count = _match_number(match)
+    if not count:
+        return None
+    cset = cset or currency.current_set()
+    groups = match.groupdict()
+    key = "n" if groups.get("n") else "n2"
+    denom = _denomination_after(match.string[match.end(key):match.end()], cset)
+    if denom is None:
+        return None
+    # The coin grammar reads the parts joined to it as one sum: "three silver,
+    # two copper and a single gold piece" is 1 gold 3 silver 2 copper.
+    joined = currency.parse_amount(match.string[match.start(key):], cset)
+    if joined and joined["span"][0] == 0 and int(joined["units"]) > 0:
+        return _legacy_value(int(joined["units"]), cset)
+    return _legacy_value(int(count) * int(denom["value"]), cset)
+
+
+def _bare_value(count: int | None, cset: dict[str, Any] | None = None) -> int | float | None:
+    """A bare sum in a line that talks in coin ("I'll pay five"): that many of the world's display coin."""
+    if not count:
+        return None
+    cset = cset or currency.current_set()
+    return _legacy_value(int(count) * int(currency._display(cset)["value"]), cset)
+
+
+_MENTION_RE = re.compile(r"\b" + _AMOUNT + r"\s+" + _ANY_COIN, re.I)
 
 
 def coin_mentions(text: str) -> list[int]:
@@ -108,10 +151,20 @@ def coin_mentions(text: str) -> list[int]:
 
     A GOLD op whose number the prose names this way is the scene's number, not
     a band hint (Saltmarrow run: "Nine coins" and GOLD -9 were re-rolled).
+    Since m1 every coin of the world's set counts, on the legacy gold scale
+    ("five silver" is 0.05), and parts joined by "and" or a comma are one sum.
     """
     out: list[int] = []
-    for match in _MENTION_RE.finditer(str(text or "")):
-        value = _match_number(match)
+    text = str(text or "")
+    cset = currency.current_set()
+    consumed = -1
+    for match in _MENTION_RE.finditer(text):
+        if match.start() < consumed:
+            continue  # a part of the sum read just before
+        value = _match_value(match, cset)
+        joined = currency.parse_amount(text[match.start("n"):], cset) if value else None
+        if joined and joined["span"][0] == 0:
+            consumed = match.start("n") + int(joined["span"][1])
         if value and value not in out:
             out.append(value)
     return out
@@ -132,7 +185,7 @@ def stated_coin_amounts(text: str) -> dict[str, list[int]]:
     for key, pattern in (("paid", _PAID_RE), ("paid", _PAID_PUT_RE), ("priced", _PRICED_RE), ("received", _RECEIVED_RE)):
         source = body if key == "priced" else unquoted
         for match in pattern.finditer(source):
-            value = _match_number(match)
+            value = _match_value(match)
             if not value:
                 continue
             if key == "paid":
@@ -169,10 +222,10 @@ _OFFER_RE = re.compile(
     # "I put three coin on the counter for the rope" (Saltmarrow run, T8) puts
     # the money down: put/set/lay/place/count out are offers too.
     r"\b(?:give|pay|offer|hand(?:\s+over)?|trade|slide|toss|put|set|lay|place|count(?:\s+out)?)\s+(?:(?:you|him|her|them|[A-Z][\w'\u2019-]*)\s+)?"
-    r"(?:(?:my|the|all\s+my)\s+)?(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _COIN
+    r"(?:(?:my|the|all\s+my)\s+)?(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _ANY_COIN
     # "I'll take the job for 10 gold" asks to be paid: only taking the thing
     # on sale ("I'll take it for 4 gold") is an offer to pay.
-    + r"|\b(?:buy|purchase|take\s+(?:it|that|this|them|those|these|one))\b[^.!?\n]{0,40}?\bfor\s+" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN,
+    + r"|\b(?:buy|purchase|take\s+(?:it|that|this|them|those|these|one))\b[^.!?\n]{0,40}?\bfor\s+" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _ANY_COIN,
     re.I,
 )
 _NEGATION_RE = re.compile(
@@ -194,17 +247,17 @@ def player_trade_offer(own_line: str) -> int | None:
         clause_start = max(text.rfind(mark, 0, match.start()) for mark in (",", ".", ";", "!", "?", "\n"))
         if _NEGATION_RE.search(text[clause_start + 1: match.start()]):
             continue
-        value = _match_number(match)
+        value = _match_value(match)
         if value:
             return value
     # A bare sum in a line that talks in coin: '"Ten gold is steep for a bed.
     # I'll pay five, and my name stays mine"' offered five (8B run 148, T47).
-    if re.search(r"\b" + _COIN + r"\b", text, re.I):
+    if re.search(r"\b" + _ANY_COIN + r"\b", text, re.I):
         for match in _BARE_OFFER_RE.finditer(text):
             clause_start = max(text.rfind(mark, 0, match.start()) for mark in (",", ".", ";", "!", "?", "\n"))
             if _NEGATION_RE.search(text[clause_start + 1: match.start()]):
                 continue
-            value = _match_number(match)
+            value = _bare_value(_match_number(match))
             if value:
                 return value
     return None
@@ -339,7 +392,7 @@ _COIN_TAKEN_RE = re.compile(
     re.I,
 )
 _COIN_STUFF_RE = re.compile(
-    # Silver and copper are other units, not the gold purse (see _COIN above).
+    # Silver and copper are other units, not the gold purse (see _ANY_COIN above).
     r"(?<!silver\s)(?<!copper\s)\b(?:coins?|gold|money|wages?|(?:purse|pouch|bag|sack|handful|stack|pile)\s+of\s+(?:coins?|gold|money))\b",
     re.I,
 )
@@ -492,7 +545,7 @@ def _band_word(text: str) -> str:
 _PAYS_OUTRIGHT_RE = re.compile(
     r"(?:^|[.;!]\s*|\band\s+|\bthen\s+)i\s+(?:\w+ly\s+)?(?:put|set|lay|place|slide|toss|pay|hand(?:\s+over)?|"
     r"count\s+out|leave|drop)\s+(?:(?:him|her|them|(?-i:[A-Z][\w'’-]*))\s+)?(?:(?:my|the)\s+)?"
-    r"(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _COIN,
+    r"(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _ANY_COIN,
     re.I,
 )
 # The same deed after "and" in an "I ..." sentence: "I set a copper-worth of
@@ -500,7 +553,7 @@ _PAYS_OUTRIGHT_RE = re.compile(
 _PAYS_OUTRIGHT_AND_RE = re.compile(
     r"\bi\s+[^.!?\n]{0,80}?\band\s+(?:\w+ly\s+)?(?:put|set|lay|place|slide|toss|pay|hand(?:\s+over)?|"
     r"count\s+out|leave|drop)\s+(?:(?:him|her|them)\s+)?(?:(?:my|the)\s+)?"
-    r"(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _COIN,
+    r"(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _ANY_COIN,
     re.I,
 )
 
@@ -515,7 +568,7 @@ def player_pays_outright(own_line: str) -> int | None:
         tail = text[match.end():match.end() + 60]
         if "?" in tail.split(".")[0]:
             continue  # "I put two gold down, is that enough?" asks
-        value = _match_number(match)
+        value = _match_value(match)
         if value:
             return value
     return None
@@ -527,7 +580,7 @@ def player_pays_outright(own_line: str) -> int | None:
 _PUTS_AWAY_COIN_RE = re.compile(
     r"(?:^|[.;!]\s*|\band\s+|\bthen\s+)i\s+(?:\w+ly\s+)?(?:pocket|stow|tuck(?:\s+away)?|put\s+away|slip|count|"
     r"stash|bag|keep)\s+(?:the|my|those|these|that|this|his|her|their)\s+(?:" + _AMOUNT + r"\s+)?"
-    r"(?:(?:small\s+|heavy\s+|few\s+)?(?:pouch|purse|bag)\s+of\s+)?" + _COIN
+    r"(?:(?:small\s+|heavy\s+|few\s+)?(?:pouch|purse|bag)\s+of\s+)?" + _ANY_COIN
     + r"(?![^.!?\n]{0,40}\b(?:from|off|out\s+of)\s+(?:the|a|his|her|their)\s+(?:till|table|counter|chest|box|floor|ground|body|corpse)\b)",
     re.I,
 )
@@ -550,10 +603,13 @@ def player_puts_away_coin(own_line: str) -> int | None:
     or None when the line does not do that.
     """
     text = _QUOTE_RE.sub(" ", str(own_line or ""))
-    match = _PUTS_AWAY_COIN_RE.search(text) or _PUTS_AWAY_SUM_RE.search(text)
+    coin = _PUTS_AWAY_COIN_RE.search(text)
+    if coin:
+        return _match_value(coin) or 0
+    match = _PUTS_AWAY_SUM_RE.search(text)
     if not match:
         return None
-    return _match_number(match) or 0
+    return _bare_value(_match_number(match)) or 0
 
 
 def coin_reached_player(text: str, amount: int = 0) -> bool:
