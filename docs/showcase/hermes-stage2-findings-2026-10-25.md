@@ -23,7 +23,7 @@ docs/showcase/hermes-stage2-2026-10-25/ (faults.md, player-notes.md, turn-digest
 |---|---|---|
 | F192 bystander hit, companion present | **failed at T11, held at T15** | T11 "stab at the boar": the pre-draft trigger aimed at Wat Thatcher [[E]] (source trigger, no asks), glancing hit, damage 2 on him; the boar got its row only after the draft, the roll was retargeted E->F but his damage stayed and no line was written. T15 "stab at the boar ... Maelis and Reinald stand beside me": aimed at Boar 1 [[F]], damage 1, line "Your blow only grazes the boar [[F]]." |
 | F199 creature rows and lines | held | Boar 1 [[F]] numbered and hostile (T11), the engine's line names it by code (T14, T15) |
-| F200 places | **failed** | T5 row "to Marsh Edge" (the preposition kept, filed as a place in town); T6 and T10 the player moved back to Saltmarrow on an unconfirmed where-ended answer while the prose stayed in the marsh |
+| F200 places | **failed** | T5 row "to Marsh Edge" (the preposition kept, filed as a place in town); T10 the follow-someone rule moved the player back to Saltmarrow from the prose's "heart of Saltmarrow" on an unconfirmed where-ended answer, the companion left behind (T6 and T7 did not move: the first write-up said T6, the record says otherwise) |
 | F201 text notes and echoes | held | no "* NNN chars" line; the first telling of the player's line still appears (by design: it is the asked act), no second telling |
 | F193 rule text | held (knife, sword unowned and dropped) | no rule sentence |
 | F196 op text | held, one fragment | role "shepherd to" for Jocelin [[D]] (a value cut at a dangling preposition) |
@@ -33,15 +33,18 @@ docs/showcase/hermes-stage2-2026-10-25/ (faults.md, player-notes.md, turn-digest
 
 1. **The engine made the player attack** (S2 + S1, T14). The line only led the companions out of
    the gate. The attack ask on Boar 1 replied "Yes, the player is leading Mael..." (a yes that
-   restates the line), the check ask replied "No, the player does not seem to...", and the attack
-   was still found: a melee 17 was rolled, a combat block built, and "Your blow hits the boar
-   [[F]]." inserted into the prose. Fix agent `attack-target2` (with T11).
+   restates the line and names someone else) and the second ask, which asks whether the player is
+   peaceful, replied "No", so under the two-ask rule the attack counted as confirmed: a melee 17
+   was rolled, a combat block built, and "Your blow hits the boar [[F]]." inserted into the prose.
+   (The first write-up read the second ask as a disagreeing check; it was not.) Fix agent
+   `attack-target2` (with T11): a name only inside a "to <verb>" purpose clause is not asked
+   about, and a yes about someone else is no yes.
 2. **Money from the model's die** (F188, S1, T1). "You owe me 30 silver" and the player asking
    what they owe: the interpreter's gold-out ask said yes, the engine settled the die's -27, the
    purse was clamped 12 -> 0. T8's -38 die was voided (loss not shown). The pre-draft transaction
    work (m0) is the fix; logged.
-3. **Moves on an unconfirmed answer** (F191/F200, S1, T6, T10). Fix agent `place-move2`, with the
-   "to Marsh Edge" name.
+3. **A move on an unconfirmed answer** (F191/F200, S1, T10; not T6 as first written). Fix agent
+   `place-move2`, with the "to Marsh Edge" name.
 4. **People** (F163): Reinald re-cast as a deserter and the reeve, his pronoun flipped to "she"
    (T13-T14), an injured man filed as "Jocelin" with role "shepherd to", Maelis without a row
    until T12. Logged.
