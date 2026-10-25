@@ -17168,6 +17168,15 @@ _MATERIAL_WORDS = frozenset({"brass", "bronze", "iron", "steel", "pewter", "meta
 # An op's field label at the front of a name: "BAND: small", "QTY: 1", "NAME: x".
 _LABEL_FRAGMENT_RE = re.compile(r"^(?:[A-Z][A-Z_]+|(?i:qty|band|type|desc|name|rarity|loc|role|note|notes))\s*:")
 _NAME_DETERMINERS = frozenset({"a", "an", "the", "some", "my", "your", "his", "her", "their", "its"})
+# cheat100 T87: 'GRANT fine longbow, TYPE weapon, QTY 1' (unquoted) was cut to
+# its first word and "fine x1" was filed. A name made only of the words that
+# say how good, old or worn a thing is has no head noun: no thing is named.
+_ITEM_QUALITY_WORDS = frozenset({
+    "fine", "finest", "old", "new", "rusty", "rusted", "worn", "battered", "broken", "cracked", "chipped", "dented",
+    "sturdy", "sharp", "blunt", "dull", "shiny", "polished", "tarnished", "ornate", "fancy", "plain", "simple", "crude",
+    "rough", "cheap", "good", "quality", "masterwork", "superior", "decent", "shoddy", "used", "ancient", "weathered",
+    "faded", "dusty", "dirty", "clean", "heavy", "nice", "beautiful", "elegant", "exquisite",
+})
 
 
 # The coin words of the game's one money today (copper, silver and gold; the
@@ -17215,6 +17224,101 @@ def _coin_phrase_head(words: list[str], heads: frozenset[str]) -> str:
     return head
 
 
+# --- code-not-item: a reference code is no item name ------------------------
+# cheat100 T72: "I take @A's keys, #L99 and !I99" and the draft wrote TAKE
+# "L99", TAKE "I99"; read as gains, "L99 x1" and "I99 x1" entered the pack
+# (T5's "I take !I99 from the shelf" held only because that draft wrote no
+# TAKE). The code grammar is the engine's own (@A, #L1, !I1, &E1, @Q1, and Q1
+# in ops): a code token is the row it names, and a code no row holds is
+# nothing. With a sigil any code shape counts; without one only the numbered
+# kinds (I3, L2, E1, Q3), since people's codes are bare letters.
+_CODE_TOKEN_RE = re.compile(r"^([@#!&])?([A-Z]{1,2})(\d{0,4})(?:['’]s)?$")
+_CODE_TABLES = {"I": ("inventory", "item"), "L": ("locations", "place"), "E": ("events", "event"), "Q": ("quests", "quest")}
+
+
+def _code_token_parts(raw: str) -> tuple[str, str] | None:
+    """(the code, its table letter) when ``raw`` is one token of the code grammar, else None."""
+    m = _CODE_TOKEN_RE.match(str(raw or "").strip())
+    if not m:
+        return None
+    sigil, letters, digits = m.group(1) or "", m.group(2), m.group(3)
+    if not sigil and not (digits and letters in _CODE_TABLES):
+        return None
+    if digits and letters in _CODE_TABLES:
+        return f"{letters}{digits}", letters
+    if sigil == "@" or not digits:
+        return f"{letters}{digits}", "@"
+    return f"{letters}{digits}", ""
+
+
+def _code_row(conn, code: str, letter: str) -> tuple[str, Any] | None:
+    """(what the code names, its row) for a code token, None when no row holds it."""
+    if letter == "@" or not letter:
+        tables = [("npcs", "person")]
+    else:
+        tables = [_CODE_TABLES[letter]]
+    for table, kind in tables:
+        try:
+            row = conn.execute(f"SELECT * FROM {table} WHERE code = ?", (code,)).fetchone()
+        except Exception:
+            row = None
+        if row is not None:
+            return kind, row
+    return None
+
+
+def _code_token_verdict(raw: str, conn=None) -> dict[str, Any] | None:
+    """Why a name that is a code token is no new thing; None for an item code
+    that resolves (it is that row) or a name that is no code."""
+    parts = _code_token_parts(raw)
+    if not parts:
+        return None
+    code, letter = parts
+    if conn is None:
+        from app.db import connect
+
+        with connect().closing() as own:
+            hit = _code_row(own, code, letter)
+    else:
+        hit = _code_row(conn, code, letter)
+    if hit is None:
+        return {"decision": "code_unresolved_not_an_item", "code": str(raw).strip()}
+    kind, _row = hit
+    if kind == "item":
+        return None
+    return {"decision": "code_not_an_item", "code": str(raw).strip(), "names": kind}
+
+
+def _item_for_code(conn, raw: str):
+    """The inventory row an item code token (I3, !I3) names, or None."""
+    parts = _code_token_parts(raw)
+    if not parts or parts[1] != "I":
+        return None
+    hit = _code_row(conn, parts[0], "I")
+    return hit[1] if hit else None
+
+
+# "@A's keys": a thing the player's line gives to another person, by code.
+_CODE_POSSESSIVE_RE = re.compile(r"(?<![\w@#!&])@([A-Z]{1,2})['’]s\s+((?:[\w'’-]+\s+){0,3}[\w'’-]+)")
+
+
+def _line_item_owner_code(player_input: str, name_l: str, tokens: list[str]) -> str:
+    """The person code whose thing the player's line names this item as
+    ("@A's keys" -> "A"), "" when the line names it as no one's."""
+    head = (tokens[-1] if tokens else name_l).lower()
+    if not head:
+        return ""
+    line = venues.strip_speech(_player_line(player_input))
+    for m in _CODE_POSSESSIVE_RE.finditer(line):
+        words = [w.lower() for w in re.findall(r"[\w'’-]+", m.group(2))]
+        for w in words:
+            if w == head or _singular_item_key(w) == _singular_item_key(head):
+                return m.group(1)
+            if w in {"and", "or", "then", "with"}:
+                break
+    return ""
+
+
 def _not_a_thing_name(name: str, conn=None) -> dict[str, Any] | None:
     """Why a GRANT/TAKE name is no thing to file, or None when it is one (F194).
 
@@ -17225,10 +17329,17 @@ def _not_a_thing_name(name: str, conn=None) -> dict[str, Any] | None:
     (band_label_not_an_item); "brass" alone is a metal (material_not_an_item).
     Coin _coin_name_match reads already (counted coins) is left to
     _coins_to_gold and the purse: None.
+    A code token ("I99", "!I99", "#L99", "@A") is the row it names: a person,
+    place, event or quest is no item (code_not_an_item), a code no row holds
+    is nothing (code_unresolved_not_an_item), and an item code is that item
+    (None; _filter_inventory_changes reads it as the row's name).
     """
     raw = re.sub(r"\s+", " ", str(name or "")).strip()
     if not raw:
         return None
+    code_verdict = _code_token_verdict(raw, conn)
+    if code_verdict:
+        return code_verdict
     if _LABEL_FRAGMENT_RE.match(raw) or raw.upper() == "BAND":
         return {"decision": "band_label_not_an_item", "label": raw}
     words = re.findall(r"[a-z0-9][\w'’-]*", raw.lower())
@@ -17249,6 +17360,8 @@ def _not_a_thing_name(name: str, conn=None) -> dict[str, Any] | None:
         return {"decision": "coin_amount_not_an_item", "amount": raw, "coin": coin}
     if len(words) == 1 and words[0] in _MATERIAL_WORDS:
         return {"decision": "material_not_an_item", "material": words[0]}
+    if all(w in _ITEM_QUALITY_WORDS for w in words):
+        return {"decision": "item_phrase_no_head_noun", "phrase": raw}
     return None
 
 
@@ -18148,6 +18261,11 @@ def _filter_inventory_changes(
         name = _sanitize_item_name(str(change.get("name", "")))
         if not name:
             continue
+        # code-not-item (cheat100 T72): an item code is that item's row.
+        coded = _item_for_code(conn, name)
+        if coded is not None and str(coded["name"] or "").strip():
+            name = str(coded["name"]).strip()
+            change = {**change, "name": name}
         gain_key = name.lower()
         is_gain = _float(change.get("quantity_delta"), 0) > 0 or (
             _float(change.get("quantity_delta"), 0) == 0
@@ -18460,6 +18578,15 @@ def _filter_inventory_changes(
             consumed = True
             turn_ledger.note("inventory", "not_a_thing", item=name, why="ordered and eaten or drunk")
         handed = _prose_item_handed_over(final_text, name_l, tokens, owned=bool(existing))
+        # code-not-item (cheat100 T72): "I take @A's keys" names another
+        # person's thing. The player's word does not move it (taking it is
+        # theft, a mechanism of its own): only the prose showing that person
+        # hand it over does.
+        if grounded and not handed:
+            owner = _line_item_owner_code(str(player_input or ""), name_l, tokens)
+            if owner:
+                grounded = False
+                turn_ledger.note("inventory", "take_from_person_not_granted", item=name, person=owner)
         # The player's own thing under a shorter name is that thing (7B run 10,
         # T1: "You reach into your shirt, pulling out the small, worn reckoner"
         # with GRANT "reckoner" while she owns "mother's brass tide-reckoner").
