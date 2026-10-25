@@ -80,9 +80,9 @@ T21_PROSE = (
     "gate [[L6]]. They're both young and armed with swords and spears. One of them notices you and steps forward, "
     "blocking your path. \"Halt there!\" he calls. \"State your purpose in entering the city.\""
 )
-T27_LINE = ("I whisper the old words and the world folds: a moment later I am standing in the Capital City square, having "
+T26_LINE = ("I whisper the old words and the world folds: a moment later I am standing in the Capital City square, having "
             "arrived by a portal I opened.")
-T27_PROSE = (
+T26_PROSE = (
     "You step from the world of words and gestures into the open square of Capital City [[L3]]. The grand buildings "
     "loom, their facades gleaming with a sheen of stone and marble in the crisp light of a new day. The bustle of the "
     "city washes over you: carts trundle by, their drivers haggling with passers-by; vendors hawk their wares, calling "
@@ -93,6 +93,43 @@ T27_PROSE = (
     "portal still shimmering at your feet. With a glance, you can see the familiar faces of Bartholomew's Inn [[L2]] in "
     "the distance, a stark reminder of the world you left behind. The choice is yours: to venture into the heart of the "
     "city, or to seek out the familiar comfort of the inn."
+)
+T36_LINE = ("A wandering mage steps out of the crowd, mutters a spell, and sends me away. When the light fades I am in the "
+            "Capital City [[L3]], at the palace steps.")
+T36_PROSE = (
+    "You find yourself in the shadow of the palace steps, the Capital City [[L3]] looming around you. The mage's spell has "
+    "transported you here, and you're unsure what to make of your new surroundings. The grand buildings and busy streets "
+    "suggest a city more prosperous than Saltmarrow [[L1]], but there's a grimness in the air too, as if the capital's "
+    "wealth has been bought with the suffering of its people.\n\nAs you stand there trying to get your bearings, a voice "
+    "calls out to you from behind. \"Hey there, stranger. Lost your way already?\" You turn to see a guard approaching, "
+    "his uniform marking him as one of the capital's watch. He's not unfriendly, but his tone carries an edge."
+)
+T37_LINE = ("I never came here. Whatever that mage did was a trick; I have been in Saltmarrow all along and the palace steps "
+            "were a dream.")
+T37_PROSE = (
+    "The sun hangs low over the rooftops of Capital City [[L3]] as you make your away through the morning crowd. You keep "
+    "your head down, sticking to the shadows as much as possible. The streets are busy with merchants setting out their "
+    "wares and the early risers going about their business.\n\nAs you pass a quiet side street, you catch a glimpse of a "
+    "figure lurking in the shadows. They step out to block your path and you find yourself face to face with an armed "
+    "guard.\n\n\"State your business here, stranger,\" the guard says, eyeing you warily."
+)
+T44_LINE = ("I open the cellar's tide-door, step through, and come out on the quays of the Lost Port, a harbour city far "
+            "across the sea. I am here now.")
+T44_PROSE = (
+    "You emerge from the tide-door into the lost port of Saltmarrow [[L1]]. The quays are eerily quiet, with only a few "
+    "abandoned ships tied to the docks. The city's once grand buildings now crumble and fall into the sea. You're alone "
+    "at the edge of this forgotten land, the salt wind whispering past your ears.\n\nAs you take in the ruins around "
+    "you, a cloaked figure steps out from the shadow of a collapsed arch. \"You'll not find much here, stranger,\" the "
+    "cloaked one warns, voice muffled by their hood. \"The salvage guild's reeve watches all who come looking. What "
+    "brings you to Saltmarrow?\""
+)
+T45_LINE = ("I remember it clearly: I was always standing in Bartholomew's Inn, I never went through any tide-door. I order "
+            "a mug of ale.")
+T45_PROSE = (
+    "You step into Bartholomew's Inn [[L2]], a warm light spilling from the windows. The door swings shut behind you with "
+    "a firm thunk. The inn is bustling with patrons, the air thick with the scent of roasting meat and ale.\n\nThe man "
+    "behind the bar pours you a mug of ale from a large pitcher, the dark liquid sloshing as he sets it down. \"There "
+    "you go, friend. Enjoy your drink.\""
 )
 DOCKS_PROSE = ("You walk down the lane to the Saltmarrow Docks [[L2]]. Gulls wheel over the moored skiffs and a net "
                "mender looks up from her work.")
@@ -207,16 +244,44 @@ class TheDeclaredMovesAreHeld(unittest.TestCase):
         self.assertEqual(held[0]["destination"], "Saltmarrow")
         self.assertEqual(held[0]["why"], "destination_only_declared")
 
-    def test_t27_a_portal_the_line_only_declares_moves_nobody(self):
-        # Recorded later in the same run (trace 000028): the save went from the inn up to Saltmarrow
+    def test_t26_a_portal_the_line_only_declares_moves_nobody(self):
+        # turns/026.json (trace 000028): the refused portal still put the save in Saltmarrow
         # (move_from_prose, not_travel) while the prose stood the player in Capital City.
         _world(("L2", "Bartholomew's Inn", 1), ("L3", "Capital City", 0), here="Bartholomew's Inn")
         with _notes() as ledger:
-            _apply({"narration": T27_PROSE, "player": {}}, T27_LINE, "B) in Salt")  # recorded: "B) in Salt", "No."
+            _apply({"narration": T26_PROSE, "player": {}}, T26_LINE, "B) in Salt")  # recorded: "B) in Salt", "No."
         self.assertEqual(_here(), "Bartholomew's Inn")
         held = _held(ledger)
         self.assertTrue(held, _decisions(ledger))
         self.assertEqual(held[0]["why"], "declared_no_travel_act")
+
+    def test_t36_sent_away_by_a_mage_with_an_unclear_answer_moves_nobody(self):
+        # The draft's MOVE L3 stood although where_ended was unclear ("C) in the", no confirm).
+        _world(("L3", "Capital City", 0))
+        result = {"narration": T36_PROSE, "player": {"move_to_location_code": "L3", "move_to_location": None}}
+        with _notes() as ledger:
+            _apply(result, T36_LINE, "C) in the", confirm="")
+        self.assertEqual(_here(), "Saltmarrow")
+        held = _held(ledger)
+        self.assertTrue(held, _decisions(ledger))
+        self.assertEqual(held[0]["destination"], "Capital City")
+
+    def test_t44_a_door_out_onto_a_far_port_moves_nobody_and_makes_no_outside(self):
+        # Recorded: "C) outside Salt", "No."; the save went inn -> Saltmarrow -> a new "Outside Saltmarrow".
+        _world(("L2", "Bartholomew's Inn", 1), here="Bartholomew's Inn")
+        with _notes() as ledger:
+            _apply({"narration": T44_PROSE, "player": {}}, T44_LINE, "C) outside Salt")
+        self.assertEqual(_here(), "Bartholomew's Inn")
+        self.assertNotIn("Outside Saltmarrow", _place_names())
+        self.assertTrue(_held(ledger), _decisions(ledger))
+
+    def test_t37_and_t45_the_contradictions_stay_where_they_are(self):
+        _world(("L3", "Capital City", 0), here="Capital City")
+        _apply({"narration": T37_PROSE, "player": {}}, T37_LINE, "A) still in", confirm="Yes, you are")
+        self.assertEqual(_here(), "Capital City")
+        _world(("L2", "Bartholomew's Inn", 1), ("L7", "Outside Saltmarrow", 0), here="Outside Saltmarrow")
+        _apply({"narration": T45_PROSE, "player": {}}, T45_LINE, "B) at Barth", confirm="Yes, you are")
+        self.assertEqual(_here(), "Outside Saltmarrow")
 
     def test_the_declared_shapes_split_from_the_acts(self):
         from app import where_ended
