@@ -505,6 +505,16 @@ def settle_place_reference(result: dict[str, Any], player_input: str, *, trace=N
         ).fetchone()
         current_name = str((here[0] if here else "") or "")
         chat = chat_narrations(conn)
+    line = world._player_line(player_input)
+    typed = _typed_code_travel(rows, player_input, current_name)
+    if typed is not None:
+        row, how = typed
+        code = str(row["code"]).upper()
+        turn_ledger.note("movement", "place_bound_by_reference", code=code, place=str(row["name"] or ""),
+                         words=str(row["name"] or ""), how=how)
+        result["_place_by_reference"] = code
+        result["_place_by_typed_code"] = code
+        return code
     if world._movement_destination_from_input(rows, player_input, current_name, names_only=True) is not None:
         return ""
     candidates = reference_candidates(rows, player_input, chat, current_name)
@@ -519,15 +529,79 @@ def settle_place_reference(result: dict[str, Any], player_input: str, *, trace=N
         if going:
             turn_ledger.note("movement", "place_bound_by_reference", code=code, place=str(row["name"] or ""), words=place)
             result["_place_by_reference"] = code
+            if _types_code(line, code):
+                # The player's own code, checked as going: the turn's
+                # destination (world._resolve_movement, rule player_code).
+                result["_place_by_typed_code"] = code.upper()
             return code
         turn_ledger.note("movement", "place_not_gone_to" if going is False else "going_unread", code=code,
                          words=place, reply=str(reply or "")[:80])
     return ""
 
 
-def place_by_reference(result: dict[str, Any] | None, rows: list[Any], current_name: str = "") -> Any:
-    """The row settle_place_reference bound this turn's line to, or None."""
-    code = str((result or {}).get("_place_by_reference") or "").upper() if isinstance(result, dict) else ""
+_BARE_CODE_LINE_RE = re.compile(r"^[^\w#\[]*(?:#(L\d+)\b|\[\[(L\d+)\]\])[^\w]*$", re.I)
+
+
+def bare_code(player_input: str) -> str:
+    """The place code a line that is only a code types ("#L5" -> "L5"), else ""."""
+    from app import world
+
+    m = _BARE_CODE_LINE_RE.match(world._player_line(player_input).strip())
+    return (m.group(1) or m.group(2) or "").upper() if m else ""
+
+
+def _types_code(line: str, code: str) -> bool:
+    """The player's line types ``code`` (#L5 or [[L5]]) outside quoted speech, not as where they come from."""
+    from app import world
+
+    narrated = world._QUOTED_SPEECH_RE.sub(lambda m: " " * len(m.group(0)), str(line or ""))
+    for m in _TYPED_CODE_RE.finditer(narrated):
+        if (m.group(1) or m.group(2) or "").upper() == str(code or "").upper() and not world._code_is_origin(
+            narrated.lower(), m.start(), m.end()
+        ):
+            return True
+    return False
+
+
+def _typed_code_travel(rows: list[Any], player_input: str, current_name: str = "") -> tuple[Any, str] | None:
+    """A place the player's line goes to by its own typed code with no ask needed, as (row, how), or None.
+
+    cheat100 (Hermes 3 8B, 2026-10-25): T76 "#L1" and T85 "#L5", a line that
+    is only a place code, went nowhere (the going ask was shown "Saltmarrow"
+    and said no; T85's yes still read as no travel). A line that is only a
+    code is the player going there, as the players' brief writes it ("I head
+    to #L2"). T83 "I leave the inn and walk to #L5, Dunstan's General Store."
+    names the place outright beside its code, so nothing was bound: a travel
+    line that types the code of the place it names goes there too.
+    An unknown code (#L99) or the place the player is in binds nothing.
+    """
+    from app import world
+
+    line = world._player_line(player_input).strip()
+    by_code = {str(r["code"] or "").upper(): r for r in rows if r["code"]}
+    current = _norm(current_name)
+    bare = bare_code(player_input)
+    if bare:
+        row = by_code.get(bare)
+        if row is not None and _norm(row["name"]) != current:
+            return row, "bare_code"
+        return None
+    named = world._movement_destination_from_input(rows, player_input, current_name, names_only=True)
+    if named is None or not _types_code(line, str(named["code"] or "")):
+        return None
+    if not world.travel_intent(player_input):
+        return None
+    return named, "typed_and_named"
+
+
+def place_by_reference(result: dict[str, Any] | None, rows: list[Any], current_name: str = "", *,
+                       typed_only: bool = False) -> Any:
+    """The row settle_place_reference bound this turn's line to, or None.
+
+    ``typed_only``: only a place the player's line typed the code of (#L5).
+    """
+    key = "_place_by_typed_code" if typed_only else "_place_by_reference"
+    code = str((result or {}).get(key) or "").upper() if isinstance(result, dict) else ""
     if not code:
         return None
     for row in rows:
