@@ -419,6 +419,154 @@ def weapon_skill(context: dict[str, Any] | None) -> str:
     return next(iter(found)) if len(found) == 1 else ""
 
 
+# A power the player claims to use (cheat100 T89: "I cast fireball at the rat-catcher and burn him to ash"
+# rolled melee 17 off the weapon fallback, though the player holds no such power). Which powers the player
+# holds is the engine's record (context["abilities"], the abilities table); what is claimed is read by
+# grammar: the object of a casting verb, or a spell / magic named as the instrument.
+# The casting verbs are a short list, called that: the one thing that tells "cast fireball" from a thrown
+# stone. The spells themselves are never listed; any object of these verbs not on record is not held.
+_CASTING_RE = re.compile(
+    r"\b(?:cast(?:s|ing)?|conjur(?:e|es|ed|ing)|invok(?:e|es|ed|ing)|summon(?:s|ed|ing)?"
+    r"|channel(?:s|led|ed|ing|ling)?|unleash(?:es|ed|ing)?|hurl(?:s|ed|ing)?)\s+(?P<obj>[^.!?;,\"“”]{1,80})",
+    re.I,
+)
+# "with magic", "a spell", "my sorcery": the instrument is a power with no name.
+_POWER_INSTRUMENT_RE = re.compile(r"\b(?:with|using|by)\s+(?:a\s+|an\s+|my\s+|some\s+|the\s+)?(?:[a-z'’-]+\s+){0,2}?"
+                                  r"(?P<obj>spells?|magic|sorcery|witchcraft)\b", re.I)
+# What ends the object of a casting verb: grammar words.
+_CAST_OBJECT_END = frozenset({
+    "at", "on", "upon", "into", "onto", "against", "toward", "towards", "to", "and", "then", "but", "so", "that",
+    "which", "from", "over", "through", "across", "in", "until", "while", "before", "after", "as", "with",
+})
+# The plain senses of these verbs, whose object is no power: "cast a glance", "summon my courage",
+# "cast off", "hurl a stone" (a thing, so a held or thrown item; things are read below from the records).
+_CAST_PLAIN_OBJECTS = frozenset({
+    "glance", "look", "eye", "eyes", "gaze", "shadow", "shadows", "doubt", "vote", "lot", "lots", "aside", "off",
+    "away", "out", "down", "up", "courage", "strength", "nerve", "will", "help", "breath", "net", "line",
+    "insult", "insults", "accusation", "accusations", "abuse", "words", "threat", "threats",
+})
+_GENERIC_POWER_WORDS = frozenset({"spell", "spells", "magic", "sorcery", "witchcraft", "power", "powers", "ability",
+                                  "abilities"})
+# A thing held or thrown: the object of "hurl" (and "cast") is a power only when it names one.
+_THROWN_THING_VERBS = ("hurl",)
+
+
+def _cast_object(text: str) -> list[str]:
+    words: list[str] = []
+    for word in re.findall(r"[A-Za-z][A-Za-z'’-]*", text):
+        low = word.lower()
+        if low in _CAST_OBJECT_END:
+            break
+        if not words and low in {"a", "an", "the", "my", "his", "her", "their", "some", "another", "one", "up"}:
+            continue
+        words.append(low)
+        if len(words) >= 4:
+            break
+    return words
+
+
+def _held_powers(context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    ctx = context if isinstance(context, dict) else {}
+    rows = ctx.get("abilities") if isinstance(ctx.get("abilities"), list) else []
+    return [row for row in rows if isinstance(row, dict) and str(row.get("name") or "").strip()]
+
+
+def _names_held(words: list[str], held: list[dict[str, Any]]) -> bool:
+    phrase = " ".join(words)
+    for row in held:
+        name = " ".join(re.findall(r"[a-z0-9'’-]+", str(row.get("name") or "").lower()))
+        if not name:
+            continue
+        if re.search(rf"(?<![\w'’-]){re.escape(name)}(?![\w'’-])", phrase) or (
+            words and words[0] == name.split()[0] and len(words[0]) >= 4
+        ):
+            return True
+    return False
+
+
+def _held_things(context: dict[str, Any] | None) -> set[str]:
+    """The head words of the items the player carries (the engine's inventory record)."""
+    ctx = context if isinstance(context, dict) else {}
+    out: set[str] = set()
+    for row in ctx.get("inventory") if isinstance(ctx.get("inventory"), list) else []:
+        name = str((row or {}).get("name") or "") if isinstance(row, dict) else str(row or "")
+        words = re.findall(r"[a-z][a-z'’-]*", name.lower())
+        if words:
+            out.add(words[-1])
+            out.add(words[-1].rstrip("s"))
+    return out
+
+
+def ability_not_held(line: str, context: dict[str, Any] | None) -> str:
+    """The power the line attacks with that the player does not hold on record, or "" (cheat100 T89).
+
+    "I cast fireball at the rat-catcher" -> "fireball" when no ability of the
+    player's is called that. An object of a casting verb that names an ability
+    on record ("I invoke Tidecount on him") is held; a spell or magic named
+    with no name is held when the player has any active ability unlocked. A
+    plain sense of the verb ("cast a glance", "summon my courage"), a thing the
+    player carries ("cast my net") and a person here ("summon the guard") are
+    no power. When a blow of the trigger tables (melee / ranged) stands in a
+    clause of its own, the attack is that blow, not the claim: "".
+    """
+    from app.interpreter import plain
+
+    text = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", plain(line))
+    if not text.strip():
+        return ""
+    held = _held_powers(context)
+    usable = [row for row in held if not row.get("locked") and str(row.get("power_type") or row.get("activation") or "").lower() != "passive"]
+    things = _held_things(context)
+    people_words = {w for p in people_here(context) for w in _words_for(p)} if isinstance(context, dict) else set()
+    claimed = ""
+    claim_spans: list[tuple[int, int]] = []
+    for hit in _CASTING_RE.finditer(text):
+        verb = hit.group(0).split()[0].lower()
+        words = _cast_object(hit.group("obj"))
+        if not words or words[0] in _CAST_PLAIN_OBJECTS:
+            continue
+        head = words[-1]
+        if _names_held(words, held):
+            return ""
+        if head in _GENERIC_POWER_WORDS or (words and words[0] in _GENERIC_POWER_WORDS):
+            if usable:
+                return ""
+        elif head in _CAST_PLAIN_OBJECTS or head in things or head.rstrip("s") in things or head in people_words:
+            continue
+        elif verb.startswith(_THROWN_THING_VERBS):
+            # "hurl a stone" is a throw; "hurl a fireball" names no thing either, so only a power word decides.
+            continue
+        claimed = claimed or " ".join(words)
+        claim_spans.append((hit.start(), hit.end()))
+    for hit in _POWER_INSTRUMENT_RE.finditer(text):
+        if usable or _names_held(_cast_object(text[hit.start():]), held):
+            continue
+        claimed = claimed or hit.group("obj").lower()
+        claim_spans.append((hit.start(), hit.end()))
+    if not claimed:
+        return ""
+    # A weapon blow of its own beside the claim ("I cast a ward and stab him") is the attack.
+    try:
+        from app.skill_checks import SKILL_TRIGGER_PATTERNS, _trigger_text_variants
+
+        patterns = [p for p, code in SKILL_TRIGGER_PATTERNS if code in ATTACK_SKILLS]
+    except Exception:
+        patterns = []
+    start = 0
+    for cut in [*_LINE_CLAUSE_RE.finditer(text), None]:
+        end = cut.start() if cut is not None else len(text)
+        clause = text[start:end]
+        if clause.strip() and not any(a < end and start < b for a, b in claim_spans):
+            try:
+                variants = _trigger_text_variants(clause.lower(), protect_others=False)
+            except Exception:
+                variants = [clause.lower()]
+            if any(re.search(p, v) for p in patterns for v in variants):
+                return ""
+        start = cut.end() if cut is not None else len(text)
+    return claimed
+
+
 def opposition_of(person: dict[str, Any]) -> dict[str, Any]:
     """The person as the other side of the roll, from their roster record (as skill_checks builds it)."""
     return {
@@ -1542,6 +1690,16 @@ def decide(
             # "⚔️🔥💰🗡️👑🐉", "." (cheat100 T91, T90): no word, so no act of the player's to ask about.
             report["no_act"] = True
             return None, report
+        # "I cast fireball at the rat-catcher" with no such power on record (cheat100 T89): an attack made
+        # with it is no attack of the player's. A trigger roll read from the cast is dropped here (world,
+        # attack_ability_not_held); a line the asks find an attack in is refused after them (below).
+        claimed = ability_not_held(line, ctx)
+        if claimed and report["attack_roll"] and inferred is not None:
+            report["ability_not_held"] = claimed
+            inferred["ability_not_held"] = claimed
+            inferred["npc_ref"] = None
+            inferred["opposition"] = None
+            return None, report
         # (A blow the line gives another, "a guard stabs me", is no roll of the player's: read below.)
         absent = None if report["attack_roll"] and blow_not_players(line) else absent_named(line, context)
         if absent:
@@ -1685,6 +1843,11 @@ def decide(
             return None, report
         target = find_target(line, people, ask, report, here)
         if target is None:
+            return None, report
+        if claimed:
+            # The asks found the attack, and it is made with a power the player does not hold: no roll.
+            report["ability_not_held"] = claimed
+            report["claimed_at"] = {"code": str(target.get("code") or ""), "name": _clean(target.get("name"))}
             return None, report
         check = attack_check(target, inferred, context)
         report["target"] = check["attack"]
