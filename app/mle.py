@@ -648,6 +648,33 @@ class _SampleMask:
             return updated
 
 
+PROSE_REPEAT_PENALTY = 1.1
+
+
+def sampling_kwargs(response_format: str | None) -> dict[str, float]:
+    """The sampling settings a call passes beside temperature and max_tokens.
+
+    llama-cpp-python's default repeat_penalty is 1.0 (off); nobody in the repo
+    chose it, and cheat100 T71 (F205) ran a draft to its token cap with one
+    word repeated 645 times. A prose call (the draft, the retries, the voice)
+    gets PROSE_REPEAT_PENALTY over the library's default 64-token window; a
+    JSON ask keeps the default, since its answers are codes and names that
+    must repeat. MORKYN_REPEAT_PENALTY overrides the prose value (1.0 turns it
+    off) so a live run can measure it.
+    """
+    fmt = str(response_format or "").strip().lower()
+    if fmt == "json":
+        return {}
+    raw = str(os.getenv("MORKYN_REPEAT_PENALTY") or "").strip()
+    try:
+        penalty = float(raw) if raw else PROSE_REPEAT_PENALTY
+    except ValueError:
+        penalty = PROSE_REPEAT_PENALTY
+    if penalty <= 0 or abs(penalty - 1.0) < 1e-9:
+        return {}
+    return {"repeat_penalty": penalty}
+
+
 def _generate(
     model,
     path: str,
@@ -705,6 +732,7 @@ def _generate(
             response_format={"type": "json_object"} if fmt == "json" else None,
             logits_processor=processor,
             stream=False,
+            **sampling_kwargs(fmt),
             **seeded,
         )
     except MleNotReady:
