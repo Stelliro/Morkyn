@@ -175,8 +175,10 @@ def _ask(ask: Ask, report: dict[str, Any], phase: str, prompt: str, code: str) -
     return yes_no(reply)
 
 
-def find_target(line: str, people: list[dict[str, Any]], ask: Ask, report: dict[str, Any]) -> dict[str, Any] | None:
-    """The first person the line attacks: yes to the attack ask, then no to the peaceful ask."""
+def find_target(line: str, people: list[dict[str, Any]], ask: Ask, report: dict[str, Any],
+                here: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    """The first person the line attacks: yes to the attack ask (about them, not someone else in ``here``), then no to the peaceful ask."""
+    everyone = [*(people or []), *[p for p in here or [] if p not in (people or [])]]
     if not str(line or "").strip():
         return None
     from app.unnamed import ask_label
@@ -190,11 +192,119 @@ def find_target(line: str, people: list[dict[str, Any]], ask: Ask, report: dict[
             continue
         if _ask(ask, report, PHASE_ATTACK, ask_attack(name, line), code) is not True:
             continue
+        other = reply_about_another(str(report["asks"][-1].get("reply") or ""), person, everyone)
+        if other:
+            # "Yes, the player is leading Mael[is]" asked about the boar (stage2 T14): the yes is
+            # about someone else, so it does not answer the question about this one.
+            report["unconfirmed"].append({"code": code, "why": "reply_about_another", "other": other})
+            continue
         peaceful = _ask(ask, report, PHASE_ATTACK_CHECK, ask_attack_check(name, line), code)
         if peaceful is False:
             return person
         report["unconfirmed"].append({"code": code, "peaceful": peaceful})
     return None
+
+
+def reply_about_another(reply: str, person: dict[str, Any], people: list[dict[str, Any]]) -> str:
+    """The code of another person here the reply's words after its yes / no name, when they do not name this one; else "".
+
+    The ask is about one person; a reply that goes on about someone else
+    ("Yes, the player is leading Mael", asked about the boar, stage2 T14) did
+    not answer it. The reply is cut at its token cap, so its last word may be
+    the start of a name ("Mael" for Maelis, four letters at least).
+    """
+    words = re.findall(r"[A-Za-z][A-Za-z'’-]*", str(reply or ""))
+    if len(words) < 2:
+        return ""
+    rest = " ".join(words[1:])
+    last = words[-1].lower()
+
+    def names(row: dict[str, Any]) -> bool:
+        own = [w.lower() for w in name_words(row)]
+        if any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", rest, re.I) for w in own):
+            return True
+        return len(last) >= 4 and any(w.startswith(last) and w != last for w in own)
+
+    if names(person):
+        return ""
+    code = str(person.get("code") or "").strip().upper()
+    for other in people or []:
+        if isinstance(other, dict) and str(other.get("code") or "").strip().upper() != code and names(other):
+            return str(other.get("code") or "").strip().upper()
+    return ""
+
+
+# "to <verb> ...": the aim of an act, not an act ("I lead them out the gate to find the beast").
+_INFINITIVE_RE = re.compile(r"\bto\s+([A-Za-z][a-z'’-]*)")
+_NOT_VERBS = frozenset({"me", "us", "you", "him", "her", "them", "it", "my", "your", "his", "its", "their", "our",
+                        "where", "what", "who", "whom", "which", "here", "there", "and", "or", "no"})
+_OBJECT_PRONOUN_RE = re.compile(r"\b(?:him|her|them|it)\b", re.I)
+
+
+def _blow_clause(clause: str) -> bool:
+    """A clause holding a blow: a hostile act (attack_line.hostile_act) or the trigger tables' melee / ranged."""
+    try:
+        from app.attack_line import hostile_act
+
+        if hostile_act(clause):
+            return True
+    except Exception:
+        pass
+    try:
+        from app.skill_checks import SKILL_TRIGGER_PATTERNS, _trigger_text_variants
+
+        patterns = [p for p, code in SKILL_TRIGGER_PATTERNS if code in ATTACK_SKILLS]
+        variants = _trigger_text_variants(clause.lower(), protect_others=False)
+    except Exception:
+        return False
+    return any(re.search(p, v) for p in patterns for v in variants)
+
+
+def _meant_in(text: str, person: dict[str, Any]) -> bool:
+    """The text names the person (code, name word) or a word for them, or has an object pronoun."""
+    if line_names_person(text, person):
+        return True
+    if set(object_nouns(text)) & _words_for(person):
+        return True
+    return bool(_OBJECT_PRONOUN_RE.search(text))
+
+
+def aim_only(line: str, person: dict[str, Any], people: list[dict[str, Any]] | None = None) -> bool:
+    """The line means this person only as the aim of an act that is no blow: "... to find the beast" (stage2 T14).
+
+    Grammar, not a verb list: a "to <verb> ..." clause whose own verb holds
+    no blow (no hostile act, no melee / ranged trigger) says what the act is
+    for, not what the player does now. When the person is meant only inside
+    such clauses, the line does nothing to them this turn and asking whether
+    it hurts them only invites a yes about the hunt. A line that names them
+    in its own act ("i slit his throat", "i stab at the boar to finish it")
+    is unchanged.
+    """
+    from app.interpreter import plain
+
+    text = plain(line)
+    if not text.strip() or not isinstance(person, dict):
+        return False
+    name_set = {w.lower() for p in people or [] if isinstance(p, dict) for w in name_words(p)}
+    spans: list[tuple[int, int]] = []
+    for hit in _INFINITIVE_RE.finditer(text):
+        verb = hit.group(1)
+        low = verb.lower()
+        if verb[:1].isupper() or low in _NOT_VERBS or low in name_set or _is_determiner(low):
+            continue
+        tail = _LINE_CLAUSE_RE.search(text, hit.end())
+        end = tail.start() if tail else len(text)
+        clause = text[hit.start(): end]
+        if _blow_clause(clause[2:].strip()):
+            continue
+        spans.append((hit.start(), end))
+    if not spans:
+        return False
+    aims = " ".join(text[a:b] for a, b in spans)
+    rest = text
+    for a, b in sorted(spans, reverse=True):
+        rest = rest[:a] + " " + rest[b:]
+    return _meant_in(aims, person) and not _meant_in(rest, person)
 
 
 def weapon_skill(context: dict[str, Any] | None) -> str:
@@ -708,7 +818,13 @@ def bodies_not(person: dict[str, Any], line: str, prose: str = "",
     for phrase in noun_phrases(line):
         head = phrase["head"]
         generic = generic_body(head)
-        if not generic or head in own:
+        if head in own:
+            continue
+        if not generic:
+            # A thing the last prose showed by that noun, and no word for this person (stage2 T11: "stab
+            # at the boar" after "the boar doesn't budge", with Wat Thatcher the snare setter here).
+            if prose_thing_not(person, head, prose):
+                out.add(head)
             continue
         described = phrase["description"]
         if generic == "creature":
@@ -737,6 +853,63 @@ def bodies_not(person: dict[str, Any], line: str, prose: str = "",
         if fit_others:
             out.add(head)
     return out
+
+
+def _job_words_all() -> frozenset[str]:
+    """Every job word of the engine's shift templates, singular heads ("guard", "merc", "cook"): words for a person."""
+    try:
+        from app.shifts import _TEMPLATES
+        from app.unnamed import singular
+
+        return frozenset(singular(w.split()[-1]) for words, _w, _o in _TEMPLATES for w in words if w.strip())
+    except Exception:
+        return frozenset()
+
+
+def _prose_heads(prose: str) -> set[str]:
+    """The head nouns of the prose's noun phrases outside quoted speech (object_nouns over the narration)."""
+    unquoted = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", str(prose or ""))
+    return set(object_nouns(unquoted)) if unquoted.strip() else set()
+
+
+def prose_thing_not(person: dict[str, Any], head: str, prose: str) -> bool:
+    """The last prose showed a thing by this noun, and it is no word for this person: positive evidence the blow is not at them.
+
+    stage2 T11: "I ignore them and stab at the boar with my knife" after a turn
+    whose prose showed "the boar" rooting, with Wat Thatcher the snare setter
+    and Reinald the knife grinder here and no row for the boar: the noun is the
+    prose's own thing, not a word the engine has for either man. Not evidence:
+    a word that may be a person (the figure hints' person words, the shift
+    templates' job words: "the guard", "the merc" may be someone present under
+    another word), scenery, a word for them (their kind, job, name), or the
+    prose calling them by it ("the trapper Wat Thatcher", "Wat [[E]], the
+    trapper"). A noun the prose never used ("the bastard") stays no evidence
+    (4833150).
+    """
+    noun = str(head or "").strip().lower()
+    if not noun or len(noun) < 3 or not str(prose or "").strip() or not isinstance(person, dict):
+        return False
+    try:
+        from app.unnamed import _person_words, _vague_words
+
+        person_like = _person_words() | _vague_words() | _job_words_all()
+    except Exception:
+        return False
+    if noun in person_like or generic_body(noun) or _is_fixture(noun) or noun in _words_for(person):
+        return False
+    if noun not in _prose_heads(prose):
+        return False
+    # The prose calls them by it: the noun right beside their code or a word of their name.
+    code = str(person.get("code") or "").strip().upper()
+    marks = [rf"\[\[{re.escape(code)}\]\]"] if code else []
+    marks += [re.escape(w) for w in name_words(person)]
+    if marks:
+        mark = "|".join(marks)
+        word = rf"{re.escape(noun)}(?:s|es)?"
+        if re.search(rf"\b{word}\b[\s,]{{0,3}}(?:{mark})|(?:{mark})[\s,]{{0,3}}(?:the\s+|a\s+|an\s+)?{word}\b",
+                     str(prose), re.I):
+            return False
+    return True
 
 
 def _is_dead_row(row: dict[str, Any]) -> bool:
@@ -1125,6 +1298,8 @@ def decide(
                 report["not_the_lines"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
                 inferred["npc_ref"] = None
                 inferred["opposition"] = None
+                # The fight the intent reader built on them is not this blow's (world._combat_off_cleared_target).
+                inferred["not_at"] = [str(ref.get("code")).upper()]
                 figures = kind_figures(line, people)
                 if figures:
                     check = attack_check(figures[0], inferred, context)
@@ -1135,7 +1310,8 @@ def decide(
                     return check, report
                 # A creature shown attacking, else a body the line or the prose shows that is no one here
                 # (F192: "the eel-thing", "the man in tattered robes"); minted only when shown attacking.
-                noun = unknown_creature(line, people, shown) or unknown_body(line, people, prose)
+                # With no one in the scene record (stage2 T11), the cleared person is whom the body is not.
+                noun = unknown_creature(line, people, shown) or unknown_body(line, people or [person], prose)
                 if noun:
                     report["unknown_noun"] = noun
                     minted = minter(noun) if minter is not None else None
@@ -1157,6 +1333,16 @@ def decide(
         here = people
         people = [*figures, *[p for p in people if line_may_target(line, p, people=here, places=places, shown=shown,
                                                                    prose=prose) and p not in figures]]
+        if report["attack_roll"] and inferred is not None:
+            # Whom the line was read as not at: the fight the intent reader built on them is not this blow's.
+            cleared = [str(p.get("code") or "").upper() for p in here if p not in people and p.get("code")]
+            if cleared:
+                inferred["not_at"] = cleared
+        # Meant only as the aim of an act that is no blow ("... to find the beast", stage2 T14): not asked.
+        aims = [p for p in people if aim_only(line, p, here)]
+        if aims:
+            report["aim_only"] = [p.get("code") for p in aims]
+            people = [p for p in people if p not in aims]
         report["people"] = [p.get("code") for p in people]
         if report["attack_roll"] and figures and not (inferred or {}).get("social"):
             # The trigger tables rolled a blow and it names a creature here by its kind ("the
@@ -1192,7 +1378,7 @@ def decide(
             if noun:
                 report["unknown_noun"] = noun
             return None, report
-        target = find_target(line, people, ask, report)
+        target = find_target(line, people, ask, report, here)
         if target is None:
             return None, report
         check = attack_check(target, inferred, context)
