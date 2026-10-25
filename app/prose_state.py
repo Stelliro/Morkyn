@@ -2017,9 +2017,10 @@ def repair_trailing_fragment(text: str) -> tuple[str, dict[str, Any] | None]:
     return out, {"why": "trailing_fragment", "from": found["sentence"], "to": found["to"]}
 
 
-def settle_band_coin(text: str, amount: int) -> tuple[str, dict[str, Any] | None]:
+def settle_band_coin(text: str, amount: int, *, units: int | None = None) -> tuple[str, dict[str, Any] | None]:
     """
-    "Hands over a moderate bag of coin" when the engine moved ``amount`` gold.
+    "Hands over a moderate bag of coin" when the engine moved ``amount`` gold
+    (or ``units``, base units of the world's set, shown in its coins: m1).
 
     A band word is the op's size, not the scene's: when exactly one such phrase
     stands for coin that changed hands this turn, it becomes the amount that
@@ -2028,6 +2029,14 @@ def settle_band_coin(text: str, amount: int) -> tuple[str, dict[str, Any] | None
     """
     source = str(text or "")
     found = list(_BAND_COIN_RE.finditer(source))
+    if units is not None:
+        if len(found) != 1 or int(units) <= 0:
+            return source, None
+        from app import currency
+
+        new = currency.format_amount(int(units), currency.current_set())
+        match = found[0]
+        return source[: match.start()] + new + source[match.end():], {"why": "band_coin", "from": match.group(0), "to": new}
     if len(found) != 1 or int(amount or 0) <= 0:
         return source, None
     match = found[0]

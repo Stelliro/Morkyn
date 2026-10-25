@@ -119,5 +119,92 @@ class NewWorldStartsWithItsSet(unittest.TestCase):
                 self.assertEqual(state["player"]["gold"], gold)
 
 
+SALE_LINE = "I sell my candle to @A for five silver; he nods, counts out five silver coins into my palm and takes the candle."
+SALE_PROSE = (
+    "He nods, reaching under the counter. \"Fair enough. Five silver.\" He counts out five silver coins and places "
+    "them in your hand, and you hand him the candle."
+)
+
+
+def _play(line, prose, inventory, player, *, options=None):
+    """play_turn with the draft mocked (the trade-atomic harness): the purse and the pack after it."""
+    from unittest import mock
+
+    from app import db, llm, world
+
+    world.start_playthrough({"player_name": "Ash", "start_location": "Low Gate", "special_ability_origin": "none",
+                             **(options or {})})
+    with db.connect().closing() as conn:
+        conn.execute("DELETE FROM inventory")
+        conn.execute("DELETE FROM npcs WHERE code = 'A'")
+        conn.execute("INSERT INTO npcs (code, name, location_id) SELECT 'A', 'Bartholomew', current_location_id "
+                     "FROM player WHERE id = 1")
+        for number, (name, qty) in enumerate(inventory, start=1):
+            conn.execute("INSERT INTO inventory (code, name, quantity) VALUES (?, ?, ?)", (f"I{number}", name, qty))
+        conn.commit()
+    turn = {
+        "scene_plan": {"goal": "act", "focus_points": []},
+        "narration_segments": [{"label": "scene", "text": prose}],
+        "narration": prose,
+        "player": dict(player),
+        "self_check": {"passed": True, "issues_found": [], "corrections_made": []},
+        "turn_summary": "a beat",
+        "scene_focus": "action",
+        "scene_cast": {"present": [], "interacting": [], "off": []},
+    }
+    with mock.patch.object(world, "generate_turn", return_value=turn), \
+            mock.patch.object(llm, "_chat_content", return_value="No"):
+        out = world.play_turn(line)
+    with db.connect().closing() as conn:
+        row = conn.execute("SELECT gold, purse_units FROM player WHERE id = 1").fetchone()
+        held = {str(r["name"]): int(r["quantity"] or 0) for r in conn.execute("SELECT name, quantity FROM inventory")}
+    return row["purse_units"], row["gold"], held, out
+
+
+class SilverReachesThePurse(unittest.TestCase):
+    def test_five_silver_pays_500_units_and_the_purse_shows_it(self):
+        from app import world
+
+        units, gold, held, _out = _play(SALE_LINE, SALE_PROSE, [("candle", 1)], {"gold_band": "small"})
+        self.assertEqual((units, gold, held.get("candle", 0)), (120500, 12, 0))
+        purse = world.get_state()["purse"]
+        self.assertEqual(purse["long"], "12 gold, 5 silver")
+        self.assertEqual(purse["units"], 120500)
+
+    def test_the_apply_reads_money_delta_and_clamps_in_units(self):
+        from app import world
+        from app.db import connect
+
+        world.start_playthrough({"player_name": "Ash", "start_location": "Low Gate"})
+        with connect().closing() as conn:
+            world._apply_player(conn, {"money_delta": -300, "gold_delta": 0})
+            self.assertEqual(conn.execute("SELECT purse_units FROM player").fetchone()[0], 119700)
+            # A stale money_delta (gold_delta rewritten after it) is not used: the legacy gold is.
+            world._apply_player(conn, {"money_delta": -300, "gold_delta": 2})
+            self.assertEqual(conn.execute("SELECT purse_units, gold FROM player").fetchone()[:], (139700, 13))
+            # Spending more than the purse holds stops at nothing.
+            world._apply_player(conn, {"gold_delta": -900})
+            self.assertEqual(conn.execute("SELECT purse_units, gold FROM player").fetchone()[:], (0, 0))
+            conn.rollback()
+
+
+class QuestRewardsPayUnits(unittest.TestCase):
+    def test_a_reward_in_gold_pays_units(self):
+        from app import quests, world
+        from app.db import connect
+
+        world.start_playthrough({"player_name": "Ash", "start_location": "Low Gate"})
+        with connect().closing() as conn:
+            conn.execute("UPDATE player SET purse_units = 120500, gold = 12 WHERE id = 1")
+            qid = quests.create_quest(conn, title="Haul the nets", description="Haul the nets off the pier.",
+                                      reward_gold=11, steps=[{"title": "Haul the nets", "description": "", "location_code": ""}])
+            paid = quests.pay_quest_reward(conn, int(qid if isinstance(qid, int) else qid["id"]), turn=1)
+            row = conn.execute("SELECT purse_units, gold FROM player").fetchone()
+            self.assertEqual((row["purse_units"], row["gold"]), (230500, 23))
+            self.assertEqual(paid["money_units"], 110000)
+            self.assertIn("+11 gold", paid["text"])
+            conn.rollback()
+
+
 if __name__ == "__main__":
     unittest.main()

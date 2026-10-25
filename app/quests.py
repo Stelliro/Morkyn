@@ -349,7 +349,11 @@ def reward_text(paid: dict[str, Any] | None) -> str:
         return ""
     bits = []
     if paid.get("gold"):
-        bits.append(f"+{int(paid['gold'])} gold")
+        # The job's pay is held in legacy gold and shown in the world's coins (m1).
+        from app import currency
+
+        cset = currency.current_set()
+        bits.append("+" + currency.format_amount(currency.from_legacy_gold(int(paid["gold"]), cset), cset))
     if paid.get("xp"):
         bits.append(f"+{int(paid['xp'])} XP")
     if paid.get("karma"):
@@ -400,12 +404,17 @@ def pay_quest_reward(
         paid["gold_paid_in_story"] = int(gold_paid_in_story)
     try:
         if paid["gold"] or paid["xp"] or paid["karma"]:
-            row = conn.execute("SELECT gold, xp, karma FROM player WHERE id = 1").fetchone()
+            row = conn.execute("SELECT xp, karma FROM player WHERE id = 1").fetchone()
             if row:
-                gold = max(0, min(1_000_000, int(row["gold"] or 0) + int(paid["gold"])))
+                # The pay goes into the purse in base units (m1, app/purse.py).
+                from app import currency, purse
+
+                cset = currency.active_set(conn)
+                paid["money_units"] = currency.from_legacy_gold(int(paid["gold"]), cset)
+                purse.add_units(conn, paid["money_units"], cset)
                 xp = max(0, min(1_000_000, int(row["xp"] or 0) + int(paid["xp"])))
                 karma = max(-1000, min(1000, int(row["karma"] or 0) + int(paid["karma"])))
-                conn.execute("UPDATE player SET gold = ?, xp = ?, karma = ? WHERE id = 1", (gold, xp, karma))
+                conn.execute("UPDATE player SET xp = ?, karma = ? WHERE id = 1", (xp, karma))
                 if paid["xp"]:
                     from app.progression import sync_level
 

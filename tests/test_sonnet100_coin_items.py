@@ -166,7 +166,9 @@ class NamesThatAreNoThing(unittest.TestCase):
         verdict = _not_a_thing_name("eighty silver")
         self.assertEqual(verdict["amount"], "eighty silver")
         self.assertEqual(verdict["coin"], "silver")
-        self.assertNotIn("units", verdict, "the amount is priced by the transaction parser (m0), not here")
+        # m1 (2026-10-25): the note names the sum in base units of the world's set (eighty silver = 8000
+        # copper); the purse is still not moved here.
+        self.assertEqual(verdict["units"], 8000)
 
     def test_coin_heads_and_containers_of_coin(self):
         from app.world import _not_a_thing_name

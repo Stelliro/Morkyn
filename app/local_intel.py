@@ -1591,15 +1591,15 @@ def _record_hint(conn, hint: dict[str, Any] | None, turn: int, *, chart: dict[st
         f"The map marks ({hint.get('x')}, {hint.get('y')})."
     )
     if hint.get("reason") == "bribe" and _play_flag_on(conn, "economy_enabled"):
-        gold = _player_gold(conn)
         # The prompt already told the direction; a purse emptied during the
-        # turn pays nothing rather than going below zero.
-        if gold >= BRIBE_GOLD:
-            conn.execute(
-                "UPDATE player SET gold = ? WHERE id = 1",
-                (gold - BRIBE_GOLD,),
-            )
-            notes.append(f"You paid {BRIBE_GOLD} coin for the direction.")
+        # turn pays nothing rather than going below zero. In base units (m1).
+        from app import currency, purse
+
+        cset = currency.active_set(conn)
+        price = currency.from_legacy_gold(BRIBE_GOLD, cset)
+        if purse.purse_units(conn, cset) >= price:
+            purse.add_units(conn, -price, cset)
+            notes.append(f"You paid {currency.format_amount(price, cset)} for the direction.")
     return notes
 
 

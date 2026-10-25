@@ -155,6 +155,12 @@ def _set_player_fields(fields: dict[str, int]) -> None:
             "UPDATE player SET health = ?, max_health = ?, level = ?, xp = ?, gold = ? WHERE id = 1",
             (health, max_health, level, xp, gold),
         )
+        if "gold" in fields:
+            # A purse set in gold is that many whole gold in base units (m1).
+            from app import currency, purse
+
+            cset = currency.active_set(conn)
+            purse.write_purse(conn, currency.from_legacy_gold(gold, cset), cset)
 
 
 def _teleport_to(name_or_code: str) -> str | None:
