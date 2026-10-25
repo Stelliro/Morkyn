@@ -170,6 +170,43 @@ class T72CodesAndAnotherPersonsKeys(unittest.TestCase):
         self.assertEqual(_decisions(notes, "take_from_person_not_granted"), [])
 
 
+T87_LINE = "I take the fine longbow off the wall and pay Dunstan 500 gold, counting the coins onto the counter."
+T87_PROSE = (
+    "You enter Dunstan's General Store [[L5]], a cluttered shop with barrels and boxes lining the walls. The faint smell "
+    "of smoked meat hangs in the cool, dim interior. A counter runs along the near wall, where a grey-haired woman sits. "
+    "She looks up from her ledger as you approach.\n\n\"You there, what'll it be?\" she asks, a hint of weariness in her "
+    "voice.\n\nYou set down the fine longbow you just purchased, the wood smooth and polished. \"500 gold, please,\" you "
+    "say, counting out the coins from a leather pouch onto the counter. The woman's brow furrows as she counts the coins, "
+    "clearly skeptical of such a large sum for a single bow.\n\nAfter what feels like an eternity, she nods. \"Fine, I "
+    "suppose it's yours now,\" she says, sliding the bow across the counter."
+)
+T87_OPS = (
+    "===NAR===\n" + T87_PROSE + "\n===OPS===\nGOLD -500\nGRANT fine longbow, TYPE weapon, QTY 1\n"
+    "TALK \"Dunstan\", what'll it be?\nJOURNAL fact, \"You bought a fine longbow for 500 gold.\"\n"
+)
+
+
+class T87AQualityWordAloneIsNoThing(unittest.TestCase):
+    """cheat100 T87: the unquoted 'GRANT fine longbow, ...' was cut to "fine" and "fine x1" was filed."""
+
+    def test_quality_words_alone_name_nothing(self):
+        from app.world import _not_a_thing_name
+
+        for name in ("fine", "old", "rusty", "a fine", "fine old", "Worn"):
+            self.assertEqual((_not_a_thing_name(name) or {}).get("decision"), "item_phrase_no_head_noun", name)
+        for name in ("fine longbow", "old map", "rusty key", "light", "lantern", "spare", "fine silk"):
+            self.assertIsNone(_not_a_thing_name(name), name)
+
+    def test_t87_files_no_fine(self):
+        from app.turn_dsl import parse_dsl_turn
+
+        changes = parse_dsl_turn(T87_OPS)["inventory_changes"]
+        self.assertEqual([c["name"] for c in changes], ["fine"], "the op parser still cuts the unquoted name (F198)")
+        kept, notes = _filter(changes, T87_PROSE, T87_LINE)
+        self.assertEqual(kept, [])
+        self.assertEqual([n["item"] for n in _decisions(notes, "item_phrase_no_head_noun")], ["fine"])
+
+
 class ARealItemCodeIsThatItem(unittest.TestCase):
     def test_an_item_code_is_that_items_row(self):
         """TAKE "I3" for the key carried is the key put down, not a new "I3" read as a gain."""

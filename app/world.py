@@ -17168,6 +17168,15 @@ _MATERIAL_WORDS = frozenset({"brass", "bronze", "iron", "steel", "pewter", "meta
 # An op's field label at the front of a name: "BAND: small", "QTY: 1", "NAME: x".
 _LABEL_FRAGMENT_RE = re.compile(r"^(?:[A-Z][A-Z_]+|(?i:qty|band|type|desc|name|rarity|loc|role|note|notes))\s*:")
 _NAME_DETERMINERS = frozenset({"a", "an", "the", "some", "my", "your", "his", "her", "their", "its"})
+# cheat100 T87: 'GRANT fine longbow, TYPE weapon, QTY 1' (unquoted) was cut to
+# its first word and "fine x1" was filed. A name made only of the words that
+# say how good, old or worn a thing is has no head noun: no thing is named.
+_ITEM_QUALITY_WORDS = frozenset({
+    "fine", "finest", "old", "new", "rusty", "rusted", "worn", "battered", "broken", "cracked", "chipped", "dented",
+    "sturdy", "sharp", "blunt", "dull", "shiny", "polished", "tarnished", "ornate", "fancy", "plain", "simple", "crude",
+    "rough", "cheap", "good", "quality", "masterwork", "superior", "decent", "shoddy", "used", "ancient", "weathered",
+    "faded", "dusty", "dirty", "clean", "heavy", "nice", "beautiful", "elegant", "exquisite",
+})
 
 
 # The coin words of the game's one money today (copper, silver and gold; the
@@ -17351,6 +17360,8 @@ def _not_a_thing_name(name: str, conn=None) -> dict[str, Any] | None:
         return {"decision": "coin_amount_not_an_item", "amount": raw, "coin": coin}
     if len(words) == 1 and words[0] in _MATERIAL_WORDS:
         return {"decision": "material_not_an_item", "material": words[0]}
+    if all(w in _ITEM_QUALITY_WORDS for w in words):
+        return {"decision": "item_phrase_no_head_noun", "phrase": raw}
     return None
 
 
