@@ -103,6 +103,14 @@ belong to, with the date).
   not, and what could still fix or mitigate it, including building something new for it
   (Stell's example: a dedicated new mechanism such as "the neural welding rig") rather than
   another rule.
+- **Adversarial runs are a test method** (2026-10-25): "try and run a 100 turn test where you play
+  it like ai dungeon ... try and 'cheat'"; "the cheat run was intended to find areas where the
+  player was able to manipulate the llm into doing things we did not want the player to be able
+  to do based on the game engine and use that to patch those issues". A cheat run's player asserts
+  items, gold, outcomes, moves and powers; every line that changes the save in a way the engine
+  should have refused is a fault class, patched at the engine (never the prompt) with a test from
+  the exact line; the narrator going along in words while the save holds is prose, not a hole.
+  First run: docs/showcase/hermes-cheat100-findings-2026-10-25.md.
 - **Issues first, turn time later** (2026-10-22): "dont worry about how long the tunrs take for
   the time being as we can always attempt to fix turn time later after the issues are fixed and
   we have something more concrete". A mechanism that adds a small ask per turn is fine while the
