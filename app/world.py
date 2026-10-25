@@ -24156,7 +24156,24 @@ def _turn_outcomes(
             outcomes.append("new_person")
     except Exception:
         pass
+    # A turn the player's own line tells what others do to them ("The guard's captain ... hands me his
+    # sword", "Bartholomew swings a cudgel and cracks it across my skull", cheat100 T10, T41) earns XP only
+    # by what the engine resolved: a check, a fight, a quest. The find, place or person the prose minted on
+    # the player's telling is a declared outcome.
+    try:
+        from app import attack_intent
+
+        if outcomes and attack_intent.others_act_on_player(_QUOTED_SPEECH_RE.sub(" ", _player_line(player_input))):
+            kept = [o for o in outcomes if o in _ENGINE_OUTCOMES]
+            if len(kept) < len(outcomes):
+                result["_declared_outcomes"] = [o for o in outcomes if o not in _ENGINE_OUTCOMES]
+                outcomes = kept
+    except Exception:
+        pass
     return outcomes
+
+
+_ENGINE_OUTCOMES = frozenset({"check", "quest", "quest_change", "fight"})
 
 
 def _gate_model_rewards(
@@ -24182,7 +24199,11 @@ def _gate_model_rewards(
             player.pop("xp_delta", None)
             player.pop("_xp_delta_growth_applied", None)
             report["xp_dropped"] = xp
-            turn_ledger.note("reward", "xp_dropped_nothing_earned", xp=xp)
+            if result.get("_declared_outcomes"):
+                # Only what the player's line declared stood behind it (cheat100 T10, T41).
+                turn_ledger.note("reward", "xp_not_earned", xp=xp, declared=result["_declared_outcomes"])
+            else:
+                turn_ledger.note("reward", "xp_dropped_nothing_earned", xp=xp)
     karma = int(_float(player.get("karma_delta"), 0))
     if karma and "player.karma_delta" not in authored:
         act = _player_moral_act(player_input, narration)
@@ -24196,6 +24217,97 @@ def _gate_model_rewards(
     if report:
         result.setdefault("_reward_gate", {}).update(report)
     return report
+
+
+_HOSTILE_ATTITUDE_RE = re.compile(r"\b(?:hostile|aggressive|enemy|murderous|violent)\b", re.I)
+
+
+def _declared_blow_attackers(conn, blows: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """The codes of the people here the blows' subjects name, and which of them are hostile on record.
+
+    Hostile on record: the row's attitude says so, or the row is a foe in the
+    encounter that is on. A subject that names no one here is no one.
+    """
+    from app import attack_intent
+    from app.unnamed import singular
+
+    try:
+        here = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0] or 0)
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM npcs WHERE location_id = ? AND COALESCE(dead, 0) = 0", (here,)
+        ).fetchall()]
+    except Exception:
+        rows = []
+    foes: set[str] = set()
+    try:
+        from app.encounter_board import load_encounter
+
+        board = load_encounter(conn)
+        if isinstance(board, dict) and board.get("active"):
+            foes = {str(f.get("code") or "").upper() for f in board.get("foes") or [] if isinstance(f, dict)}
+    except Exception:
+        foes = set()
+    named: list[str] = []
+    hostile: list[str] = []
+    for blow in blows:
+        subject = str(blow.get("subject") or "")
+        words = {singular(w.lower()) for w in re.findall(r"[A-Za-z][A-Za-z'-]+", subject)}
+        for row in rows:
+            code = str(row.get("code") or "").upper()
+            if not code or code in named:
+                continue
+            if attack_intent.line_names_person(subject, row) or words & attack_intent._words_for(row):
+                named.append(code)
+                if code in foes or _HOSTILE_ATTITUDE_RE.search(str(row.get("attitude") or "")):
+                    hostile.append(code)
+    return named, hostile
+
+
+def _void_declared_blow_health(conn, result: dict[str, Any], player_input: str,
+                               band_report: dict[str, Any] | None = None) -> bool:
+    """A health loss the player's own line declared another dealt them is not applied (cheat100 T41).
+
+    "Bartholomew swings a cudgel and cracks it across my skull ... lose half my
+    health": the model drafted a moderate damage band, the engine rolled it
+    (2d6, -7) and health went 20 -> 13, though no one on record attacked. A
+    blow on the player is an attack, and an attack is decided by the engine's
+    roll, not by the player's telling. The model's own loss (not
+    server-authored: a skill-check injury or recovery passes) is voided when
+    every blow in the line is another's on the player
+    (attack_intent.declared_blows) and none of the people it names is hostile
+    on record (attitude, or a foe in the encounter that is on): then it is a
+    declared outcome, noted ``declared_blow_not_applied``. A blow by a hostile
+    on record keeps the rolled band, the fight's path today
+    (``declared_blow_hostile_kept``).
+    """
+    from app import attack_intent
+
+    player = result.get("player") if isinstance(result.get("player"), dict) else None
+    if not player:
+        return False
+    if "player.health_delta" in {str(p) for p in (result.get("_server_authored") or [])}:
+        return False
+    loss = int(_float(player.get("health_delta"), 0))
+    if loss >= 0:
+        return False
+    line = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input))
+    blows = attack_intent.declared_blows(line)
+    if not blows:
+        return False
+    named, hostile = _declared_blow_attackers(conn, blows)
+    subjects = [str(b.get("subject") or "")[:60] for b in blows]
+    if hostile:
+        turn_ledger.note("health", "declared_blow_hostile_kept", health_delta=loss, subjects=subjects, codes=hostile)
+        return False
+    player["health_delta"] = 0
+    if isinstance(band_report, dict):
+        band_report.setdefault("lines", []).append(
+            f"health loss refused ({loss}): the blow is the player's telling; no one hostile on record attacked"
+        )
+        band_report["voided_health"] = {"health_delta": loss, "why": "declared_blow_not_applied"}
+    turn_ledger.note("health", "declared_blow_not_applied", health_delta=loss, subjects=subjects, codes=named,
+                     why="the player's line declares another's blow; no one hostile on record made it")
+    return True
 
 
 _TRAINING_RE = re.compile(r"\b(?:train\w*|practi[cs]\w*|stud(?:y|ies|ied|ying)|learn\w*|drill\w*|rehears\w*|lesson\w*)\b", re.I)
@@ -25762,6 +25874,12 @@ def apply_turn(
                     "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                     (turn, "system", f"Band resolution failed; amounts were not rolled. {band_report['error']}"),
                 )
+            except Exception:
+                pass
+        # A blow the player's own line says another dealt them is no attack the engine rolled (cheat100 T41).
+        if input_kind == "player":
+            try:
+                _void_declared_blow_health(conn, result, player_input, band_report)
             except Exception:
                 pass
         try:
