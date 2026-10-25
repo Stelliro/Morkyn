@@ -27796,6 +27796,13 @@ def _attack_check_for_line(
     minter = _attack_creature_minter(context, trace, usage, attack_intent.player_line(model_input)) if (
         chosen is not None or entity_kinds._ASK_OVERRIDE[0]) else None
     check, report = attack_intent.decide(model_input, context, inferred, chosen, minter=minter)
+    if report.get("no_act"):
+        # "⚔️🔥💰🗡️👑🐉", "." (cheat100 T91, T90): no word in the line, so no one is asked about.
+        turn_ledger.note("check", "attack_ask_no_act", line=attack_intent.player_line(model_input)[:80])
+    if report.get("absent"):
+        # "I attack Bartholomew" with Bartholomew at his inn (cheat100 T93): the blow is at no one here.
+        turn_ledger.note("check", "attack_target_absent", absent=report.get("absent"),
+                         rolled=bool(report.get("attack_roll")), not_the_lines=report.get("not_the_lines"))
     if report.get("unknown_noun"):
         # The blow names a creature the prose showed and the engine has no row for (base100
         # T23): minted and aimed at when the asks agree, else the roll stands with no target.
