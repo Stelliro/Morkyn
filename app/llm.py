@@ -18573,6 +18573,16 @@ def _run_quest_parser(
             **memory,
         )
         gate = bool(gate_reason)
+        # A wait or a sleep: what the narrator tells happening in it is its own
+        # scene, not the player's doing, so no job is read from it or finished
+        # by it (fantasy100 T70: "!wait 240 sleep" told a morning of woodcutting
+        # and filed "cut firewood"). world.apply_turn holds the same line.
+        if gate and str(player_input or "").lstrip().startswith("__wait_request__"):
+            from app import turn_ledger
+
+            turn_ledger.note("quest", "wait_turn_not_read", gate_reason=gate_reason)
+            record["wait_turn"] = True
+            gate = False
         record["gate"] = gate
         record["gate_reason"] = gate_reason
         parsed: dict[str, Any] = dict(empty)
@@ -18605,16 +18615,21 @@ def _run_quest_parser(
                     system, user, timeout=timeout, usage=usage, phase=phase, max_tokens=max_tokens, trace=trace
                 )
 
-            asked = qp.player_asks_for_work(player_input) or (
-                bool(memory.get("talking_to_someone")) and qp.player_asks_for_work(memory.get("previous_input") or "")
-            )
             # The jobs already offered or taken, by code: a job told again under
             # another name binds to its reference (Stell, 2026-10-18).
             open_jobs = [
-                {"code": q.get("code"), "title": q.get("title"), "giver": q.get("giver") or q.get("giver_name") or ""}
-                for q in [*inputs["open_offers"], *inputs["active_quests"]]
+                {"code": q.get("code"), "title": q.get("title"), "giver": q.get("giver") or q.get("giver_name") or "",
+                 "status": status}
+                for status, rows in (("offered", inputs["open_offers"]), ("active", inputs["active_quests"]))
+                for q in rows
                 if isinstance(q, dict) and q.get("code") and q.get("title")
             ]
+            asked = qp.player_asks_for_work(player_input) or (
+                bool(memory.get("talking_to_someone")) and qp.player_asks_for_work(memory.get("previous_input") or "")
+            )
+            # The player taking on work no job on record can be: the other
+            # side's answer is read as the offer (fantasy100 F195).
+            took = qo.accepts_unrecorded_work(player_input, open_jobs)
             offers = qo.run_offer_pass(
                 narration,
                 player_input,
@@ -18624,7 +18639,10 @@ def _run_quest_parser(
                 asked_for_work=asked,
                 ask=ask,
                 open_jobs=open_jobs,
+                took_on_work=took,
             )
+            if took:
+                record["took_on_unrecorded_work"] = True
             progress = qo.run_progress_pass(narration, player_input, active=inputs["active_quests"], ask=ask)
             typed = qo.typed_accepts(player_input, inputs["open_offers"])
             parsed = {"new": offers["new"], "updates": [*typed, *progress["updates"]], "worked": progress.get("worked") or []}

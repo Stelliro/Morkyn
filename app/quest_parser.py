@@ -116,7 +116,9 @@ _ASKS_WORK_RE = re.compile(
     r"\b(?:you|ya)\s+(?:\w+\s+)?(?:need|needs|want|wanted|use) (?:a |an |an extra |another |some |any )?"
     r"(?:help|hand|hands|set of hands|extra set of hands|helper|worker)\b|"
     r"\b(?:can|could|may|shall) i (?:help|assist|lend|work|be of use)\b|"
-    r"\b(?:hire|employ) me\b|\bhiring\b|\bapprentic\w*|\b(?:teach|train) me\b|\bshow me how\b|"
+    # Someone's apprentice is who the player is, not an ask: "I am Wren,
+    # Hesper's apprentice" (fantasy100 T5, T29).
+    r"\b(?:hire|employ) me\b|\bhiring\b|\b(?<!['’]s )apprentic\w*|\b(?:teach|train) me\b|\bshow me how\b|"
     r"\blearn (?:to|how to|your (?:trade|craft)|the (?:trade|craft))\b|"
     r"\bearn (?:some |a |my )?(?:coin|money|gold|silver|keep|living|wage)\b|\bwork for (?:you|coin|pay|food)\b|"
     r"\blooking for (?:work|a job|employment)\b|"
@@ -741,9 +743,22 @@ _ASKED_FOR_WORK_RE = re.compile(
 )
 
 
+# Praise of work already done names a job without offering one: Roger's "Fine
+# job, You've a knack for this floor-cleaning" after the player swept was read
+# as job language and filed "Floor-cleaning" (fantasy100 T8).
+_PRAISE_OF_DONE_WORK_RE = re.compile(
+    # "good work for you at the docks" is still an offer.
+    r"\b(?:fine|good|nice|great|grand|neat|solid|excellent|fair)\s+(?:job|work)\b"
+    r"(?!\s+(?:for|to|at|here|there|on|in|if|going|waiting|available|that|which)\b)"
+    r"|\b(?:job|work)\s+well\s+done\b",
+    re.I,
+)
+
+
 def _offer_text(sentence: str) -> str:
-    """The sentence with what offers no work taken out: work others ask for, work refused, the player's own debt."""
-    return _PLAYER_OWES_RE.sub(" ", _ASKED_FOR_WORK_RE.sub(" ", str(sentence or "")))
+    """The sentence with what offers no work taken out: work others ask for, work refused, the player's own debt, praise of work done."""
+    text = _PLAYER_OWES_RE.sub(" ", _ASKED_FOR_WORK_RE.sub(" ", str(sentence or "")))
+    return _PRAISE_OF_DONE_WORK_RE.sub(" ", text)
 _NO_WORK_RE = re.compile(
     r"\b(?:no one|nobody|no-one|none)(?:'s| is| are)? (?:hiring|paying|needs? (?:help|hands|anyone))\b|"
     r"\bno (?:work|jobs?|hiring|coin to spare)\b|\bnot hiring\b|\bnothing (?:for you|to do)\b|"
@@ -933,6 +948,21 @@ def judge_offer(
                          r"(?!pay\b|wait\b|be\s+careful|prove)[a-z]+", _offer_text(sentence), re.I):
                 return {"ok": True, "why": "giver_sets_the_task", "checked": sentence[:240]}
     return {"ok": False, "why": "no_offer_in_exchange", "checked": pool[0][:240]}
+
+
+def _checked_offer_has_terms(raw: dict[str, Any], offer_line: str, evidence: str, player_input: str = "") -> bool:
+    """A checked card the keyword judge found no offer in still has the engine's own sign of one.
+
+    The player asked for, or took on, work in this exchange (``_checked["asked"]``,
+    set by quest_offers.run_offer_pass, or this turn's own line), or the giver's
+    line names pay.
+    """
+    checked = raw.get("_checked") if isinstance(raw.get("_checked"), dict) else {}
+    if checked.get("asked") or player_asks_for_work(_player_own_line(str(player_input or ""))):
+        return True
+    from app.quest_offers import _names_pay
+
+    return _names_pay(f"{offer_line} {evidence}")
 
 
 def evidence_offers_work(
@@ -1485,16 +1515,28 @@ def validate_quest_changes(
                 evidence, narration, player_input, offer_line=offer_line, giver=giver, giver_ref=giver_ref, npcs=npcs
             )
             checked = verdict["checked"]
-            if not verdict["ok"] and raw.get("_checked") and verdict.get("why") not in {"refusal", "giver_refuses"}:
+            if (not verdict["ok"] and raw.get("_checked") and verdict.get("why") not in {"refusal", "giver_refuses"}
+                    and _checked_offer_has_terms(raw, offer_line, evidence, player_input)):
                 # A card the engine found by its job words, the fill ask read
                 # as work offered, and the check ask confirmed against the
-                # passage (app/quest_offers.py). The keyword judge is a veto
-                # on refusals only; its positive vocabulary no longer has to
-                # name every phrasing an offer can take.
+                # passage (app/quest_offers.py). The keyword judge's positive
+                # vocabulary does not have to name every phrasing an offer can
+                # take, so the card stands when the engine holds its own sign of
+                # an offer: the giver's line names pay, or the player asked for
+                # or took on work in this exchange.
                 from app import turn_ledger
 
                 turn_ledger.note("quest", "checked_offer_kept", title=title, keyword_verdict=verdict.get("why"))
             elif not verdict["ok"]:
+                if raw.get("_checked"):
+                    # The model's yes alone is no offer: a stranger's "I seek
+                    # knowledge hidden here" (fantasy100 T29) and "plenty of
+                    # firewood to cut if you're up for it" told into a sleep
+                    # (T70) were kept on it, with no pay named and no work asked for.
+                    from app import turn_ledger
+
+                    turn_ledger.note("quest", "checked_offer_refused", title=title, keyword_verdict=verdict.get("why"),
+                                     why="no pay named and no work asked for or taken")
                 reasons.append("evidence_is_not_an_offer")
             elif (giver is None and not re.search(r"[\"“”]", evidence)
                   and not _offer_is_spoken(offer_line or evidence, narration)
@@ -2200,6 +2242,9 @@ _GENERIC_JOB_STEMS = {
         "guild", "house", "company", "crew", "hall", "office", "council", "employer", "boss", "master",
         "debt", "credit", "owe", "owed", "pay", "off", "reduce", "clear", "earn", "help", "serve", "winter",
         "ledger", "worth", "prove", "yourself", "own",
+        # Labour and skill name every job, and "skill" is also the game's word
+        # for what a player rolls ("I use my Old Script skill", fantasy100 T62).
+        "labor", "labour", "skill", "skilled", "honest",
     )
 }
 
@@ -3038,6 +3083,23 @@ def _open_jobs(conn) -> list[dict[str, Any]]:
     )
 
 
+def _jobs_the_line_names(jobs: list[dict[str, Any]], player_input: str) -> list[dict[str, Any]]:
+    """The one open job the player's own line names, by ``@Qn`` or by its title words; [] when not exactly one.
+
+    "I tell Edith I accept the skilled labor for eight gold" named Q1 "skilled
+    labor", a notice slip with no giver on record, so the agreed eight found no
+    job and Q1 later paid its filed 15 (fantasy100 T90, T94).
+    """
+    own = _player_line_text(player_input)
+    refs = {f"Q{n}" for n in _QUEST_REF_RE.findall(own)}
+    by_ref = [q for q in jobs if str(q.get("code") or "").upper() in refs]
+    if by_ref:
+        return by_ref if len(by_ref) == 1 else []
+    words = set(re.findall(r"[a-z]{4,}", own.lower()))
+    named = [q for q in jobs if _title_words(str(q.get("title") or "")) & words]
+    return named if len(named) == 1 else []
+
+
 def settle_agreed_price(conn, *, narration: str, player_input: str = "", turn: int = 0,
                         touched_codes: set[str] | None = None) -> dict[str, Any] | None:
     """Make the pay the scene agreed the job's reward; returns what changed, or None.
@@ -3052,7 +3114,7 @@ def settle_agreed_price(conn, *, narration: str, player_input: str = "", turn: i
         return None
     jobs = _open_jobs(conn)
     touched = [q for q in jobs if str(q.get("code") or "") in (touched_codes or set())]
-    pool = touched or [
+    pool = touched or _jobs_the_line_names(jobs, player_input) or [
         q for q in jobs if _named_in(narration, {"name": q.get("giver_name"), "code": q.get("giver_code")})
     ]
     if len(pool) != 1:

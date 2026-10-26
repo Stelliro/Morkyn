@@ -222,7 +222,7 @@ _SUGGESTION_RE = re.compile(
 _ASKS_FOR_SELF_RE = re.compile(r"[^.!?\"“”]*\b(?:for\s+(?:me|us)|i\s+could\s+use)\b[^.!?\"“”]*\?", re.I)
 
 
-def _carries_offer(line: str, *, asked_for_work: bool) -> str:
+def _carries_offer(line: str, *, asked_for_work: bool, took_on_work: bool = False) -> str:
     """The job language the line carries, as the reason it is a candidate; "" when none."""
     cleaned = _ASKS_FOR_SELF_RE.sub(" ", qp._offer_text(line))
     if qp._GIVER_OFFERS_JOB_RE.search(cleaned):
@@ -234,6 +234,13 @@ def _carries_offer(line: str, *, asked_for_work: bool) -> str:
             return "agrees_to_ask"
         if _SETS_TASK_RE.search(cleaned):
             return "sets_the_task"
+    if took_on_work:
+        # The player took on work no job on record can be (accepts_unrecorded_work):
+        # the other side's answer is where the job's terms are, whatever its
+        # words. Edith's "Very well then. First thing to do is clean out the
+        # stables" carries no job word (fantasy100 T90). The fill, the naming
+        # test and the check still decide.
+        return "answers_acceptance"
     return ""
 
 
@@ -245,6 +252,7 @@ def find_offer_candidates(
     locations: list[dict[str, Any]] | None = None,
     marks: list[dict[str, Any]] | None = None,
     asked_for_work: bool = False,
+    took_on_work: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     (candidates, dropped). Each candidate: {"line", "speaker", "stranger", "kind",
@@ -319,7 +327,7 @@ def find_offer_candidates(
             groups.append({"code": code, "paragraph": paragraph, "lines": [line]})
     for group in groups:
         joined = " ".join(group["lines"])
-        why = _carries_offer(joined, asked_for_work=asked_for_work)
+        why = _carries_offer(joined, asked_for_work=asked_for_work, took_on_work=took_on_work)
         if why:
             _add(joined, code=group["code"], kind="spoken", why=why, quote=max(group["lines"], key=len))
     # A posting read aloud: "You read the details aloud: 'Lifting supplies ...'"
@@ -560,7 +568,11 @@ def names_a_task(card: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
     said = _naming_stems(line, drop)
     if not said:
         return []
-    proposed = _naming_stems(f"{card.get('task') or ''} {card.get('title') or ''} {card.get('place') or ''}", drop)
+    # The task or title has to name it; a place alone is where, not what:
+    # "There's always need for helping hands in a town like this" filed
+    # "helping hands" on the one word "town" the fill put in its place field
+    # (fantasy100 T5).
+    proposed = _naming_stems(f"{card.get('task') or ''} {card.get('title') or ''}", drop)
     return sorted(proposed & said)
 
 
@@ -695,6 +707,7 @@ def run_offer_pass(
     asked_for_work: bool = False,
     ask: Ask | None = None,
     open_jobs: list[dict[str, Any]] | None = None,
+    took_on_work: bool = False,
 ) -> dict[str, Any]:
     """
     Find, fill, check. Returns {"new": [proposals], "candidates", "dropped", "fills", "checks"}.
@@ -703,12 +716,16 @@ def run_offer_pass(
     the check names the one a line tells again, and the proposal carries it as
     ``retells`` so the parser binds by reference.
 
+    ``took_on_work``: the player's line took on work no job on record can be
+    (accepts_unrecorded_work); the other side's spoken answer is a candidate.
+
     ``ask(system, user, max_tokens=..., phase=...)`` returns the model's JSON
     (a dict) or raises. With no ``ask`` nothing is proposed: the engine never
     guesses a card from keywords alone.
     """
     candidates, dropped = find_offer_candidates(
-        narration, player_input, npcs=npcs, locations=locations, marks=marks, asked_for_work=asked_for_work
+        narration, player_input, npcs=npcs, locations=locations, marks=marks, asked_for_work=asked_for_work,
+        took_on_work=took_on_work,
     )
     report: dict[str, Any] = {
         "new": [],
@@ -786,6 +803,10 @@ def run_offer_pass(
         if not check["ok"] and not (retells and check.get("in_text")):
             continue
         proposal = card_to_proposal(candidate, card, check)
+        # The player asked for or took on work in this exchange: the engine's
+        # own sign of an offer, which validate_quest_changes reads when its
+        # keyword judge finds none in the giver's words (fantasy100 T29, T70).
+        proposal["_checked"]["asked"] = bool(asked_for_work or took_on_work)
         if retells:
             proposal["retells"] = retells
         report["new"].append(proposal)
@@ -818,6 +839,30 @@ def typed_accepts(player_input: str, open_offers: list[dict[str, Any]] | None) -
         return []
     code = str(picked.get("code") or (f"Q{picked['id']}" if picked.get("id") else picked.get("title") or ""))
     return [{"quest": code, "action": "accept", "evidence": line[:300], "_typed": True}]
+
+
+def accepts_unrecorded_work(player_input: str, open_jobs: list[dict[str, Any]] | None) -> bool:
+    """
+    The player's own line takes on work that no open job on record can be: the
+    giver's answer is then read as the offer, as for a line asking for work.
+
+    An acceptance the engine can bind (the one open offer, a job the line names
+    by ``@Qn`` or by its title words) is that job's, and reads nothing new
+    (fantasy100 T7 took Q1, T90 named "the skilled labor"). With none, the job
+    the player took had no row at all.
+    """
+    line = qp._player_own_line(str(player_input or ""))
+    if not line or not qp.player_accepts(line) or qp.player_refuses(line):
+        return False
+    jobs = [j for j in open_jobs or [] if isinstance(j, dict)]
+    offered = [j for j in jobs if str(j.get("status") or "offered") == "offered"]
+    if len(offered) == 1:
+        return False
+    refs = {f"Q{n}" for n in re.findall(r"@Q(\d+)\b", line, re.I)}
+    if any(str(j.get("code") or "").upper() in refs for j in jobs):
+        return False
+    words = set(re.findall(r"[a-z]{4,}", line.lower()))
+    return not any(qp._title_words(str(j.get("title") or "")) & words for j in jobs)
 
 
 def marks_to_merge(marks: list[dict[str, Any]] | None, mode: str) -> list[dict[str, Any]]:
@@ -910,7 +955,13 @@ def find_progress_candidates(
             continue
         title = str(quest.get("title") or "")
         step = str(quest.get("current_objective") or quest.get("current_step_title") or "")
-        words = qp._title_words(title) | {w for w in qp._stems(step) if len(w) >= 4}
+        # Words that name every job ("work", "labor", "skilled") tell none: "It's
+        # not easy work, but it pays" was work on "Seeking skilled labor! Good
+        # pay for honest work" and the offered candle-dipping became its step
+        # (fantasy100 T55); "I use my Old Script skill" was work on "skilled
+        # labor" and reading a coin became its step (T62).
+        words = {w for w in qp._title_words(title) if qp._stem(w) not in qp._GENERIC_JOB_STEMS} | {
+            w for w in qp._stems(step) if len(w) >= 4 and w not in qp._GENERIC_JOB_STEMS}
         if not words:
             continue
         for sentence in qp._SENTENCE_SPLIT.split(text):

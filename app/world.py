@@ -27685,6 +27685,25 @@ def apply_turn(
         # turn resolves) and after the offer-accept regex above.
         quest_changes = result.get("quest_changes") if isinstance(result.get("quest_changes"), dict) else None
         quest_marks = result.get("quest_marks") if isinstance(result.get("quest_marks"), list) else None
+        # A wait or a sleep is the narrator's scene, not the player's doing: no
+        # job is filed from it (fantasy100 T70: a sleep told as a morning of
+        # woodcutting filed "cut firewood"), and no story terms or pay are
+        # settled from it below. Updates stay with validate_quest_changes,
+        # whose passive-turn rule already refuses a job finished in a wait.
+        wait_turn = input_kind == "wait"
+        if wait_turn:
+            offered_in_wait = [n for n in (quest_changes or {}).get("new") or [] if isinstance(n, dict)]
+            marked_in_wait = [m for m in quest_marks or [] if isinstance(m, dict) and str(m.get("op") or "").upper() == "QUEST"]
+            if offered_in_wait or marked_in_wait:
+                turn_ledger.note(
+                    "quest", "wait_turn_offer_dropped",
+                    new=[str(n.get("title") or "")[:80] for n in offered_in_wait],
+                    marks=[str(m.get("title") or "")[:80] for m in marked_in_wait],
+                )
+                if quest_changes:
+                    quest_changes = {**quest_changes, "new": []}
+                if quest_marks:
+                    quest_marks = [m for m in quest_marks if m not in marked_in_wait]
         # The step the player did this turn, decided before the prose by the
         # act's roll (playtest #85b): advanced and paid here, first, through
         # the one step-done path, and closed to the parser for this turn.
@@ -27788,7 +27807,8 @@ def apply_turn(
         # Terms and pay the story settled itself (7B run 6): an agreed price
         # becomes the job's reward, and pay the giver hands over for an active
         # job finishes it, with no second payout of the same gold.
-        if _play_system_enabled(conn, "quests_enabled", True):
+        # A wait's own scene settles no terms and pays no job (see wait_turn above).
+        if not wait_turn and _play_system_enabled(conn, "quests_enabled", True):
             try:
                 quest_report = _settle_story_terms_and_pay(
                     conn, result, quest_report, narration=narration, player_input=player_input, turn=turn,
