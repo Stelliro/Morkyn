@@ -124,20 +124,22 @@ class SettleGold(unittest.TestCase):
                             narrations=['The chandler taps the lantern. "That\'ll be 3 gold, flat-runner."'])
         self.assertEqual((result["player"]["gold_delta"], note["source"]), (-3, "price_agreed_earlier"))
 
-    def test_t47_no_quote_anywhere_rolls_a_small_spend(self):
+    def test_t47_no_quote_anywhere_moves_nothing(self):
+        # Was a rolled small spend: since fantasy100 (F188 cont. 4) the die never sizes money.
         result = _turn("You pay her the agreed price, and she wraps it carefully in a cloth.",
                        changes=[{"name": "iron lantern", "quantity_delta": 1}])
         note = self._settle(result, "I buy a lantern.")
-        self.assertEqual(note["source"], "payment_unpriced_band")
-        self.assertEqual(result["player"]["gold_band"], "-small")
-        self.assertNotIn("gold_delta", result["player"])
+        self.assertEqual(note["source"], "payment_unpriced_held")
+        self.assertNotIn("gold_band", result["player"])
+        self.assertFalse(result["player"].get("gold_delta"))
 
-    def test_t72_wages_shown_roll_the_size_word(self):
+    def test_t72_wages_with_only_a_size_word_move_nothing(self):
+        # Was the size word rolled: since fantasy100 (F188 cont. 4) no die sizes money.
         result = _turn("Abel Hollis [[D]] nods and hands over a moderate bag of coin for your efforts.",
                        changes=[{"name": "Five gold coins", "quantity_delta": 4}])
         note = self._settle(result, "Then I tell Abel it's finished and ask for the coin.")
-        self.assertEqual(note["source"], "prose_received_band")
-        self.assertEqual(result["player"]["gold_band"], "moderate")
+        self.assertEqual(note["source"], "received_coin_unsummed_held")
+        self.assertNotIn("gold_band", result["player"])
         self.assertEqual(result["inventory_changes"], [])  # coin is never a pack item
 
     def test_t55_sale_coin_takes_the_named_sum(self):

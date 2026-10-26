@@ -100,22 +100,24 @@ class TestOffModeTranslatesBands(unittest.TestCase):
         with db.connect() as conn:
             report = world.resolve_turn_bands(conn, turn, turn=1, options={"band_authority": "off"})
         self.assertEqual(report["mode"], "off")
-        self.assertGreater(turn["player"]["gold_delta"], 0)
+        # Gold is the exception since fantasy100 (F188 cont. 4): a band with no stated sum
+        # moves nothing in any mode (no die, fixed or rolled, sizes money).
+        self.assertNotIn("gold_delta", turn["player"])
         self.assertNotIn("gold_band", turn["player"])
         self.assertGreater(turn["inventory_changes"][0]["quantity_delta"], 0)
         self.assertNotIn("quantity_band", turn["inventory_changes"][0])
         self.assertGreater(turn["skill_changes"][0]["delta"], 0)
         self.assertNotIn("delta_band", turn["skill_changes"][0])
-        self.assertEqual(len(report["rolls"]), 3)
+        self.assertEqual(len(report["rolls"]), 2)
         self.assertTrue(all(r.get("fixed") for r in report["rolls"]))
-        self.assertEqual(len(report["lines"]), 3)
+        self.assertEqual(len(report["lines"]), 2)
 
     def test_off_keeps_explicit_numbers_and_negative_bands(self):
         _fresh_world()
-        turn = {"player": {"gold_delta": 7, "health_band": "-small"}}
+        turn = {"player": {"xp_delta": 7, "health_band": "-small"}}
         with db.connect() as conn:
             world.resolve_turn_bands(conn, turn, turn=1, options={"band_authority": "off"})
-        self.assertEqual(turn["player"]["gold_delta"], 7, "a bare number still passes through untouched")
+        self.assertEqual(turn["player"]["xp_delta"], 7, "a bare number still passes through untouched")
         self.assertLess(turn["player"]["health_delta"], 0)
 
     def test_apply_turn_in_off_mode_pays_grants_and_teaches(self):
@@ -131,7 +133,8 @@ class TestOffModeTranslatesBands(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AI_RPG_BAND_AUTHORITY": "off"}):
             state = world.apply_turn(turn, "I climb down from the wall and collect my pay")
         after = _player()
-        self.assertGreater(int(after["gold"]), int(before["gold"]), "GOLD small must pay something")
+        # "counts out your pay" names no sum: since fantasy100 (F188 cont. 4) nothing moves.
+        self.assertEqual(int(after["gold"]), int(before["gold"]), "GOLD small with no stated sum pays nothing")
         self.assertIsNotNone(_rope_qty(), "GRANT rope must create the row")
         self.assertGreaterEqual(_rope_qty(), 1)
         self.assertGreater(_skill_value("Climbing"), 3, "SKILL Climbing DELTA small must raise the rank")
@@ -140,7 +143,7 @@ class TestOffModeTranslatesBands(unittest.TestCase):
         self.assertTrue(dice.get("rolls"), "the fixed mapping is still reported on the state")
         with db.connect() as conn:
             rows = conn.execute("SELECT COUNT(*) AS n FROM dice_rolls WHERE turn = ?", (dice.get("turn"),)).fetchone()
-        self.assertEqual(int(rows["n"]), 3, "and recorded in the audit table")
+        self.assertEqual(int(rows["n"]), 2, "and recorded in the audit table (rope and skill; gold is not rolled)")
 
 
 if __name__ == "__main__":

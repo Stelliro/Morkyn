@@ -93,7 +93,9 @@ _REPORTED_RE = re.compile(
     r"\b(?:tell|tells|told|telling|ask|asks|asked|asking|order|orders|ordered|beg|begs|begged|urge|urges|urged|"
     r"remind|reminds|reminded|warn|warns|warned|promise|promises|promised|instruct\w*|"
     r"let|lets|say|says|said|swear|swore|agree|agrees|agreed|offer|offers|offered)\b"
-    r"(?:\s+(?!(?:to|that|if|whether|i|we|and|then|but|or|while)\b)[\w'’-]+){0,4}?"
+    # The one told may be a code and a place code ("tell @A in #L1 that I will sell him
+    # the dried meat tomorrow", fantasy100 T98).
+    r"(?:\s+(?!(?:to|that|if|whether|i|we|and|then|but|or|while)\b)[@#!&]?[\w'’-]+){0,4}?"
     r"\s+(?=(?:to|that|if|whether|what|where|when|why|how|i|we|i" + _AP + r"ll|we" + _AP + r"ll)\b)",
     re.I,
 )

@@ -322,16 +322,18 @@ class TestTheEngineTakesOnlyShownGold(unittest.TestCase):
     def test_baseline_t2_shooting_takes_no_gold(self):
         _play(_turn(B2, {"gold_delta": -10}), "i shoot Marisol", Reader(TRUTH["B2"]))
         self.assertEqual(_gold(), 12)
-        self.assertTrue(_notes("loss_not_shown"))
+        # Since fantasy100 (F188 cont. 4) a GOLD number no reader finds in the line or the
+        # prose moves nothing before the interpreter is asked: the die never sizes money.
+        self.assertTrue(_notes("band_money_voided"))
         shadow = _notes("gold_shadow")
         self.assertTrue(shadow)
         trace = _last_trace()
         record = [t for t in trace["model_trace"] if t.get("phase") == "interpreter_gold"][-1]
-        self.assertEqual(record["engine"]["settled"] < 0, True)
+        self.assertEqual(record["engine"]["settled"], 0)
         self.assertEqual(record["engine"]["final"], 0)
         self.assertIs(record["interpreter"]["out"], False)
-        self.assertIs(record["agree"], False)
-        self.assertEqual([(e["direction"], e["status"]) for e in record["events"]], [("out", "refused")])
+        self.assertIs(record["agree"], True)
+        self.assertEqual(record["events"], [])
         # every ask's prompt, reply and seconds are in the trace and model_usage
         for phase in (I.PHASE_GOLD_OUT, I.PHASE_GOLD_IN):
             requests = [t for t in trace["model_trace"] if t.get("phase") == phase and t.get("event") == "request"]
@@ -359,9 +361,12 @@ class TestTheEngineTakesOnlyShownGold(unittest.TestCase):
         self.assertEqual([(e["direction"], e["amount"], e["status"]) for e in record["events"]], [("out", 5, "applied")])
         self.assertEqual(record["readers"]["paid"], [5])
 
-    def test_a_robbery_takes_the_rolled_sum(self):
+    def test_a_robbery_with_no_sum_takes_nothing(self):
+        # Was "takes the rolled sum": since fantasy100 (F188 cont. 4) the die never sizes
+        # money; a theft with no sum stated moves nothing until the engine owns theft (m0).
         _play(_turn(ROBBERY, {"gold_band": "-small"}), "i walk through the market", Reader(TRUTH["ROBBERY"]))
-        self.assertLess(_gold(), 12)
+        self.assertEqual(_gold(), 12)
+        self.assertTrue(_notes("band_money_voided"))
 
     def test_a_fine_is_paid(self):
         _play(_turn(FINE, {"gold_delta": -10}), "i pay the fine", Reader(TRUTH["FINE"]))
@@ -370,7 +375,8 @@ class TestTheEngineTakesOnlyShownGold(unittest.TestCase):
     def test_a_yes_biased_model_takes_what_main_took(self):
         # See test_a_yes_biased_model_passes_the_check_and_gets_mains_behaviour: no worse than main.
         _play(_turn(B2, {"gold_delta": -10}), "i shoot Marisol", YesBiased())
-        self.assertLess(_gold(), 12)
+        # Since fantasy100 the unstated -10 is voided before any ask: better than main.
+        self.assertEqual(_gold(), 12)
 
     def test_a_scene_with_no_coin_keeps_the_purse_when_the_check_says_no(self):
         def model(phase, prompt, max_tokens=8):
@@ -378,11 +384,13 @@ class TestTheEngineTakesOnlyShownGold(unittest.TestCase):
         _play(_turn(B2, {"gold_delta": -10}), "i shoot Marisol", model)
         self.assertEqual(_gold(), 12)
 
-    def test_a_no_biased_model_keeps_the_purse_and_cuts_no_prose(self):
-        # A false no on a real payment refuses the loss (measured as disagreement
-        # with the prose readers), and the paying sentence is left, not cut.
+    def test_a_no_biased_model_is_overruled_by_a_shown_payment_and_cuts_no_prose(self):
+        # A false no on a payment the narration shows ("You pay the merchant 5 gold") no
+        # longer refuses it (fantasy100 T19: the prose's own payment outranks the ask's
+        # no); the paying sentence is left, not cut.
         _play(_turn(PURCHASE, {"gold_delta": -5}), "i buy the rope", NoBiased())
-        self.assertEqual(_gold(), 12)
+        self.assertEqual(_gold(), 7)
+        self.assertTrue(_notes("gold_out_overruled_by_prose"))
         trace = _last_trace()
         self.assertIn("You pay the merchant 5 gold", trace["final_turn"]["narration"])
         record = [t for t in trace["model_trace"] if t.get("phase") == "interpreter_gold"][-1]
@@ -395,9 +403,9 @@ class TestTheEngineTakesOnlyShownGold(unittest.TestCase):
         self.assertEqual(_gold(), 2)
         with mock.patch.dict(os.environ, {"AI_RPG_INTERPRETER": "off"}):
             _play(_turn(B2, {"gold_delta": -2}), "i shoot Marisol", Reader(TRUTH["B2"]))
-        # The loss is applied as before; its size is the band roll's, which depends on the
-        # random state earlier tests leave (it failed only in the full suite: 1 != 0).
-        self.assertLess(_gold(), 2)
+        # A GOLD -2 no reader finds in the prose ("i shoot Marisol") was the band roll's;
+        # since fantasy100 (F188 cont. 4) the die never sizes money, so nothing moves.
+        self.assertEqual(_gold(), 2)
 
     def test_a_gain_stays_with_the_existing_rules(self):
         # Shadow only for gains: a no from the interpreter does not touch it.
