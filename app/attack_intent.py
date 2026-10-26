@@ -123,6 +123,15 @@ def people_here(context: dict[str, Any] | None) -> list[dict[str, Any]]:
         for code in by_code:
             if code not in order:
                 order.append(code)
+    # The player's companions on record (the party): with the player, never a body coming at them.
+    party_ids: set[int] = set()
+    for member in ctx.get("party") or []:
+        if isinstance(member, dict):
+            try:
+                party_ids.add(int(member.get("npc_id") or 0))
+            except (TypeError, ValueError):
+                pass
+    party_ids.discard(0)
     out: list[dict[str, Any]] = []
     for code in order:
         if not code or code in dead:
@@ -131,7 +140,13 @@ def people_here(context: dict[str, Any] | None) -> list[dict[str, Any]]:
         name = _clean(record.get("name") or names.get(code) or names.get(code.lower()) or "")
         if not name:
             continue
-        out.append({**record, "code": code, "name": name})
+        entry = {**record, "code": code, "name": name}
+        try:
+            if party_ids and int(record.get("id") or 0) in party_ids:
+                entry["in_party"] = True
+        except (TypeError, ValueError):
+            pass
+        out.append(entry)
     return out[:MAX_PEOPLE]
 
 
@@ -1087,6 +1102,12 @@ def bodies_not(person: dict[str, Any], line: str, prose: str = "",
         if line_names_person(line, person) or _sex_conflict(person, head):
             out.add(head)
             continue
+        if person.get("in_party") and head in _UNKNOWN_IDENTITY:
+            # "the dark shape coming at me" with Gisela, the player's companion on record, beside them
+            # (fantasy100 T45): a shape, a figure or a stranger is someone the player cannot name; the
+            # one walking with them is not it.
+            out.add(head)
+            continue
         if any(head in _words_for(other) for other in others):
             out.add(head)
             continue
@@ -1100,6 +1121,49 @@ def bodies_not(person: dict[str, Any], line: str, prose: str = "",
         if fit_others:
             out.add(head)
     return out
+
+
+# The words for someone that say the player cannot tell who it is (world._VAGUE_FIGURES without "person").
+_UNKNOWN_IDENTITY = frozenset({"figure", "shape", "silhouette", "form", "someone", "stranger"})
+
+
+def present_creature(line: str, people: list[dict[str, Any]] | None, prose: str) -> str:
+    """The thing the line's blow names that the last prose shows here and that is a word for no one present, or "".
+
+    fantasy100 T76: "I swing my broom at the direwolf's snout" after "You crest
+    a rise to find the direwolf crouched on a ledge ... The direwolf growls"
+    (T75), with Gisela the woodcutter on record and no row for the wolf. The
+    wolf closed on no one, so shown_kinds had no wolf and the blow went at no
+    one (the asks said no to Gisela); the attack line is the player's own
+    word that it is there to be hit. Positive evidence only: the noun is in
+    the blow's own clause, the prose shows a being of it present
+    (unnamed.present_kinds), no one here is called by it (their kind, job,
+    name), and the clause names no code or person present. A word for
+    someone ("the man", "the shape") is not this: the figure hints own those.
+    """
+    text = str(line or "")
+    if not text.strip() or not str(prose or "").strip():
+        return ""
+    here = [p for p in people or [] if isinstance(p, dict)]
+    focus = " ".join(attack_clauses(text)) or text
+    if line_codes(focus) or any(line_names_person(focus, p) for p in here):
+        return ""
+    try:
+        from app.unnamed import _person_words, _vague_words, present_kinds
+
+        person_like = _person_words() | _vague_words()
+        names = {w for p in here for w in re.findall(r"[a-z]+", str(p.get("name") or "").lower())}
+        present = present_kinds(prose, names=names)
+    except Exception:
+        return ""
+    for noun in object_nouns(focus):
+        if not noun or _is_fixture(noun) or noun in person_like or generic_body(noun) == "person":
+            continue
+        if any(plausible_word(p, noun) or noun in _words_for(p) for p in here):
+            continue
+        if noun in present:
+            return noun
+    return ""
 
 
 def _job_words_all() -> frozenset[str]:
@@ -1748,6 +1812,25 @@ def decide(
                 inferred["opposition"] = None
                 inferred["not_at"] = [str(ref.get("code")).upper()]
                 return None, report
+            # The blow names a creature the last prose shows here that no one present is (fantasy100
+            # T76, "the direwolf" found crouched on a ledge, closing on no one): filed and aimed at,
+            # before the trigger's person or the asks take the blow.
+            noun = present_creature(line, people, prose) if minter is not None and not kind_figures(line, people) else ""
+            if noun:
+                minted = minter(noun)
+                if isinstance(minted, dict) and minted.get("code"):
+                    report["unknown_noun"] = noun
+                    if ref.get("code") and str(ref.get("code")).upper() != str(minted.get("code")).upper():
+                        report["not_the_lines"] = {"code": str(ref.get("code")), "name": _clean(ref.get("name"))}
+                        inferred["npc_ref"] = None
+                        inferred["opposition"] = None
+                        inferred["not_at"] = [str(ref.get("code")).upper()]
+                    check = attack_check(minted, inferred, context)
+                    check["replaces_inferred"] = True
+                    report["target"] = check["attack"]
+                    report["skill"] = check["skill_code"]
+                    report["from"] = "minted"
+                    return check, report
             if ref.get("code"):
                 person = next(
                     (p for p in people if str(p.get("code") or "").upper() == str(ref.get("code")).upper()), None

@@ -170,6 +170,17 @@ _BE_HAVE = frozenset({"is", "was", "are", "were", "has", "have", "had"})
 # A creature row of any kind here is "the creature" (_here; attack_intent._kinds_of).
 VAGUE_CREATURES = frozenset({"creature", "animal", "beast"})
 CREATURE_KIND = "creature"
+# A part of a body is never a body of its own (fantasy100 T75 "A massive head turns slowly to look at
+# you", T21 "four familiar faces nod to you" -> rows Face 1..4). This is a word list, called out as
+# one: English anatomy is a closed class (like _IRREGULAR is morphology), and no grammar tells "a
+# head turns" from "a ghoul turns". A figure of these words is never asked about, filed or minted.
+BODY_PARTS = frozenset({
+    "head", "face", "eye", "ear", "nose", "mouth", "lip", "tongue", "tooth", "jaw", "cheek", "chin", "brow",
+    "forehead", "skull", "neck", "throat", "shoulder", "arm", "elbow", "wrist", "hand", "palm", "fist", "finger",
+    "thumb", "knuckle", "chest", "breast", "back", "spine", "belly", "stomach", "gut", "hip", "leg", "knee",
+    "thigh", "ankle", "foot", "toe", "heel", "skin", "bone", "heart", "hair", "beard", "claw", "paw", "fang",
+    "tail", "wing", "hoof", "horn", "snout", "muzzle", "maw", "hackle", "mane", "tusk", "talon", "gaze",
+})
 # The mention forms that can file a new figure (a "the" refers back to one met).
 _MINTING_FORMS = frozenset({"count", "another", "more", "ordinal"})
 # Irregular English plurals (morphology, not meaning).
@@ -221,6 +232,54 @@ def _person_words() -> frozenset[str]:
     from app import world
 
     return frozenset(re.findall(r"[a-z]+", world._FIGURE_NOUNS)) - {"a"}
+
+
+def _verb_stems(text: str) -> set[str]:
+    """The stems this text uses as verbs: every -ing / -ed participle, and the verb each figure mention acts with.
+
+    Morphology, not meaning: "rising" -> rise, "growled" -> growl, "The
+    direwolf growls low" -> growl. A noun the same text also uses as its verb
+    is the act or the sound, not a body (act_noun).
+    """
+    plain = _plain(text)
+    words = [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'’-]*", plain)]
+    forms = {w for w in words if re.fullmatch(r"[a-z]*[aeiouy][a-z]*(?:ing|ed)", w) and len(w) > 4}
+    try:
+        for m in mentions(plain):
+            first = str(m.get("verb_phrase") or "").split(" ", 1)[0]
+            if first and first not in _BE_HAVE:
+                forms.add(first)
+    except Exception:
+        pass
+    stems: set[str] = set()
+    for w in forms:
+        for end in ("ing", "ed", "es", "s"):
+            if not w.endswith(end) or len(w) - len(end) < 3:
+                continue
+            base = w[: -len(end)]
+            stems |= {base, base + "e"}
+            if len(base) > 3 and base[-1] == base[-2]:
+                stems.add(base[:-1])  # "stopped" -> stop
+            if end in {"ed", "es"} and base.endswith("i"):
+                stems.add(base[:-1] + "y")  # "cried" -> cry
+            break
+    return stems
+
+
+def act_noun(kind: str, stems: set[str]) -> bool:
+    """A singular noun this text also uses as its verb: "a distant growl" beside "the direwolf growls", "a rise"
+    beside "hackles rising" (fantasy100 T75). An act, a sound or a motion, never a figure."""
+    return bool(kind) and kind in stems
+
+
+def no_body(kind: str, stems: set[str] | None = None) -> str:
+    """Why this noun is no figure by its word class, or "": "body part" or "act noun"."""
+    kind = singular(kind)
+    if kind in BODY_PARTS:
+        return "body part"
+    if stems is not None and act_noun(kind, stems):
+        return "act noun"
+    return ""
 
 
 def _vague_words() -> frozenset[str]:
@@ -1102,8 +1161,34 @@ def _alive_anywhere(conn, kind: str) -> bool:
     return False
 
 
-def _introduced(ms: list[dict[str, Any]], plain: str, names: Any = ()) -> dict[str, Any] | None:
-    """The mention that introduces a kind by "the": a body closing on the player.
+def line_kinds(line: str) -> set[str]:
+    """The things the player's own line names (its noun phrases' heads and the kinds it acts on), singular.
+
+    "I climb after the clawed foot marks ... and look for the direwolf" ->
+    {"mark", "rock", "direwolf"}; "I swing my broom at the direwolf's snout"
+    -> {"direwolf", "snout"}. Quoted speech is not read.
+    """
+    if not str(line or "").strip():
+        return set()
+    try:
+        from app import venues
+        from app.attack_intent import object_nouns
+
+        nouns = set(object_nouns(venues.strip_speech(str(line))))
+    except Exception:
+        nouns = set()
+    return {singular(n) for n in nouns | player_objects(line) if n} - {""}
+
+
+def _introduced(ms: list[dict[str, Any]], plain: str, names: Any = (), named: Any = ()) -> dict[str, Any] | None:
+    """The mention that introduces a kind by "the": a body closing on the player, or one the player looks for and finds.
+
+    ``named`` are the kinds the player's own line names (line_kinds). A "the
+    <kind>" the player's line names and the prose has the player find, see or
+    face ("look for the direwolf" -> "You crest a rise to find the direwolf
+    crouched on a ledge", fantasy100 T75) is the prose introducing it too, as
+    the player's words and the scene agree on a thing there. Body parts and
+    act nouns are never introduced (no_body).
 
     "The deathclaw charges you" and "The dire wolf lunges, and you steel
     yourself" (base100 T22) have the noun as the subject of an attack or of a
@@ -1120,16 +1205,37 @@ def _introduced(ms: list[dict[str, Any]], plain: str, names: Any = ()) -> dict[s
     from app.world import _NAME_SCENERY_RE
 
     known = {str(n).lower() for n in names or ()}
+    wanted = {singular(str(n)) for n in named or ()} - {""}
     for m in ms:
-        if m["form"] != "the" or not m["acts"] or not m["subject"]:
+        if m["form"] != "the" or not m["acts"]:
             continue
         if m["kind"] in known or m["noun"].lower() in known or _NAME_SCENERY_RE.fullmatch(m["kind"]):
+            continue
+        if m["kind"] in BODY_PARTS:
+            continue
+        if (m.get("seen") and m["kind"] in wanted and not _is_fixture_word(m["kind"])
+                and any(o["subject"] and o["acts"] for o in ms)):
+            # The player's line looks for it, the player finds it here, and the prose has it doing
+            # something ("The direwolf growls low", T75). A place the player goes into and finds
+            # ("I go into the clinic" / "You enter the clinic. ... The clinic is small") does nothing.
+            return m
+        if not m["subject"]:
             continue
         if not hostile_act(m.get("verb_phrase") or ""):
             continue
         if m.get("you_object") or m.get("you_sentence"):
             return m
     return None
+
+
+def _is_fixture_word(noun: str) -> bool:
+    """Scenery or a fixture the attack reader never takes for a body ("the lock", "the door")."""
+    try:
+        from app.attack_intent import _is_fixture
+
+        return bool(_is_fixture(noun))
+    except Exception:
+        return False
 
 
 def _met_as_new(plain: str, kind: str) -> bool:
@@ -1218,9 +1324,14 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
     objects = sorted(player_objects(line)) if line else []
     if objects:
         result["_figure_objects"] = objects
+    # The things the player's line names: a "the <kind>" of one of them the player finds is introduced.
+    named = sorted(line_kinds(line)) if line else []
+    if named:
+        result["_figure_named"] = named
     found = mentions(narration, objects, _roster_names(conn))
     if not found:
         return {}
+    stems = _verb_stems(narration)
     people = _person_words()
     stored = _stored_kinds(conn)
     op_npcs = [n for n in result.get("npcs") or [] if isinstance(n, dict) and n.get("_unnamed_kind")]
@@ -1240,9 +1351,21 @@ def settle(result: dict[str, Any], narration: str, conn, *, ask: bool, call, tra
         # "The dire wolf lunges, and you steel yourself" with no wolf anywhere in
         # the save: the prose introduces it (base100 T22), so the "the" form
         # counts as a count of one here and below (file_figures).
-        introduced = _introduced(ms, plain, _roster_names(conn)) if kind not in vague and kind not in people else None
+        introduced = _introduced(ms, plain, _roster_names(conn), named) if kind not in vague and kind not in people else None
         if introduced is not None and _alive_anywhere(conn, kind):
             introduced = None
+        # A part of a body, or the act or sound the same text has as its verb ("A massive head
+        # turns", "a distant growl echoing", "You crest a rise", "four familiar faces nod",
+        # fantasy100 T75, T21): no figure by its word class, and no ask is spent on it. A body
+        # part is none even if an older save numbered it (Face 1..4); an act noun only when the
+        # records hold no figure of that word.
+        why = "body part" if kind in BODY_PARTS and kind not in people else ""
+        if not why and not (kind in people or kind in stored or kind in ops) and act_noun(kind, stems):
+            why = "act noun"
+        if why:
+            if any(m["you"] and m["acts"] and m["form"] in _MINTING_FORMS for m in ms) or introduced is not None:
+                turn_ledger.note("npc", "noun_is_no_figure", kind=kind, by="word_class", why=why)
+            continue
         if kind in people or kind in stored:
             verdicts[kind] = {"figure": True, "hostile": None, "by": "record"}
         elif kind in ops:
@@ -1738,6 +1861,9 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
         verdict = verdicts.get(kind) or {}
         if not (kind in people or kind in stored or op or verdict.get("figure")):
             continue
+        if kind in BODY_PARTS and not op and kind not in people:
+            # "four familiar faces nod to you" (T21): a part of a body is no one, whatever the save holds.
+            continue
         # One person seen as "a man" may be anyone here: the figure hints own
         # those. Several are numbered only when the prose counts them and they
         # meet the player ("Two men step out and level rifles at you"), not a
@@ -1750,7 +1876,8 @@ def file_figures(conn, result: dict[str, Any], narration: str, location_id: int 
         ambiguous = False
         # A "the <kind>" acting on the player with no living one anywhere in the
         # save introduces it: one here (base100 T22, "The dire wolf lunges").
-        introduced = _introduced(ms, _plain(narration), _roster_names(conn)) if kind not in vague and not here else None
+        introduced = _introduced(ms, _plain(narration), _roster_names(conn), result.get("_figure_named") or ()) \
+            if kind not in vague and not here else None
         if introduced is not None and _alive_anywhere(conn, kind):
             introduced = None
         # A group the prose counts itself ("two raiders", "two more") is that many: nothing is rolled.
@@ -2043,6 +2170,25 @@ def shown_kinds(*texts: Any, names: Any = ()) -> set[str]:
     hostile way ("The fog swallows you", "A barrel rolls toward you"), is no
     evidence of a creature.
     """
+    return _creature_kinds(texts, names, hostile=True)
+
+
+def present_kinds(*texts: Any, names: Any = ()) -> set[str]:
+    """The kinds of creature these texts show here, attacking or not: doing something, or found or seen by the player.
+
+    fantasy100 T75: "You crest a rise to find the direwolf crouched on a
+    ledge ... The direwolf growls low in its throat": the wolf closes on no
+    one, so shown_kinds has no wolf, yet it is there and the player's next
+    line swings at it (T76). What the attack reader mints for a blow that
+    names it (attack_intent.present_creature, mint_shown); the two figure
+    asks still decide that it is a being ("The fog swallows you" is shown
+    acting too). Left out as shown_kinds leaves them out, and a part of a
+    body or an act noun (no_body: "A massive head turns", "a distant growl").
+    """
+    return _creature_kinds(texts, names, hostile=False)
+
+
+def _creature_kinds(texts: Any, names: Any, *, hostile: bool) -> set[str]:
     from app.attack_line import hostile_act
     from app.world import _NAME_SCENERY_RE
 
@@ -2053,10 +2199,16 @@ def shown_kinds(*texts: Any, names: Any = ()) -> set[str]:
         if not str(text or "").strip():
             continue
         sentences = _sentences(str(text))
+        stems = None if hostile else _verb_stems(str(text))
         for m in mentions(str(text)):
-            if not m["subject"] or m["kind"] in people or m["kind"] in known or m["noun"].lower() in known:
+            if m["kind"] in people or m["kind"] in known or m["noun"].lower() in known:
                 continue
-            if _NAME_SCENERY_RE.fullmatch(m["kind"]) or not hostile_act(m.get("verb_phrase") or ""):
+            if _NAME_SCENERY_RE.fullmatch(m["kind"]):
+                continue
+            if hostile:
+                if not m["subject"] or not hostile_act(m.get("verb_phrase") or ""):
+                    continue
+            elif not ((m["subject"] and m["acts"]) or m["seen"]) or no_body(m["kind"], stems):
                 continue
             try:
                 following = sentences[sentences.index(m["sentence"]) + 1]
@@ -2084,7 +2236,7 @@ def mint_shown(conn, narration: str, kind: str, location_id: int | None, *, call
     word (the figure hints' own), one is already here, or an ask says no.
     """
     kind = singular(kind)
-    if not kind or not location_id or kind in _person_words() or kind in _vague_words():
+    if not kind or not location_id or kind in _person_words() or kind in _vague_words() or kind in BODY_PARTS:
         return None
     ms = [m for m in mentions(narration, (kind,), _roster_names(conn)) if m["kind"] == kind and (m["subject"] or m["seen"])]
     if not ms and line:
@@ -2093,8 +2245,10 @@ def mint_shown(conn, narration: str, kind: str, location_id: int | None, *, call
         ms = [m for m in mentions(line, (kind,), _roster_names(conn)) if m["kind"] == kind and m["subject"]]
     if not ms:
         return None
-    if kind not in shown_kinds(narration, line, names=_roster_names(conn)):
-        # Not shown attacking (the fog, a barrel seen, a cook spoken of as she): no creature to mint.
+    if kind not in present_kinds(narration, line, names=_roster_names(conn)):
+        # Not shown here (a cook spoken of as she, a head, a growl): no creature to mint. Shown here
+        # but not attacking ("the direwolf crouched on a ledge", fantasy100 T75) is minted when the
+        # two figure asks agree: the player's blow is at it (T76).
         return None
     if _here(conn, int(location_id), kind):
         return None
