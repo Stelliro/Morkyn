@@ -192,7 +192,8 @@ class TestTurnBandResolution(unittest.TestCase):
             report = resolve_turn_bands(conn, turn, turn=1, options={})
         self.assertEqual(report["mode"], "rolled")
         self.assertGreater(turn["player"]["xp_delta"], 0)
-        self.assertGreater(turn["player"]["gold_delta"], 0)
+        # Since fantasy100 (F188 cont. 4) the gold band is never rolled: no die sizes money.
+        self.assertNotIn("gold_delta", turn["player"])
         self.assertGreater(turn["inventory_changes"][0]["quantity_delta"], 0)
         self.assertGreater(turn["npcs"][0]["trust_delta"], 0)
         self.assertGreater(turn["events"][0]["fame_score"], 0)

@@ -280,10 +280,14 @@ class SpendWithNothingBought(WriterOffEnv):
         turn = _verifier_dropped_the_grants(parse_dsl_turn(R2_G2_T6_DSL, R2_G2_T6_INPUT))
         state = world.apply_turn(turn, R2_G2_T6_INPUT)
         self.assertEqual(int(_player()["gold"]), before)
-        lines = " ".join((state.get("dice_rolls") or {}).get("lines") or [])
-        self.assertIn("nothing was bought", lines)
+        # Since fantasy100 (F188 cont. 4) the unpriced band is never rolled at all.
+        rolls = (state.get("dice_rolls") or {}).get("rolls") or []
+        self.assertFalse([r for r in rolls if r.get("tag") == "player.gold_delta"])
 
-    def test_gold_loss_stands_when_an_item_was_bought(self):
+    # The two below were "a band spend with no price still costs". Since fantasy100 (F188
+    # cont. 4) no die sizes money: with no price in the line or the prose nothing moves
+    # until the price is on record (m0). A priced purchase is test_m1_currency_purse's.
+    def test_gold_loss_with_no_price_moves_nothing_even_when_an_item_was_bought(self):
         _fresh_world()
         with db.connect() as conn:
             conn.execute("UPDATE player SET gold = 200 WHERE id = 1")
@@ -295,9 +299,9 @@ class SpendWithNothingBought(WriterOffEnv):
         turn["self_check"] = {"passed": True, "issues_found": [], "corrections_made": []}
         turn["turn_summary"] = "bought rope"
         world.apply_turn(turn, "I buy a coil of rope")
-        self.assertLess(int(_player()["gold"]), 200)
+        self.assertEqual(int(_player()["gold"]), 200)
 
-    def test_a_toll_with_no_grant_still_costs(self):
+    def test_a_toll_with_no_price_moves_nothing(self):
         _fresh_world()
         with db.connect() as conn:
             conn.execute("UPDATE player SET gold = 200 WHERE id = 1")
@@ -306,7 +310,7 @@ class SpendWithNothingBought(WriterOffEnv):
         turn["self_check"] = {"passed": True, "issues_found": [], "corrections_made": []}
         turn["turn_summary"] = "paid the toll"
         world.apply_turn(turn, "I pay the toll")
-        self.assertLess(int(_player()["gold"]), 200)
+        self.assertEqual(int(_player()["gold"]), 200)
 
 
 # --- #46 -----------------------------------------------------------------------

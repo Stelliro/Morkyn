@@ -104,14 +104,19 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
         result = {"narration": prose, "player": {},
                   "inventory_changes": [{"name": "Lantern", "quantity_band": "small"}, {"name": "Rope", "quantity_band": "small"}]}
         note = _settle_stated_gold(result, "I walk back up into Saltmarrow to buy a lantern and a length of rope before the tide.")
-        self.assertEqual(result["player"].get("gold_band"), "-small", note)
+        # Read as a payment with no price; since fantasy100 (F188 cont. 4) no die sizes it:
+        # held until the price is on record (m0).
+        self.assertEqual(note["source"], "payment_unpriced_held", note)
+        self.assertNotIn("gold_band", result["player"])
 
     def test_coins_tossed_into_a_palm_are_a_payment(self):
         prose = ("He rummages through a pouch. When he finally pulls out a handful of silver, he mutters about the tides. "
                  "You count the coins, then toss them into his palm. He nods, grumbling about debts.")
         result = {"narration": prose, "player": {}}
-        _settle_stated_gold(result, "I ask the stallholder who sold me the lantern and rope what I owe, and pay it from my purse.")
-        self.assertEqual(result["player"].get("gold_band"), "-small")
+        note = _settle_stated_gold(result, "I ask the stallholder who sold me the lantern and rope what I owe, and pay it from my purse.")
+        # A payment with no sum: since fantasy100 (F188 cont. 4) held, not die-sized.
+        self.assertEqual(note["source"], "payment_unpriced_held", note)
+        self.assertNotIn("gold_band", result["player"])
 
     def test_a_gain_op_on_the_players_own_purchase_is_a_spend(self):
         # 8B run 147, T62: GOLD +small on buying a meal and a bed grew the purse by 8.

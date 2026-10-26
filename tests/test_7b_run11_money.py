@@ -65,9 +65,12 @@ class ACountedCoinIsItsCount(unittest.TestCase):
         self.assertEqual(result["player"].get("gold_delta"), 1, note)
         self.assertNotIn("gold_band", result["player"])
 
-    def test_a_vague_amount_still_rolls(self):
+    def test_a_vague_amount_moves_nothing(self):
+        # Was "still rolls": since fantasy100 (F188 cont. 4) the die never sizes money; a
+        # vague handful pays when a later scene counts it (_coins_counted_after_handover).
         result, _ = self._settle("She places a handful of polished coins in your palm.")
-        self.assertIn("gold_band", result["player"])
+        self.assertNotIn("gold_band", result["player"])
+        self.assertFalse(result["player"].get("gold_delta"))
 
 
 class OthersLyingIsNotDeception(unittest.TestCase):

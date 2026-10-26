@@ -221,7 +221,11 @@ _TO_SOMEONE_RE = re.compile(r"\b(?:to|for)\s+(?:him|her|them|the|a|an|[A-Z][\w'�
 _OFFER_RE = re.compile(
     # "I put three coin on the counter for the rope" (Saltmarrow run, T8) puts
     # the money down: put/set/lay/place/count out are offers too.
-    r"\b(?:give|pay|offer|hand(?:\s+over)?|trade|slide|toss|put|set|lay|place|count(?:\s+out)?)\s+(?:(?:you|him|her|them|[A-Z][\w'\u2019-]*)\s+)?"
+    # The one paid may be "the clerk" or a code (fantasy100 T53: "I offer the clerk 10
+    # silver"); never me or us: "please pay me the eight gold we agreed" asks to be paid (T94).
+    r"\b(?:give|pay|offer|hand(?:\s+over)?|trade|slide|toss|put|set|lay|place|count(?:\s+out)?)\s+"
+    r"(?:(?:you|him|her|them|@[A-Z]{1,3}|the\s+(?!(?:last|remaining|only|spare)\b)[a-z][\w'\u2019-]*|"
+    r"(?!(?:me|us|myself|ourselves)\b)[A-Z][\w'\u2019-]*)\s+)?"
     r"(?:(?:my|the|all\s+my)\s+)?(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _ANY_COIN
     # "I'll take the job for 10 gold" asks to be paid: only taking the thing
     # on sale ("I'll take it for 4 gold") is an offer to pay.
@@ -264,7 +268,8 @@ def player_trade_offer(own_line: str) -> int | None:
 
 
 _BARE_OFFER_RE = re.compile(
-    r"\b(?:give|pay|offer|hand(?:\s+over)?|put\s+down|count\s+out)\s+(?:(?:you|him|her|them|[A-Z][\w'’-]*)\s+)?"
+    r"\b(?:give|pay|offer|hand(?:\s+over)?|put\s+down|count\s+out)\s+"
+    r"(?:(?:you|him|her|them|@[A-Z]{1,3}|(?!(?:me|us|myself|ourselves)\b)[A-Z][\w'’-]*)\s+)?"
     + _AMOUNT + r"(?=\s*(?:[,.;!?]|\s+(?:and|for|if|but|or)\b))",
     re.I,
 )
@@ -286,7 +291,9 @@ _ACCEPT_WORDS_RE = re.compile(
 # Taking the coin, or handing over a thing: "gives you a warm nod" (T5) and
 # "passes you by" are gestures, not a deal.
 _ACCEPT_ACT_RE = re.compile(
-    r"\b(?:takes|took|accepts|accepted|pockets|pocketed|sweeps\s+up|swept\s+up)\s+(?:the|your)\s+(?:coin|coins|gold|money)\b|"
+    # Any coin of the world's sets: "She takes the silver from your fingers" (fantasy100 T53).
+    r"\b(?:takes|took|accepts|accepted|pockets|pocketed|sweeps\s+up|swept\s+up)\s+(?:the|your)\s+(?:coin|coins|gold|money|"
+    + _ANY_COIN + r")\b|"
     r"\b(?:hands|handed|gives|gave|passes|passed|slides|slid|tosses|tossed)\s+"
     r"(?:you\s+(?!(?:a|an|one)\s+(?:\w+\s+)?(?:nod|smile|look|glance|wink|shrug|grin|frown|sigh|stare|pat|warning)\b)"
     r"(?:the|a|an|it|them|his|her|their|your)\b|"
@@ -445,6 +452,53 @@ def coin_handed_to_player(text: str) -> dict[str, Any] | None:
     taken = _COIN_TAKEN_RE.search(plain)
     if taken:
         return {"span": taken.group(0)[:120], "band": _band_word(taken.group(0))}
+    # Coin that lands in the player's hand: "she upends it into your hand. A handful of
+    # gold coins spill onto your palm" (fantasy100 T48).
+    landed = _COIN_LANDS_IN_HAND_RE.search(plain)
+    if landed:
+        return {"span": landed.group(0)[:120], "band": _band_word(landed.group(0))}
+    return None
+
+
+_COIN_LANDS_IN_HAND_RE = re.compile(
+    r"\b(?:coins?|gold|silver|coppers?|money|" + _ANY_COIN + r")\b[^.!?\n]{0,40}?\b"
+    r"(?:spill|spills|spilled|spilling|pour|pours|poured|pouring|fall|falls|fell|tumble|tumbles|tumbled|land|lands|landed|"
+    r"drop|drops|dropped|rain|rains|rained|slide|slides|slid|clink|clinks|clinked)\s+(?:out\s+)?(?:onto|into|in)\s+"
+    r"your\s+(?:open\s+|outstretched\s+|waiting\s+|cupped\s+)?(?:palm|palms|hand|hands)\b",
+    re.I,
+)
+
+# Coin counted: "You count out the coins Gisela poured into your palm. There are
+# fifteen of them." (fantasy100 T49). The count is in the counting sentence or the
+# one after it; the coin word, when there is one, sits beside the number.
+_COUNT_VERB_RE = re.compile(r"\b(?:count|counts|counted|counting|tally|tallies|tallied)\b", re.I)
+_COUNT_SUM_RE = re.compile(
+    r"\b(?:there\s+(?:are|were)\s+|that['’]s\s+|it\s+comes\s+to\s+|they\s+come\s+to\s+|you\s+count\s+(?:out\s+)?)?"
+    + _AMOUNT + r"(?:\s+(?P<word>" + _ANY_COIN + r"))?(?:\s+(?:coins?|pieces?))?"
+    r"\s*(?P<tail>of\s+them|in\s+all|altogether|all\s+told|in\s+total)?\b",
+    re.I,
+)
+
+
+def coins_counted(text: str) -> dict[str, Any] | None:
+    """A count of coin the narration gives while the coin is counted: {"count", "word", "span"}, or None.
+
+    Only outside quotes, in a sentence that counts coin or the sentence right after
+    one. ``word`` is the coin word beside the number ("fifteen gold coins"), "" when
+    the count names none ("There are fifteen of them")."""
+    plain = _QUOTE_RE.sub(" ", str(text or ""))
+    spans = [s for _, _, s in sentence_spans(plain)]
+    for i, sentence in enumerate(spans):
+        if not (_COUNT_VERB_RE.search(sentence) and re.search(r"\b(?:coins?|them|" + _ANY_COIN + r")\b", sentence, re.I)):
+            continue
+        for candidate in spans[i: i + 2]:
+            for match in _COUNT_SUM_RE.finditer(candidate):
+                if not (match.group("word") or match.group("tail") or re.match(r"\s+(?:coins?|pieces?)\b",
+                                                                               candidate[match.end("n"):], re.I)):
+                    continue
+                value = _number(" ".join(match.group("n").lower().split()))
+                if value:
+                    return {"count": int(value), "word": (match.group("word") or "").strip(), "span": match.group(0)[:120]}
     return None
 
 
