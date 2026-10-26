@@ -319,6 +319,14 @@ belong to, with the date).
   earlier runs used the compact contract; the next live stage is the first on the full contract with
   these fixes; MLE now passes `repeat_penalty` 1.1 for prose (F205; `MORKYN_REPEAT_PENALTY` turns it
   off), also unmeasured live. Stell (2026-10-25, twice): no 8B testing until they say so.
+  The fantasy100 run (2026-10-26, docs/showcase/hermes-fantasy100-findings-2026-10-26.md; Stell: "a 8b 100
+  turn full spectrum playtest with random theme"; theme rolled from the setup presets = fantasy, setup
+  docs/showcase/thornhallow-setup.json; four Sonnet players playing straight, full contract, build 084c3f0):
+  median turn 12.9 s, no fallbacks, 126 fault rows. The cheat fixes held; the open families all showed:
+  money still moved by the band die when no stated sum is read (gains included), stated payments and sales
+  not settled, jobs filed from chatter and paid off a chore while accepted jobs got no row, a prose-only
+  direwolf never filed so three named attacks hit nothing, one woman answering for everyone, and a new
+  narrow class F210 (code travel noted as repaired, no location write; T50, T84-86). No fix started from it.
   The earlier long runs were measured on Qwen3 8B (`D:\morkyn-stage-models\Qwen3-8B-Q4_K_M.gguf` on
   Windows; also in the catalog), so compare Hermes against that. Check `/api/model-status` →
   `file` to see which GGUF actually loaded. On the RTX 4070 Ti a turn takes about 10-40 s on the 8B and about 15 s on
