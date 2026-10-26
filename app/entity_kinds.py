@@ -587,11 +587,24 @@ def _typed_code_travel(rows: list[Any], player_input: str, current_name: str = "
             return row, "bare_code"
         return None
     named = world._movement_destination_from_input(rows, player_input, current_name, names_only=True)
-    if named is None or not _types_code(line, str(named["code"] or "")):
+    if named is None:
         return None
     if not world.travel_intent(player_input):
         return None
-    return named, "typed_and_named"
+    if _types_code(line, str(named["code"] or "")):
+        return named, "typed_and_named"
+    # The line names one place by a word and types the code of another: the
+    # code is the player's own pick. fantasy100 T63 "I leave the road and climb
+    # into the Greywold hills toward #L4, the old ruins, ..." read "the old
+    # ruins" as the place Ruins (L8), so the typed Greywold Ruins was never
+    # bound and the save landed in Ruins. Only one typed code, so a line that
+    # names two of them still goes through the reading and the ask.
+    typed = [
+        r for r in rows if r["code"] and _norm(r["name"]) != current and _types_code(line, str(r["code"]))
+    ]
+    if len(typed) == 1:
+        return typed[0], "typed_over_named"
+    return None
 
 
 def place_by_reference(result: dict[str, Any] | None, rows: list[Any], current_name: str = "", *,
