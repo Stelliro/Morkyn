@@ -2170,6 +2170,21 @@ def facts_to_keep(context: Any, limit: int = 6) -> list[str]:
         else:
             hours = str(place.get("hours") or "").strip()
             facts.append(f"{label[0].upper()}{label[1:]} is closed" + (f"; its hours are {hours}." if hours else "."))
+    # Outside a plotted town the engine knew the same thing (movement_contract.closed_now, the
+    # venue gate's own hours) and the packet dropped it: fantasy100 T84-T86 "head to #L2" at
+    # 08:09, The Shears and Wheel closed (11:00-02:00); the prose sat the player in a bustling
+    # taproom three turns running while the gate kept the save in Thornhallow. Only the closed
+    # ones are said (an open place needs no fact), in the sentence the town path already uses.
+    if not places and isinstance(contract, dict):
+        shut = {str(n or "").strip() for n in contract.get("closed_now") or [] if str(n or "").strip()}
+        for venue in contract.get("venues_here") or []:
+            if len(facts) >= limit:
+                break
+            name = str(venue.get("name") or "").strip() if isinstance(venue, dict) else ""
+            if not name or name not in shut:
+                continue
+            m = re.search(r"\((\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2})\)", str(venue.get("hours") or ""))
+            facts.append(f"{name[0].upper()}{name[1:]} is closed" + (f"; its hours are {m.group(1)}." if m else "."))
     return facts
 
 

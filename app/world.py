@@ -27602,8 +27602,17 @@ def apply_turn(
                 (
                     turn,
                     "system",
-                    "Travel action with no MOVE op; server moved the player to "
-                    f"{movement_report.get('destination') or '?'} ({movement_report.get('rule')})."[:1400],
+                    # A journey the venue gate ended at the door place says where it ended
+                    # (fantasy100 T50: "moved the player to the Chandlers' Guild hall" while
+                    # the save stood in Thornhallow).
+                    (
+                        "Travel action with no MOVE op; server moved the player toward "
+                        f"{movement_report.get('destination') or '?'} ({movement_report.get('rule')}); "
+                        f"{movement_report.get('reason') or 'the journey ended at ' + str(movement_report.get('landed'))}"
+                        if movement_report.get("landed")
+                        else "Travel action with no MOVE op; server moved the player to "
+                        f"{movement_report.get('destination') or '?'} ({movement_report.get('rule')})."
+                    )[:1400],
                 ),
             )
         elif movement_report.get("status") == "dropped_unshown" and movement_report.get("destination"):
