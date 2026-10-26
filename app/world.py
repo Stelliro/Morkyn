@@ -24777,6 +24777,79 @@ def _void_declared_blow_health(conn, result: dict[str, Any], player_input: str,
     return True
 
 
+def _void_untargeted_blow_health(conn, result: dict[str, Any], band_report: dict[str, Any] | None = None) -> bool:
+    """The model's health loss on a turn whose rolled attack found no one is not applied unless a hostile is on record.
+
+    fantasy100 T76: "I swing my broom at the direwolf's snout" rolled melee 15,
+    a success, with no row for the wolf; the attack machinery found no target
+    (attack_untargeted_no_line) and still the draft's damage band
+    (player.health_delta 1d4 = -2) took the player 20 -> 18. The engine rolls
+    the player's blow; a blow back is a fight, and a fight needs someone on
+    record to make it. The rule of _void_declared_blow_health: the model's own
+    loss (not server-authored: the roll's own mishap passes) is voided when the
+    turn's player attack (melee or ranged, rolled) has no target and no one
+    living here is hostile on record or a foe in the encounter that is on.
+    A creature the attack reader filed for the blow is a target, so this is
+    only the blow at nothing on record. Noted ``untargeted_blow_health_not_applied``.
+    """
+    from app.attack_intent import ATTACK_SKILLS, attack_target
+
+    player = result.get("player") if isinstance(result.get("player"), dict) else None
+    if not player:
+        return False
+    if "player.health_delta" in {str(p) for p in (result.get("_server_authored") or [])}:
+        return False
+    loss = int(_float(player.get("health_delta"), 0))
+    if loss >= 0:
+        return False
+    checks = [c for c in result.get("skill_checks") or [] if isinstance(c, dict) and c.get("natural") is not None]
+    attacks = []
+    for check in checks:
+        skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+        if str(skill.get("code") or check.get("skill_code") or "") in ATTACK_SKILLS:
+            attacks.append(check)
+    if not attacks:
+        return False
+    for check in attacks:
+        ref = check.get("npc_ref") if isinstance(check.get("npc_ref"), dict) else {}
+        if attack_target(check) or str(ref.get("code") or "").strip():
+            return False
+    try:
+        here = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0] or 0)
+        rows = [dict(r) for r in conn.execute(
+            "SELECT code, attitude FROM npcs WHERE location_id = ? AND COALESCE(dead, 0) = 0", (here,)
+        ).fetchall()]
+    except Exception:
+        return False
+    foes: set[str] = set()
+    try:
+        from app.encounter_board import load_encounter
+
+        board = load_encounter(conn)
+        if isinstance(board, dict) and board.get("active"):
+            foes = {str(f.get("code") or "").upper() for f in board.get("foes") or [] if isinstance(f, dict)}
+    except Exception:
+        foes = set()
+    hostile = [str(r.get("code") or "") for r in rows
+               if str(r.get("code") or "").upper() in foes or _HOSTILE_ATTITUDE_RE.search(str(r.get("attitude") or ""))]
+    # A hostile figure this turn's prose brings in (settled before the write block, filed after it) is one too.
+    arriving = sorted(k for k, v in (result.get("_figures") or {}).items()
+                      if isinstance(v, dict) and v.get("figure") and v.get("hostile"))
+    if hostile or foes or arriving:
+        turn_ledger.note("health", "untargeted_blow_hostile_kept", health_delta=loss,
+                         codes=hostile or sorted(foes), kinds=arriving)
+        return False
+    player["health_delta"] = 0
+    if isinstance(band_report, dict):
+        band_report.setdefault("lines", []).append(
+            f"health loss refused ({loss}): the player's blow found no one, and no one hostile on record is here"
+        )
+        band_report["voided_health"] = {"health_delta": loss, "why": "untargeted_blow_health_not_applied"}
+    turn_ledger.note("health", "untargeted_blow_health_not_applied", health_delta=loss,
+                     why="the turn's rolled attack has no target; no one hostile on record is here")
+    return True
+
+
 _TRAINING_RE = re.compile(r"\b(?:train\w*|practi[cs]\w*|stud(?:y|ies|ied|ying)|learn\w*|drill\w*|rehears\w*|lesson\w*)\b", re.I)
 _GENERIC_SKILL_WORDS = frozenset({"hand", "hands", "skill", "lore", "work", "craft", "general"})
 
@@ -26750,6 +26823,11 @@ def apply_turn(
                 _void_declared_blow_health(conn, result, player_input, band_report)
             except Exception:
                 pass
+            # A blow of the player's that found no one is no fight to take health in (fantasy100 T76).
+            try:
+                _void_untargeted_blow_health(conn, result, band_report)
+            except Exception as exc:
+                turn_ledger.note("health", "untargeted_blow_check_failed", error=f"{type(exc).__name__}: {exc}"[:200])
         try:
             _record_skill_check_rolls(conn, result, turn)
         except Exception:
