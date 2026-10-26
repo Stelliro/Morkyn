@@ -71,3 +71,23 @@ itself is not among the figure candidates asked about; the attack machinery cann
 **roster rebind** that lets one woman answer for everyone. One new narrow engine class: the code-travel
 repair note that does not reach the save (T50, T84-86). No fix was started from this run (Stell, 2026-10-25:
 fix agents only when asked).
+
+## Did the 2026-10-25 patches hold live?
+
+This is the first live run for the cheat100 fixes (F204-F209), the F192-F201 fixes and the repeat penalty;
+all were unit-tested only. It is the second run on the full contract (cheat100 was the first). Because the
+theme, the player style and the build changed at once, read the counts above as "did the patches hold",
+not as a comparison with the Saltmarrow runs.
+
+| Patch | Held? | Evidence |
+|---|---|---|
+| F203 full contract (budget window = loaded window) | Yes | 16384 loaded and used all run; no compact-contract fallback |
+| F205 repeat penalty 1.1 | Yes, as far as seen | no degenerate loop or runaway draft in 100 turns |
+| F207 a typed place code is the turn's move | **Partly** | worked T22, T39, T51, T98; failed T50, T84-86 with the repair noted and no location write (now F210) |
+| F202 the blow at a thing with no row does not land on a person | **No** | T45 "the dark shape" bound by trigger to Gisela [[N]] (`attack_found source trigger`); the miss meant no damage to her, but the result line named her and the player took the unskilled hurt |
+| F199 / F201 creatures get a row | **No, for a prose-only creature** | F199 covered op-named creatures; the T75-78 direwolf was never in an op or a figure ask, so nothing was filed |
+| F204 trade-atomic (one-sided trades held, stated price applied) | Yes where it ran | T12 the loaf at six copper moved coin and item together; no one-sided trade got through. The sales that never settled (T33, T81) moved nothing at all, which is the unbuilt m0, not this patch |
+| F206 codes and slot words are never items | **Partly** | no code became an item, but `ITEM broom` (a slot word kept in the name) has stood in the inventory since T8 |
+| F209 a spell not held rolls nothing | Not exercised | the player only cast Candlelight, which is on record |
+| F195 jobs filed | **Over-fires** | jobs now filed from remarks and a sleep turn, and paid off a chore (T8); accepted jobs still unfiled |
+| m1 currency in base units | Yes for the arithmetic | every stated sum that was read moved the exact units (T12, T55, T96); the misses are reads, not math |
