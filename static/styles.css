@@ -14449,3 +14449,141 @@ body.compact-mode .indexContent {
   justify-content: flex-end;
   margin-top: 8px;
 }
+
+/* New-game tabs and settings search (Stell, 2026-10-28). The tab is the fold:
+   only the open tab's blocks show; the Optional group's head is gone. */
+.setupSearchBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 10px;
+}
+
+.setupSearchBar input[type="search"] {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 520px;
+}
+
+.setupSearchLocal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.84rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.setupTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+body.setup-tabbed [data-setup-tab]:not(.isSetupTabActive),
+body.setup-tabbed #setupOptionalGroup:not(.isSetupTabActive),
+body.setup-tabbed #setupOptionalGroup > .setupFactGroupHead {
+  display: none !important;
+}
+
+body.setup-tabbed #setupOptionalGroup {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+/* Off the Primary tab the art column is hidden, so the form takes the width. */
+body.setup-tabbed .setupSimpleLayout:not(.isPrimaryTab) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.setupTabStepper {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.setupTabStepper button[hidden] {
+  display: none;
+}
+
+/* Searching: the results stand where the settings are. */
+body.setup-searching .setupSimpleLayout,
+body.setup-searching .setupTabStepper {
+  display: none !important;
+}
+
+.setupSearchResults {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.setupSearchHead {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.setupSearchTab {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--thread);
+}
+
+.setupSearchRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(0, 2fr);
+  gap: 6px 14px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.setupSearchMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.setupSearchName {
+  font-weight: 600;
+}
+
+.setupSearchWhere {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.setupSearchControl {
+  width: 100%;
+  min-width: 0;
+}
+
+.setupSearchChoices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.setupSearchFlash {
+  outline: 1px solid var(--thread);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .setupSearchRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

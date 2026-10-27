@@ -4060,6 +4060,398 @@ function mountOneSetupPage() {
   if (host && sections && sections.parentElement !== host) host.appendChild(sections);
   sections?.classList.remove("setupAdvancedOnly");
   document.querySelectorAll(".setupSection").forEach((section) => section.classList.add("active"));
+  initSetupTabs();
+}
+
+/* ---- New-game tabs (Stell, 2026-10-28) ------------------------------------
+ * The one page is shown a tab at a time. Each tab names the blocks it shows;
+ * the section headings stop folding while tabbed (the tab is the fold). */
+const SETUP_TABS = [
+  { key: "primary", label: "Primary", panels: ["#setupPrimaryGroup", ".setupSimpleArtCol"] },
+  { key: "identity", label: "Identity", panels: ["#setupBlockIdentity"] },
+  { key: "powers", label: "Powers", panels: ["#setupBlockPowers"] },
+  { key: "world", label: "World", panels: ["#setupBlockWorld"] },
+  { key: "people", label: "People", panels: ["#setupBlockPeople"] },
+  { key: "rules", label: "Rules", panels: ["#setupBlockRules"] },
+  { key: "checks", label: "Checks & Dice", panels: ["#setupBlockChecks"] },
+];
+let setupTab = "primary";
+
+function setupTabIndex(key) {
+  return Math.max(0, SETUP_TABS.findIndex((tab) => tab.key === key));
+}
+
+function setupTabPanels(key) {
+  const tab = SETUP_TABS[setupTabIndex(key)];
+  return tab.panels.map((sel) => document.querySelector(sel)).filter(Boolean);
+}
+
+function initSetupTabs() {
+  const bar = document.querySelector("#setupTabs");
+  if (!bar) return;
+  document.body.classList.add("setup-tabbed");
+  SETUP_TABS.forEach((tab) =>
+    setupTabPanels(tab.key).forEach((panel) => {
+      panel.dataset.setupTab = tab.key;
+      panel.querySelector(".setupFactGroupHead h2, .sectionHeaderTitle")?.setAttribute("data-no-fold", "");
+    }),
+  );
+  document.querySelector("#setupOptionalHeading")?.setAttribute("data-no-fold", "");
+  if (bar.dataset.bound !== "1") {
+    bar.dataset.bound = "1";
+    bar.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-setup-tab-button]");
+      if (btn) setSetupTab(btn.dataset.setupTabButton, { fromTabBar: true });
+    });
+    bar.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const step = event.key === "ArrowRight" ? 1 : -1;
+      const next = SETUP_TABS[(setupTabIndex(setupTab) + step + SETUP_TABS.length) % SETUP_TABS.length];
+      setSetupTab(next.key, { fromTabBar: true });
+      bar.querySelector(`[data-setup-tab-button="${next.key}"]`)?.focus();
+    });
+    document.querySelector("#setupTabBack")?.addEventListener("click", () => stepSetupTab(-1));
+    document.querySelector("#setupTabNext")?.addEventListener("click", () => stepSetupTab(1));
+    bindSetupSearch();
+  }
+  setSetupTab(setupTab);
+}
+
+function stepSetupTab(delta) {
+  const index = setupTabIndex(setupTab) + delta;
+  if (index < 0 || index >= SETUP_TABS.length) return;
+  setSetupTab(SETUP_TABS[index].key, { fromTabBar: true });
+  document.querySelector("#setupTabs")?.scrollIntoView({ block: "nearest" });
+}
+
+function setSetupTab(key, { fromTabBar = false } = {}) {
+  setupTab = SETUP_TABS[setupTabIndex(key)].key;
+  const optional = document.querySelector("#setupOptionalGroup");
+  document.querySelectorAll("[data-setup-tab]").forEach((panel) => {
+    panel.classList.toggle("isSetupTabActive", panel.dataset.setupTab === setupTab);
+  });
+  optional?.classList.toggle("isSetupTabActive", setupTab !== "primary");
+  document.querySelector(".setupSimpleLayout")?.classList.toggle("isPrimaryTab", setupTab === "primary");
+  document.querySelectorAll("[data-setup-tab-button]").forEach((btn) => {
+    const on = btn.dataset.setupTabButton === setupTab;
+    btn.classList.toggle("activeChip", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+    btn.tabIndex = on ? 0 : -1;
+  });
+  const index = setupTabIndex(setupTab);
+  const back = document.querySelector("#setupTabBack");
+  const next = document.querySelector("#setupTabNext");
+  if (back) {
+    back.disabled = index === 0;
+    back.textContent = index > 0 ? `Back: ${SETUP_TABS[index - 1].label}` : "Back";
+  }
+  if (next) {
+    next.hidden = index >= SETUP_TABS.length - 1;
+    next.textContent = index < SETUP_TABS.length - 1 ? `Next: ${SETUP_TABS[index + 1].label}` : "Next";
+  }
+  // A tab picked while searching: the localized search follows it, a global one ends.
+  if (fromTabBar && setupSearchActive()) {
+    if (setupSearchLocal()) runSetupSearch();
+    else clearSetupSearch();
+  }
+  window.MorkynInteract?.applyFolds?.();
+}
+
+/* ---- Settings search (Stell, 2026-10-28) ----------------------------------
+ * Finds a setting by its label, by what a text field holds, or by a dropdown's
+ * options; never by placeholders, examples or tips. The results stand where
+ * the settings are, each with its own control bound to the real field. The
+ * list is a snapshot: an edit does not remove a result until the search runs
+ * again. Live after three characters or on Enter, at most every 0.5 s. */
+const SETUP_SEARCH_MIN = 3;
+const SETUP_SEARCH_EVERY_MS = 500;
+let setupSearchTimer = 0;
+let setupSearchShown = "";
+
+function setupSearchInput() {
+  return document.querySelector("#setupSearchInput");
+}
+
+function setupSearchLocal() {
+  return Boolean(document.querySelector("#setupSearchLocal")?.checked);
+}
+
+function setupSearchActive() {
+  return Boolean(setupSearchShown);
+}
+
+function bindSetupSearch() {
+  const input = setupSearchInput();
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const text = input.value.trim();
+    if (!text) {
+      clearTimeout(setupSearchTimer);
+      setupSearchTimer = 0;
+      clearSetupSearch({ keepInput: true });
+      return;
+    }
+    if (text.length < SETUP_SEARCH_MIN || setupSearchTimer) return;
+    setupSearchTimer = setTimeout(() => {
+      setupSearchTimer = 0;
+      runSetupSearch();
+    }, SETUP_SEARCH_EVERY_MS);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      clearTimeout(setupSearchTimer);
+      setupSearchTimer = 0;
+      runSetupSearch();
+    } else if (event.key === "Escape" && input.value) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearSetupSearch();
+    }
+  });
+  document.querySelector("#setupSearchLocal")?.addEventListener("change", () => {
+    if (setupSearchActive()) runSetupSearch();
+  });
+  const results = document.querySelector("#setupSearchResults");
+  results?.addEventListener("click", (event) => {
+    const show = event.target.closest("[data-search-show]");
+    if (!show) return;
+    const target = setupSearchFields()[Number(show.dataset.searchShow)];
+    clearSetupSearch();
+    if (target) revealSetupField(target);
+  });
+}
+
+// What a control is called on the page: its label's own text, not the
+// Randomize / Lock / AI buttons beside it and not a placeholder or a hint.
+function setupFieldLabel(el) {
+  const ownText = (node) =>
+    Array.from(node.childNodes)
+      .filter((child) => child.nodeType === Node.TEXT_NODE)
+      .map((child) => child.textContent)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const label = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
+  const wrap = label || el.closest("label");
+  if (wrap) {
+    const span = wrap.querySelector(":scope > span:not(.settingLock):not(.empty)");
+    const text = (span && span.textContent.trim()) || ownText(wrap);
+    if (text) return text;
+  }
+  const aria = el.getAttribute("aria-label");
+  if (aria) return aria;
+  const legend = el.closest("fieldset")?.querySelector("legend")?.textContent?.trim();
+  if (legend) return legend;
+  return String(el.name || el.dataset.setupField || "").replace(/[_-]+/g, " ").trim();
+}
+
+function setupFieldSection(el) {
+  const panel = el.closest("[data-setup-tab]");
+  const tab = SETUP_TABS[setupTabIndex(panel?.dataset.setupTab || "primary")];
+  const group = el.closest("fieldset, .optionSet, .gainControl, .abilitySetupCard, .toggleSet");
+  const groupName =
+    group?.querySelector("legend, h3, h4, .optionSetTitle, .abilityCardTitle")?.textContent?.replace(/\s+/g, " ").trim() || "";
+  return { tab, groupName: groupName.slice(0, 60) };
+}
+
+function setupSearchFields() {
+  const panels = Array.from(document.querySelectorAll("[data-setup-tab]"));
+  const out = [];
+  panels.forEach((panel) =>
+    panel.querySelectorAll("input, textarea, select").forEach((el) => {
+      if (el.type === "hidden" || el.type === "file" || el.type === "button" || el.type === "submit") return;
+      if (el.matches("[data-lock-setting], #lockAbilityCount, .settingLock input")) return;
+      if (el.closest(".powerTypeTips, [hidden], .hidden, #setupSearchBar")) return;
+      out.push(el);
+    }),
+  );
+  return out;
+}
+
+// A field matches by its label, the text it holds, or (a dropdown) any option.
+function setupFieldMatches(el, needle) {
+  const has = (text) => String(text || "").toLowerCase().includes(needle);
+  if (has(setupFieldLabel(el))) return true;
+  if (el.tagName === "SELECT") return Array.from(el.options).some((opt) => has(opt.textContent));
+  if (el.type === "checkbox" || el.type === "radio") return false;
+  return has(el.value);
+}
+
+function runSetupSearch() {
+  const input = setupSearchInput();
+  const results = document.querySelector("#setupSearchResults");
+  if (!input || !results) return;
+  const query = input.value.trim();
+  if (!query) {
+    clearSetupSearch({ keepInput: true });
+    return;
+  }
+  const needle = query.toLowerCase();
+  const local = setupSearchLocal();
+  const fields = setupSearchFields();
+  const seenRadio = new Set();
+  const hits = [];
+  fields.forEach((el, index) => {
+    if (local && el.closest("[data-setup-tab]")?.dataset.setupTab !== setupTab) return;
+    if (!setupFieldMatches(el, needle)) return;
+    // A radio set is one result, shown whole.
+    if (el.type === "radio") {
+      if (seenRadio.has(el.name)) return;
+      seenRadio.add(el.name);
+    }
+    hits.push({ el, index });
+  });
+  setupSearchShown = query;
+  document.body.classList.add("setup-searching");
+  results.hidden = false;
+  results.innerHTML = "";
+  const head = document.createElement("p");
+  head.className = "setupSearchHead";
+  head.textContent = hits.length
+    ? `${hits.length} result${hits.length === 1 ? "" : "s"} for “${query}”${local ? ` in ${SETUP_TABS[setupTabIndex(setupTab)].label}` : ""}. Edits apply at once.`
+    : `Nothing matches “${query}”${local ? ` in ${SETUP_TABS[setupTabIndex(setupTab)].label}` : ""}.`;
+  results.appendChild(head);
+  let lastTab = "";
+  hits.forEach(({ el, index }) => {
+    const { tab, groupName } = setupFieldSection(el);
+    if (tab.key !== lastTab) {
+      lastTab = tab.key;
+      const h = document.createElement("h3");
+      h.className = "setupSearchTab";
+      h.textContent = tab.label;
+      results.appendChild(h);
+    }
+    results.appendChild(setupSearchRow(el, index, groupName, fields));
+  });
+}
+
+function setupSearchRow(el, index, groupName, fields) {
+  const row = document.createElement("div");
+  row.className = "setupSearchRow";
+  const meta = document.createElement("div");
+  meta.className = "setupSearchMeta";
+  const name = document.createElement("span");
+  name.className = "setupSearchName";
+  name.textContent = el.type === "radio" ? groupName || setupFieldLabel(el) : setupFieldLabel(el);
+  meta.appendChild(name);
+  if (groupName && el.type !== "radio") {
+    const where = document.createElement("span");
+    where.className = "setupSearchWhere";
+    where.textContent = groupName;
+    meta.appendChild(where);
+  }
+  const show = document.createElement("button");
+  show.type = "button";
+  show.className = "chipBtn setupSearchShow";
+  show.dataset.searchShow = String(index);
+  show.textContent = "Show";
+  meta.appendChild(show);
+  row.appendChild(meta);
+  row.appendChild(setupSearchControl(el, fields));
+  return row;
+}
+
+// The result's control writes straight into the real field and fires the
+// field's own events, so every sync, lock and save the page runs still runs.
+function setupSearchControl(el, fields) {
+  const fire = (target) => {
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+    target.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  if (el.type === "radio") {
+    const box = document.createElement("div");
+    box.className = "setupSearchChoices";
+    fields
+      .filter((other) => other.type === "radio" && other.name === el.name)
+      .forEach((radio) => {
+        const label = document.createElement("label");
+        const mirror = document.createElement("input");
+        mirror.type = "radio";
+        mirror.name = `search-${el.name}`;
+        mirror.checked = radio.checked;
+        mirror.addEventListener("change", () => {
+          radio.checked = true;
+          fire(radio);
+        });
+        label.append(mirror, ` ${setupFieldLabel(radio)}`);
+        box.appendChild(label);
+      });
+    return box;
+  }
+  if (el.type === "checkbox") {
+    const label = document.createElement("label");
+    label.className = "setupSearchCheck";
+    const mirror = document.createElement("input");
+    mirror.type = "checkbox";
+    mirror.checked = el.checked;
+    mirror.addEventListener("change", () => {
+      el.checked = mirror.checked;
+      fire(el);
+    });
+    label.append(mirror, " On");
+    return label;
+  }
+  let mirror;
+  if (el.tagName === "SELECT") {
+    mirror = document.createElement("select");
+    Array.from(el.options).forEach((opt) => mirror.appendChild(new Option(opt.textContent, opt.value)));
+    mirror.value = el.value;
+    mirror.addEventListener("change", () => {
+      el.value = mirror.value;
+      fire(el);
+    });
+  } else {
+    mirror = document.createElement(el.tagName === "TEXTAREA" ? "textarea" : "input");
+    if (mirror.tagName === "INPUT") mirror.type = el.type === "number" ? "number" : "text";
+    ["min", "max", "step", "maxLength", "rows"].forEach((attr) => {
+      if (el[attr] != null && el[attr] !== "" && el[attr] !== -1) mirror[attr] = el[attr];
+    });
+    mirror.value = el.value;
+    mirror.addEventListener("input", () => {
+      el.value = mirror.value;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    mirror.addEventListener("change", () => el.dispatchEvent(new Event("change", { bubbles: true })));
+  }
+  mirror.className = "setupSearchControl";
+  mirror.disabled = el.disabled;
+  mirror.setAttribute("aria-label", setupFieldLabel(el));
+  return mirror;
+}
+
+function clearSetupSearch({ keepInput = false } = {}) {
+  setupSearchShown = "";
+  document.body.classList.remove("setup-searching");
+  const results = document.querySelector("#setupSearchResults");
+  if (results) {
+    results.hidden = true;
+    results.innerHTML = "";
+  }
+  const input = setupSearchInput();
+  if (input && !keepInput) input.value = "";
+}
+
+function revealSetupField(el) {
+  const panel = el.closest("[data-setup-tab]");
+  if (panel) setSetupTab(panel.dataset.setupTab);
+  // Open any fold between the tab and the field: a fold's heading sits in a
+  // sibling before the folded block (static/ui/interact.js foldRegion).
+  for (let guard = 0, folded = el.closest(".uiFolded"); folded && guard < 6; guard += 1) {
+    let node = folded.previousElementSibling;
+    while (node && !(node.matches(".isFolded") || node.querySelector(".isFolded"))) node = node.previousElementSibling;
+    const heading = node && (node.matches(".isFolded") ? node : node.querySelector(".isFolded"));
+    if (!heading) break;
+    heading.click();
+    folded = el.closest(".uiFolded");
+  }
+  requestAnimationFrame(() => {
+    el.scrollIntoView({ block: "center" });
+    el.focus({ preventScroll: true });
+    el.classList.add("setupSearchFlash");
+    setTimeout(() => el.classList.remove("setupSearchFlash"), 1600);
+  });
 }
 
 function setSetupUiMode(mode, options = {}) {
@@ -8208,7 +8600,7 @@ async function continuePlaythrough() {
   }
 }
 
-const SETUP_TUTORIAL_KEY = "morkyn-setup-tutorial-v11";
+const SETUP_TUTORIAL_KEY = "morkyn-setup-tutorial-v12";
 let setupTourIndex = -1;
 let setupTourActive = false;
 let setupTourKeepFlyoutOpen = false;
@@ -8260,7 +8652,54 @@ function tourBlockHeading(id) {
   return heading;
 }
 
+// Which tab each tour step stands on; the step opens it first.
+const SETUP_TOUR_TABS = {
+  "steps-chip": "primary",
+  tabs: "primary",
+  search: "primary",
+  "step-0": "identity",
+  "step-1": "powers",
+  "step-2": "world",
+  "step-3": "people",
+  "step-4": "rules",
+  "step-5": "checks",
+  "name-field": "primary",
+  "name-random": "primary",
+  "name-lock": "primary",
+  "name-ai": "primary",
+  "art-card": "primary",
+  "art-forge": "primary",
+};
+
+// The tour walks the page as it is read: Primary and its field controls, the
+// header buttons, search, then each tab in order, then Start.
+const SETUP_TOUR_ORDER = [
+  "steps-chip", "name-field", "name-random", "name-lock", "name-ai", "art-card", "art-forge",
+  "llm", "save", "presets", "search", "tabs",
+  "step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "start",
+];
+
 function getSetupTourSteps() {
+  const rank = (step) => {
+    const at = SETUP_TOUR_ORDER.indexOf(step.id);
+    return at < 0 ? SETUP_TOUR_ORDER.length : at;
+  };
+  return setupTourStepList().sort((a, b) => rank(a) - rank(b)).map((step) => {
+    const tab = SETUP_TOUR_TABS[step.id];
+    if (!tab) return step;
+    const before = step.before;
+    return {
+      ...step,
+      before: () => {
+        clearSetupSearch();
+        setSetupTab(tab);
+        return before?.();
+      },
+    };
+  });
+}
+
+function setupTourStepList() {
   return [
     {
       id: "steps-chip",
@@ -8268,7 +8707,7 @@ function getSetupTourSteps() {
       text:
         "This is the Primary group — the setup on this page. " +
         "Name, origin, world difficulty, world vibe, and look sit together. " +
-        "Nothing in Primary is required. Optional, below, holds every other setting.",
+        "Nothing in Primary is required. The other tabs hold every other setting.",
       shape: "rect",
       beside: true,
       select: () => document.querySelector("#setupPrimaryGroup"),
@@ -8306,14 +8745,24 @@ function getSetupTourSteps() {
       select: () => document.querySelector("#presetSelect") || document.querySelector("#setupPresetCard"),
     },
     {
-      id: "menu-open",
-      title: "Optional",
+      id: "tabs",
+      title: "Tabs",
       text:
-        "This heading is the second group. " +
-        "Identity details, Powers, World, People, Rules, and Checks & Dice are all on this page under Optional. " +
-        "Skip the group, or open only the block you care about. Confirm preset fills powers and the main start from a text idea; the rest stays as you left it.",
+        "Each tab is one part of the start: Primary, Identity, Powers, World, People, Rules, and Checks & Dice. " +
+        "Go through them in order with Next at the bottom, or open only the tab you care about. " +
+        "Confirm preset fills powers and the main start from a text idea; the rest stays as you left it.",
       shape: "rect",
-      select: () => document.querySelector("#setupOptionalHeading"),
+      select: () => document.querySelector("#setupTabs"),
+    },
+    {
+      id: "search",
+      title: "Search",
+      text:
+        "Type a few letters to find a setting by its name, by what a field holds, or by a dropdown's choices. " +
+        "The results show here, and you can edit them in place. " +
+        "Localized tab search keeps it to the open tab.",
+      shape: "rect",
+      select: () => document.querySelector("#setupSearchBar"),
     },
     {
       id: "step-0",

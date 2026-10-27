@@ -121,6 +121,14 @@
     const tour = tourShowing();
     root.querySelectorAll(FOLD_HEADINGS).forEach((heading) => {
       if (!foldRegion(heading).length) return;
+      // A heading that is a tab's title (the new-game tabs) never folds: the tab is the fold.
+      if (heading.hasAttribute("data-no-fold")) {
+        applyFold(heading, false);
+        heading.classList.remove("isFoldable");
+        heading.removeAttribute("role");
+        heading.removeAttribute("tabindex");
+        return;
+      }
       if (!heading.classList.contains("isFoldable")) {
         heading.classList.add("isFoldable");
         heading.setAttribute("role", "button");

@@ -90,7 +90,7 @@ def main(argv: list[str]) -> int:
         for width, height in SIZES:
             context = browser.new_context(viewport={"width": width, "height": height})
             # The first-run setup tour dims the whole form; mark it seen.
-            context.add_init_script("try { localStorage.setItem('morkyn-setup-tutorial-v11', '1'); } catch (e) {}")
+            context.add_init_script("try { localStorage.setItem('morkyn-setup-tutorial-v12', '1'); } catch (e) {}")
             page = context.new_page()
             page.goto(BASE + "/", wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(800)
