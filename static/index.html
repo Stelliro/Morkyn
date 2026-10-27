@@ -470,6 +470,13 @@
                 <button id="setupStart" class="setupStartDesktop" type="submit">Start</button>
               </div>
             </div>
+            <div class="setupSearchBar" id="setupSearchBar" role="search">
+              <input id="setupSearchInput" type="search" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Search settings" aria-label="Search settings and what they hold" />
+              <label class="setupSearchLocal" title="On: search only the open tab. Off: search every tab.">
+                <input id="setupSearchLocal" type="checkbox" />
+                Localized tab search
+              </label>
+            </div>
             <div class="setupPresetRow" id="setupPresetRow">
               <p id="setupRandomizeStatus" class="setupRandomizeStatus" role="status" aria-live="polite" hidden></p>
               <aside class="characterArtCard setupPresetCard" id="setupPresetCard" aria-label="Presets">
@@ -542,13 +549,6 @@
           <!-- Simple mode: form left, character art right (reparented card) -->
           <section id="setupSimplePanel" class="setupSimplePanel" aria-label="New game">
             <p class="setupSimpleLead">Go through the tabs, or only the ones you care about. Nothing is required, including the name. Confirm preset fills the start from a text idea, including powers.</p>
-            <div class="setupSearchBar" id="setupSearchBar" role="search">
-              <input id="setupSearchInput" type="search" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Search settings" aria-label="Search settings and what they hold" />
-              <label class="setupSearchLocal" title="On: search only the open tab. Off: search every tab.">
-                <input id="setupSearchLocal" type="checkbox" />
-                Localized tab search
-              </label>
-            </div>
             <nav class="setupTabs" id="setupTabs" role="tablist" aria-label="New game settings">
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="primary">Primary</button>
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="identity">Identity</button>
@@ -557,6 +557,7 @@
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="people">People</button>
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="rules">Rules</button>
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="checks">Checks &amp; Dice</button>
+              <button type="button" class="chipBtn" role="tab" data-setup-tab-button="art">Character art</button>
             </nav>
             <div class="setupSearchResults" id="setupSearchResults" hidden aria-live="polite"></div>
             <div class="setupSimpleLayout">

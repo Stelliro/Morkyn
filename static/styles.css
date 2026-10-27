@@ -14496,9 +14496,22 @@ body.setup-tabbed #setupOptionalGroup {
   margin: 0;
 }
 
-/* Off the Primary tab the art column is hidden, so the form takes the width. */
-body.setup-tabbed .setupSimpleLayout:not(.isPrimaryTab) {
+/* Tabbed, every tab is one column; the art card is its own tab, full width,
+   no longer the sticky side column. */
+body.setup-tabbed .setupSimpleLayout {
   grid-template-columns: minmax(0, 1fr);
+}
+
+body.setup-tabbed .setupSimpleArtCol {
+  position: static;
+  max-height: none;
+  overflow: visible;
+  order: 0;
+}
+
+/* The search sits under the page title, so it stays in reach while searching. */
+.setupHeader .setupSearchBar {
+  margin: 10px 0 12px;
 }
 
 .setupTabStepper {

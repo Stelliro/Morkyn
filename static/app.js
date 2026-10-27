@@ -4067,14 +4067,17 @@ function mountOneSetupPage() {
  * The one page is shown a tab at a time. Each tab names the blocks it shows;
  * the section headings stop folding while tabbed (the tab is the fold). */
 const SETUP_TABS = [
-  { key: "primary", label: "Primary", panels: ["#setupPrimaryGroup", ".setupSimpleArtCol"] },
+  { key: "primary", label: "Primary", panels: ["#setupPrimaryGroup"] },
   { key: "identity", label: "Identity", panels: ["#setupBlockIdentity"] },
   { key: "powers", label: "Powers", panels: ["#setupBlockPowers"] },
   { key: "world", label: "World", panels: ["#setupBlockWorld"] },
   { key: "people", label: "People", panels: ["#setupBlockPeople"] },
   { key: "rules", label: "Rules", panels: ["#setupBlockRules"] },
   { key: "checks", label: "Checks & Dice", panels: ["#setupBlockChecks"] },
+  { key: "art", label: "Character art", panels: [".setupSimpleArtCol"] },
 ];
+// The tabs whose blocks live in the Optional group (its box shows only for them).
+const SETUP_OPTIONAL_TABS = new Set(["identity", "powers", "world", "people", "rules", "checks"]);
 let setupTab = "primary";
 
 function setupTabIndex(key) {
@@ -4131,8 +4134,11 @@ function setSetupTab(key, { fromTabBar = false } = {}) {
   document.querySelectorAll("[data-setup-tab]").forEach((panel) => {
     panel.classList.toggle("isSetupTabActive", panel.dataset.setupTab === setupTab);
   });
-  optional?.classList.toggle("isSetupTabActive", setupTab !== "primary");
-  document.querySelector(".setupSimpleLayout")?.classList.toggle("isPrimaryTab", setupTab === "primary");
+  optional?.classList.toggle("isSetupTabActive", SETUP_OPTIONAL_TABS.has(setupTab));
+  // The art card is the whole tab, so it opens with it.
+  if (setupTab === "art" && document.querySelector("#characterPortraitCard.isCollapsed")) {
+    applySetupArtCollapsed(false, { persist: false });
+  }
   document.querySelectorAll("[data-setup-tab-button]").forEach((btn) => {
     const on = btn.dataset.setupTabButton === setupTab;
     btn.classList.toggle("activeChip", on);
@@ -8667,16 +8673,16 @@ const SETUP_TOUR_TABS = {
   "name-random": "primary",
   "name-lock": "primary",
   "name-ai": "primary",
-  "art-card": "primary",
-  "art-forge": "primary",
+  "art-card": "art",
+  "art-forge": "art",
 };
 
 // The tour walks the page as it is read: Primary and its field controls, the
 // header buttons, search, then each tab in order, then Start.
 const SETUP_TOUR_ORDER = [
-  "steps-chip", "name-field", "name-random", "name-lock", "name-ai", "art-card", "art-forge",
+  "steps-chip", "name-field", "name-random", "name-lock", "name-ai",
   "llm", "save", "presets", "search", "tabs",
-  "step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "start",
+  "step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "art-card", "art-forge", "start",
 ];
 
 function getSetupTourSteps() {
@@ -8748,7 +8754,7 @@ function setupTourStepList() {
       id: "tabs",
       title: "Tabs",
       text:
-        "Each tab is one part of the start: Primary, Identity, Powers, World, People, Rules, and Checks & Dice. " +
+        "Each tab is one part of the start: Primary, Identity, Powers, World, People, Rules, Checks & Dice, and Character art. " +
         "Go through them in order with Next at the bottom, or open only the tab you care about. " +
         "Confirm preset fills powers and the main start from a text idea; the rest stays as you left it.",
       shape: "rect",
