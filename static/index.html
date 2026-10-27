@@ -34,6 +34,10 @@
       .scriptGatePanel h1 { margin: 0 0 8px; font-size: 1.35rem; }
       .scriptGatePanel p { margin: 0 0 12px; color: #a7b0aa; line-height: 1.5; font-size: 0.95rem; }
       .scriptGatePanel .ok { color: #8fd49a; }
+      .scriptGateNoJs h2 { margin: 16px 0 6px; font-size: 1rem; }
+      .scriptGateNoJs ul { margin: 0 0 12px; padding-left: 20px; color: #a7b0aa; line-height: 1.5; font-size: 0.92rem; }
+      .scriptGateNoJs li { margin: 0 0 4px; }
+      .scriptGateNoJs code { color: #d8dcd9; }
       .scriptGatePanel .warn { color: #e0b35a; }
       .scriptGateActions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
       .scriptGateActions a, .scriptGateActions button {
@@ -67,12 +71,54 @@
       .app.jsPending { visibility: hidden; }
       .app.jsReady { visibility: visible; }
     </style>
+    <noscript>
+      <style>
+        #scriptGateTitle, #scriptGateBody, #scriptGateBlocked, .scriptGateActions { display: none !important; }
+        .scriptGatePanel { max-height: calc(100vh - 32px); overflow: auto; }
+      </style>
+    </noscript>
   </head>
   <body>
     <!-- Visible until app.js boots. Works when uBlock blocks /static/app.js. -->
     <div id="scriptGate" class="scriptGate" role="alertdialog" aria-labelledby="scriptGateTitle" aria-live="polite">
       <div class="scriptGatePanel">
         <p class="ok" id="scriptGateEyebrow">Mørkyn · local app</p>
+        <noscript>
+          <div class="scriptGateNoJs">
+            <h1>JavaScript is required</h1>
+            <p>
+              Mørkyn runs on this computer. This page comes from Mørkyn itself, at <code>127.0.0.1</code>
+              (your own machine), and its JavaScript draws the game and talks to the game running beside it.
+              Nothing on this page is loaded from any other website.
+            </p>
+            <h2>No phone home</h2>
+            <p>
+              No analytics, no tracking, nothing about you or your games is sent anywhere. The one exception is
+              <strong>updates</strong>: Mørkyn contacts GitHub to check for and download new versions, and a packaged
+              build fetches the engine pack your hardware needs the first time it starts.
+            </p>
+            <p>
+              Anything else reaches the internet only when you ask for it: downloading a model, a voice or an image
+              add-on, or using a cloud model or voice service you set up yourself (your story text then goes to that service).
+            </p>
+            <h2>The scripts and what they do</h2>
+            <p>All of them are in the <code>static</code> folder of your Mørkyn install, and readable as plain text.</p>
+            <ul>
+              <li><code>static/app.js</code>: the whole game screen: new game setup, turns, the map, inventory, saves and settings.</li>
+              <li><code>static/ui/interact.js</code>: folding sections, hover previews and right-click menus.</li>
+              <li><code>static/ui/failsafe.js</code>: explains a model failure and offers a way on.</li>
+              <li><code>static/ui/death.js</code>: the "You died" screen.</li>
+              <li><code>static/ui/frame.js</code>: colours the title bar of Mørkyn's own window; does nothing in a browser.</li>
+              <li><code>static/ui/game_tour.js</code>: the short tour of the play screen.</li>
+              <li>One small script inside this page (<code>static/index.html</code>): the loading screen you are looking at.</li>
+            </ul>
+            <h2>To play</h2>
+            <p>
+              Allow JavaScript for <code>127.0.0.1</code> (and <code>localhost</code>) in your browser or script blocker,
+              then reload, or open Mørkyn from its own app window.
+            </p>
+          </div>
+        </noscript>
         <h1 id="scriptGateTitle">Starting interface…</h1>
         <p id="scriptGateBody">
           Loading the local UI. This app does <strong>not</strong> track you and does not phone home for analytics.
@@ -2463,8 +2509,5 @@
     <script src="/static/ui/death.js?v=__BUNDLE__"></script>
     <script src="/static/ui/frame.js?v=__BUNDLE__"></script>
     <script src="/static/ui/game_tour.js?v=__BUNDLE__"></script>
-    <script>
-      // Fallback if app.js 404s without setting boot flag — already handled by timeout above.
-    </script>
   </body>
 </html>
