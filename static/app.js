@@ -4355,9 +4355,26 @@ function fillSetupGaps() {
       if (!tabAreas.includes(area)) area.style.minHeight = "";
     });
     if (!document.body.classList.contains("setup-searching")) growTextAreasToFill(panel, tabAreas);
-    const win = document.querySelector("#setupPresetDock");
-    growTextAreasToFill(win, Array.from(win?.querySelectorAll("textarea") || []).filter(shown));
+    // The presets window's Idea box does not fill the window (Stell, 2026-10-28:
+    // "too tall"): it sizes to its own text instead.
+    sizePresetIdea();
   });
+}
+
+// The preset Idea box: five lines when empty, growing with its text.
+const PRESET_IDEA_MIN_LINES = 5;
+
+function sizePresetIdea() {
+  const el = document.querySelector("#presetSimpleIdea");
+  if (!el || !el.offsetParent) return;
+  const cs = getComputedStyle(el);
+  const line = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.4;
+  const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  const min = Math.ceil(line * PRESET_IDEA_MIN_LINES + pad + border);
+  el.style.minHeight = "";
+  el.style.height = "auto";
+  el.style.height = `${Math.max(min, el.scrollHeight + border)}px`;
 }
 
 function stepSetupTab(delta) {
@@ -5859,6 +5876,7 @@ function syncPresetEditorFromSelection() {
     labelEl.value = "";
     simpleEl.value = "";
     advEl.value = "";
+    requestAnimationFrame(sizePresetIdea);
     labelEl.disabled = false;
     simpleEl.disabled = false;
     advEl.disabled = false;
@@ -5873,6 +5891,7 @@ function syncPresetEditorFromSelection() {
   labelEl.value = preset.label;
   simpleEl.value = preset.simple_idea || preset.advanced_idea || "";
   advEl.value = simpleEl.value;
+  requestAnimationFrame(sizePresetIdea);
   const isBuiltin = Boolean(preset.builtin);
   labelEl.disabled = false;
   simpleEl.disabled = false;
@@ -22281,6 +22300,7 @@ document.querySelector("#presetLabelInput")?.addEventListener("keydown", (event)
 document.querySelector("#presetSimpleIdea")?.addEventListener("input", (event) => {
   if (event.isTrusted) setupIdeaChosen = true;
   persistUserPresetText();
+  sizePresetIdea();
 });
 document.querySelector("#presetSaveBtn")?.addEventListener("click", () => saveSelectedPresetFromEditor());
 document.querySelector("#presetRenameBtn")?.addEventListener("click", (event) => {

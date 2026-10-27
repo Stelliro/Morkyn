@@ -265,7 +265,9 @@ belong to, with the date).
   automatically be larger ... to fill the vertical gap at the bottom ... the same thing for all
   tabs and windows where applicable." A window whose content is shorter than the window shares
   the free height among its visible text areas (app.js growTextAreasToFill). New windows and tabs
-  follow it.
+  follow it. Exception: the preset Idea box is five lines when empty and grows with its text
+  (Stell, same day: "too tall ... shorten it to around 5 lines with no input and expand as more
+  text is input").
 - **Play-screen bookmarks** (2026-10-28): on narrow windows and touch screens (desktop mode
   too), a handle on the screen's edge is slid (never tapped) to open a bookmarked window,
   Character first; pop-out windows stay where there is room, so no device loses a way in.

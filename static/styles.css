@@ -2297,6 +2297,13 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
   resize: vertical;
 }
 
+/* The Idea box sizes to its text (app.js sizePresetIdea): five lines empty,
+   growing as it fills (its 400 characters bound it), so no cap and no scrollbar. */
+.presetEditor #presetSimpleIdea {
+  max-height: none;
+  overflow-y: hidden;
+}
+
 .presetConfirmRow {
   display: flex;
   flex-wrap: wrap;
