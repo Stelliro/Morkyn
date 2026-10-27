@@ -87,6 +87,8 @@ package-lock.json
 # Local agent/tool scratch state, not project source
 .grok/
 .claude/workflows/
+# Claude Code skills stay on this machine (Stell, 2026-10-28: removed from the repo and its history)
+.claude/skills/
 
 # One-off agent workflow writeups and handoffs at the repo root.
 # Design notes belong under docs/. These stay on disk and off GitHub:

@@ -57,7 +57,8 @@ belong to, with the date).
   an explicit ask.** Commit messages end with the Co-Authored-By line from the session.
 - **Changelog and releases:** entries go under `## [Unreleased]` in CHANGELOG.md; the current batch
   is 0.11.x and the number only goes up. The full numbering, bump, tag and push procedure is the
-  `release` skill (.claude/skills/release/SKILL.md): load it before touching CHANGELOG.md,
+  `release` skill (.claude/skills/release/SKILL.md, local only: skills are kept out of the repo
+  and its history since 2026-10-28): load it before touching CHANGELOG.md,
   APP_VERSION or a tag. Push, tag and release only on an explicit ask.
 - **docs/ai-content.md is the guide for LLMs** (2026-10-28): "make something so an llm can
   understand the project better ... in addition to updating the changelogs, just add the
@@ -363,7 +364,7 @@ belong to, with the date).
   or op text in the prose, voice slipping to first or third person, retry prompts echoed back.
 - **The full test suite** has 14 known failures and one known flake (as of 2026-10-18); the list and
   how to run it (`tools/run_suite.py`, never a bare `-m unittest`) are in the `run-suite` skill
-  (.claude/skills/run-suite/SKILL.md). Anything beyond that list is new.
+  (.claude/skills/run-suite/SKILL.md, local only). Anything beyond that list is new.
 - **Evidence lives in model traces** (`data/model_traces/turn-*.json`): read them before the code.
   The model side is in `model_trace`; what the engine did is in `engine.ledger` (`delta` first,
   then `writes[i].at` for the code, `swallowed` for hidden failures).

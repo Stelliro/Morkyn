@@ -72,8 +72,8 @@ and never by shrinking what the model may write. See CLAUDE.md, "The guiding rul
 
 - **Run:** `./start.sh --no-update` (Linux) serves on port 8000 and opens the browser.
 - **Test:** `.venv/bin/python tools/run_suite.py --tmp <scratch folder> --out <file>`. There are
-  known failures (14 on Linux); the list is in `.claude/skills/run-suite/SKILL.md`. Anything else
-  is new.
+  known failures (14 on Linux); the list is kept on the maintainer's machine (a local Claude Code
+  skill, not in the repo). Anything else is new.
 - **Isolated data:** a server started for a test uses
   `tools/playtest_setup_presets.isolated_data_env(dir)`, never the live `data/`.
 - **Line endings are mixed** (some files CRLF, some LF; list in CLAUDE.md). Edit in a way that keeps
@@ -83,7 +83,7 @@ and never by shrinking what the model may write. See CLAUDE.md, "The guiding rul
   (small models copy them). A fault the model keeps making means the task is too hard: make it
   simpler or move it to the engine.
 - **Versions:** the current line is 0.11.x; entries go under `## [Unreleased]` in CHANGELOG.md.
-  Push, tag and release only on the owner's explicit ask (`.claude/skills/release/SKILL.md`).
+  Push, tag and release only on the owner's explicit ask.
 - **Privacy:** no analytics or telemetry. The only automatic outside calls are updates from
   GitHub (version checks and downloads, a packaged build's first engine pack, `start.sh`'s launch
   check). Downloads and cloud services happen only when the player sets them up. Keep it so.
