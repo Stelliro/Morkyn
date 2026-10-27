@@ -3807,7 +3807,7 @@ function normalizeLookFieldsInForm() {
   // A box is rewritten only when a piece moved in or out; otherwise the
   // player's own commas and spacing stay as typed.
   const same = (el, list) => split(el?.value).join("\n") === list.join("\n");
-  if (hairEl && !same(hairEl, hair.slice(0, 2))) hairEl.value = hair.slice(0, 2).join(", ");
+  if (hairEl && !same(hairEl, hair)) hairEl.value = hair.join(", ");
   if (faceEl && !same(faceEl, face)) faceEl.value = face.join(", ");
   if (appEl && !same(appEl, app)) {
     appEl.value = app.some((p) => p.includes(":")) ? app.join("; ") : app.join(", ");
@@ -21696,15 +21696,12 @@ document.querySelectorAll('input[name="simple_power_mode"]').forEach((r) => {
 ].forEach((sel) => {
   const el = document.querySelector(sel);
   if (!el) return;
-  const sync = (event) => {
+  // The look boxes keep what the player typed: the hair/face/look sort runs on
+  // the randomizer's fill only, never on the player's own words.
+  const sync = () => {
     if (setupUiMode === "simple") {
       pushSimpleToForm();
       if (sel === "#simpleGameSystem") updateSimpleRulesVisibility();
-      // Look fields feed art — keep advanced names in sync for prompt rebuild.
-      // Only once the box is left: the tidy-up rewrites the box being typed in.
-      if (event?.type === "change" && (sel === "#simpleHair" || sel === "#simpleFace" || sel === "#simpleLook")) {
-        normalizeLookFieldsInForm();
-      }
     }
   };
   el.addEventListener("change", sync);
