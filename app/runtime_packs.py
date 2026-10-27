@@ -273,6 +273,7 @@ def _add_site(site: Path, added: list[str]) -> None:
                 os.add_dll_directory(str(lib))
             except Exception:
                 pass
+        _preload_cuda(site)
     elif sys.platform.startswith("linux"):
         _preload_cuda(site)
 
@@ -284,11 +285,28 @@ def _add_site(site: Path, added: list[str]) -> None:
 # them by path first, RTLD_GLOBAL, lets libllama.so find them by soname.
 # Order matters: cuBLAS needs cudart, and libcublas needs libcublasLt.
 _CUDA_LIBS = ("cuda_runtime/lib/libcudart.so.12", "cublas/lib/libcublasLt.so.12", "cublas/lib/libcublas.so.12")
+# Windows has the same gap (a player's 0.11.1 exe, 2026-10-28: llama.dll would
+# not load on a PC with the driver and no CUDA Toolkit). llama_cpp loads its DLL
+# with winmode=0, so a dependency is looked up by the standard order (PATH, not
+# add_dll_directory); a DLL already loaded by full path is used by its name.
+_CUDA_DLLS = ("cuda_runtime/bin/cudart64_12.dll", "cublas/bin/cublasLt64_12.dll", "cublas/bin/cublas64_12.dll")
 
 
 def _preload_cuda(site: Path) -> None:
     import ctypes
 
+    if sys.platform == "win32":
+        for rel in _CUDA_DLLS:
+            lib = site / "nvidia" / rel
+            if lib.is_file():
+                folder = str(lib.parent)
+                if folder not in os.environ.get("PATH", "").split(os.pathsep):
+                    os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")
+                try:
+                    ctypes.WinDLL(str(lib))
+                except OSError:
+                    pass
+        return
     for rel in _CUDA_LIBS:
         lib = site / "nvidia" / rel
         if lib.is_file():

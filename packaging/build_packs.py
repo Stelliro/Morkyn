@@ -72,9 +72,11 @@ def build(acc: str, out_dir: Path) -> Path:
     work = Path(tempfile.mkdtemp(prefix="morkyn-pack-"))
     site = work / "site"
     cmd = [sys.executable, "-m", "pip", "install", "--target", str(site), "--upgrade", requirement]
-    if acc == "cuda" and os_tag() == "linux":
-        # The Linux CUDA wheel links the CUDA runtime and cuBLAS without carrying
-        # them; a desktop with only the driver has neither (app/runtime_packs._preload_cuda).
+    if acc == "cuda" and os_tag() in ("linux", "windows"):
+        # The CUDA wheels link the CUDA runtime and cuBLAS without carrying them;
+        # a desktop with only the driver has neither (app/runtime_packs._preload_cuda).
+        # Windows: ggml-cuda.dll needs cudart64_12.dll and cublas64_12.dll (a
+        # player's 0.11.1 exe, 2026-10-28: "Failed to load shared library ... llama.dll").
         cmd += ["nvidia-cuda-runtime-cu12==12.4.*", "nvidia-cublas-cu12==12.4.*"]
     env = dict(os.environ)
     if acc in ADDONS:
