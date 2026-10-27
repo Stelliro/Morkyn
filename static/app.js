@@ -8918,6 +8918,24 @@ function rememberPlayerArt(lsKey, dataUrl, token) {
   }
 }
 
+/** The browser's copy of the player's art is a cache (the image lives in the
+ * page and on the server after Start). A large image can pass the ~5 MB quota:
+ * drop the old copy and try once more, then go without the cache, never throw. */
+function cachePlayerArt(lsKey, dataUrl) {
+  try {
+    localStorage.setItem(lsKey, dataUrl);
+    return true;
+  } catch (_) {
+    try {
+      localStorage.removeItem(lsKey);
+      localStorage.setItem(lsKey, dataUrl);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
 function forgetPlayerArt(lsKey) {
   try {
     localStorage.removeItem(lsKey);
@@ -15861,13 +15879,13 @@ async function regeneratePlayerPortrait(kindOrKinds = "both", scope = null) {
       const faceUrl = data.face?.data_url || "";
       const bodyUrl = data.fullbody?.data_url || "";
       if (faceUrl) {
-        localStorage.setItem("morkyn-player-portrait", faceUrl);
-        localStorage.setItem("morkyn-player-portrait-sig", playerPortraitSignature());
+        cachePlayerArt("morkyn-player-portrait", faceUrl);
+        cachePlayerArt("morkyn-player-portrait-sig", playerPortraitSignature());
         if (state) state.player_portrait = { data_url: faceUrl, kind: "face", equipment: data.equipment_used || [] };
         pushStudioCandidate("face", data.face);
       }
       if (bodyUrl) {
-        localStorage.setItem("morkyn-player-fullbody", bodyUrl);
+        cachePlayerArt("morkyn-player-fullbody", bodyUrl);
         if (state) state.player_fullbody = { data_url: bodyUrl, kind: "fullbody", equipment: data.equipment_used || [] };
         pushStudioCandidate("fullbody", data.fullbody);
       }
@@ -17331,7 +17349,7 @@ async function applyNativePortraitToSlot(name, slot = "face") {
     if (asFace) {
       lastSetupFaceDataUrl = dataUrl;
       try {
-        localStorage.setItem("morkyn-player-portrait", dataUrl);
+        cachePlayerArt("morkyn-player-portrait", dataUrl);
       } catch (_) {
         /* ignore */
       }
@@ -17359,7 +17377,7 @@ async function applyNativePortraitToSlot(name, slot = "face") {
     } else {
       lastSetupBodyDataUrl = dataUrl;
       try {
-        localStorage.setItem("morkyn-player-fullbody", dataUrl);
+        cachePlayerArt("morkyn-player-fullbody", dataUrl);
       } catch (_) {
         /* ignore */
       }
@@ -18274,7 +18292,7 @@ function cacheSetupArtForPlay(faceUrl, bodyUrl) {
   if (faceUrl && isBrowserSafeMediaUrl(faceUrl)) {
     lastSetupFaceDataUrl = faceUrl;
     try {
-      localStorage.setItem("morkyn-player-portrait", faceUrl);
+      cachePlayerArt("morkyn-player-portrait", faceUrl);
     } catch (_) {
       /* quota */
     }
@@ -18283,7 +18301,7 @@ function cacheSetupArtForPlay(faceUrl, bodyUrl) {
   if (bodyUrl && isBrowserSafeMediaUrl(bodyUrl)) {
     lastSetupBodyDataUrl = bodyUrl;
     try {
-      localStorage.setItem("morkyn-player-fullbody", bodyUrl);
+      cachePlayerArt("morkyn-player-fullbody", bodyUrl);
     } catch (_) {
       /* quota */
     }
@@ -18611,7 +18629,7 @@ function useStudioCandidate(id, asKind) {
       hasArt: true,
       html: `<img class="portraitImage" src="${cand.data_url}" alt="Character face" draggable="true" />`,
     });
-    localStorage.setItem("morkyn-player-portrait", cand.data_url);
+    cachePlayerArt("morkyn-player-portrait", cand.data_url);
   } else {
     lastSetupBodyDataUrl = cand.data_url;
     setArtFrameContent(card?.querySelector("[data-setup-fullbody]"), {
@@ -18620,7 +18638,7 @@ function useStudioCandidate(id, asKind) {
       hasArt: true,
       html: `<img class="portraitImage portraitImageFull" src="${cand.data_url}" alt="Character full body" draggable="true" />`,
     });
-    localStorage.setItem("morkyn-player-fullbody", cand.data_url);
+    cachePlayerArt("morkyn-player-fullbody", cand.data_url);
   }
   setSetupArtStatus(`Applied candidate as ${asKind}.`);
   renderImageStudioCandidates();
@@ -29173,7 +29191,7 @@ async function applyDroppedArtImage(slot, dataUrl) {
       hasArt: true,
       html: `<img class="portraitImage" src="${dataUrl}" alt="Character face" draggable="true" />`,
     });
-    localStorage.setItem("morkyn-player-portrait", dataUrl);
+    cachePlayerArt("morkyn-player-portrait", dataUrl);
     setSetupArtStatus("Face set from drop.");
     return;
   }
@@ -29185,13 +29203,13 @@ async function applyDroppedArtImage(slot, dataUrl) {
       hasArt: true,
       html: `<img class="portraitImage portraitImageFull" src="${dataUrl}" alt="Character full body" draggable="true" />`,
     });
-    localStorage.setItem("morkyn-player-fullbody", dataUrl);
+    cachePlayerArt("morkyn-player-fullbody", dataUrl);
     setSetupArtStatus("Full body set from drop.");
     return;
   }
   if (slot === "player-face") {
-    localStorage.setItem("morkyn-player-portrait", dataUrl);
-    localStorage.setItem("morkyn-player-portrait-sig", playerPortraitSignature());
+    cachePlayerArt("morkyn-player-portrait", dataUrl);
+    cachePlayerArt("morkyn-player-portrait-sig", playerPortraitSignature());
     if (state) state.player_portrait = { data_url: dataUrl, kind: "face" };
     lastSetupFaceDataUrl = dataUrl;
     setArtFrameContent(document.querySelector("#playerFaceFrame"), {
@@ -29204,7 +29222,7 @@ async function applyDroppedArtImage(slot, dataUrl) {
     return;
   }
   if (slot === "player-fullbody") {
-    localStorage.setItem("morkyn-player-fullbody", dataUrl);
+    cachePlayerArt("morkyn-player-fullbody", dataUrl);
     if (state) state.player_fullbody = { data_url: dataUrl, kind: "fullbody" };
     lastSetupBodyDataUrl = dataUrl;
     setArtFrameContent(document.querySelector("#playerFullbodyFrame"), {
