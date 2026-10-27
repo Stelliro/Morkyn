@@ -14496,10 +14496,31 @@ body.setup-tabbed #setupOptionalGroup {
   margin: 0;
 }
 
-/* Tabbed, every tab is one column; the art card is its own tab, full width,
-   no longer the sticky side column. */
-body.setup-tabbed .setupSimpleLayout {
-  grid-template-columns: minmax(0, 1fr);
+/* Tabbed: the open tab (or the search results) on the left, the presets docked
+   on the right, in view while the left scrolls, so a preset can be confirmed
+   and its changes watched without leaving the tab. The art card is a tab. */
+body.setup-tabbed .setupSimpleLayout,
+body.setup-tabbed .setupSimpleLayout:has(#characterPortraitCard.isCollapsed) {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 30%);
+}
+
+body.setup-tabbed .setupSimpleLayout > :not(.setupPresetDock) {
+  grid-column: 1;
+}
+
+body.setup-tabbed .setupPresetDock {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  position: sticky;
+  top: 8px;
+  align-self: start;
+  max-height: calc(100vh - 16px);
+  max-height: calc(100svh - 16px);
+  overflow: auto;
+}
+
+body.setup-tabbed .setupPresetDock .setupPresetRow {
+  margin: 0;
 }
 
 body.setup-tabbed .setupSimpleArtCol {
@@ -14509,14 +14530,37 @@ body.setup-tabbed .setupSimpleArtCol {
   order: 0;
 }
 
-/* The preset card is a tab: no fold toggle, no fold note. */
-body.setup-tabbed #setupPresetCollapseMeta,
-body.setup-tabbed #setupPresetToggle .characterArtChevron {
-  display: none;
+/* Docked, the preset card does not fold. */
+@media (min-width: 900px) {
+  body.setup-tabbed #setupPresetCollapseMeta,
+  body.setup-tabbed #setupPresetToggle .characterArtChevron {
+    display: none;
+  }
+
+  body.setup-tabbed #setupPresetToggle {
+    cursor: default;
+  }
 }
 
-body.setup-tabbed #setupPresetToggle {
-  cursor: default;
+/* Narrow: one column, the presets fold above the tab. */
+@media (max-width: 899.98px) {
+  body.setup-tabbed .setupSimpleLayout,
+  body.setup-tabbed .setupSimpleLayout:has(#characterPortraitCard.isCollapsed) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.setup-tabbed .setupPresetDock {
+    grid-column: 1;
+    grid-row: auto;
+    position: static;
+    max-height: none;
+    overflow: visible;
+    order: -1;
+  }
+}
+
+.setupSearchResults[hidden] {
+  display: none;
 }
 
 /* The search sits under the page title, so it stays in reach while searching. */
@@ -14536,7 +14580,8 @@ body.setup-tabbed #setupPresetToggle {
 }
 
 /* Searching: the results stand where the settings are. */
-body.setup-searching .setupSimpleLayout,
+body.setup-searching .setupSimpleMain,
+body.setup-searching .setupSimpleArtCol,
 body.setup-searching .setupTabStepper {
   display: none !important;
 }

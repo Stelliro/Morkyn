@@ -4067,7 +4067,6 @@ function mountOneSetupPage() {
  * The one page is shown a tab at a time. Each tab names the blocks it shows;
  * the section headings stop folding while tabbed (the tab is the fold). */
 const SETUP_TABS = [
-  { key: "presets", label: "Presets", panels: ["#setupPresetRow"] },
   { key: "primary", label: "Primary", panels: ["#setupPrimaryGroup"] },
   { key: "identity", label: "Identity", panels: ["#setupBlockIdentity"] },
   { key: "powers", label: "Powers", panels: ["#setupBlockPowers"] },
@@ -4079,7 +4078,7 @@ const SETUP_TABS = [
 ];
 // The tabs whose blocks live in the Optional group (its box shows only for them).
 const SETUP_OPTIONAL_TABS = new Set(["identity", "powers", "world", "people", "rules", "checks"]);
-let setupTab = "presets";
+let setupTab = "primary";
 
 function setupTabIndex(key) {
   return Math.max(0, SETUP_TABS.findIndex((tab) => tab.key === key));
@@ -4094,13 +4093,16 @@ function initSetupTabs() {
   const bar = document.querySelector("#setupTabs");
   if (!bar) return;
   document.body.classList.add("setup-tabbed");
-  // Presets are a tab now (Stell, 2026-10-28: the open fold covered the page):
-  // the card moves from the header into the tab area, and stays open there.
+  // Presets dock beside the tabs (Stell, 2026-10-28: the open fold covered the
+  // page, but presets must stay in reach while editing, to randomize and watch
+  // the fields change). The search results stand in the tabs' column.
+  const layout = document.querySelector(".setupSimpleLayout");
+  const dock = document.querySelector("#setupPresetDock");
   const presetRow = document.querySelector("#setupPresetRow");
-  const main = document.querySelector(".setupSimpleMain");
-  if (presetRow && main && presetRow.parentElement !== main) main.prepend(presetRow);
-  setSetupPresetsCollapsed(false, false);
-  document.querySelector("#setupPresetToggle")?.removeAttribute("title");
+  const results = document.querySelector("#setupSearchResults");
+  if (dock && presetRow && presetRow.parentElement !== dock) dock.appendChild(presetRow);
+  if (layout && results && results.parentElement !== layout) layout.prepend(results);
+  if (!isNarrowSetupViewport()) setSetupPresetsCollapsed(false, false);
   SETUP_TABS.forEach((tab) =>
     setupTabPanels(tab.key).forEach((panel) => {
       panel.dataset.setupTab = tab.key;
@@ -4125,6 +4127,10 @@ function initSetupTabs() {
     document.querySelector("#setupTabBack")?.addEventListener("click", () => stepSetupTab(-1));
     document.querySelector("#setupTabNext")?.addEventListener("click", () => stepSetupTab(1));
     bindSetupSearch();
+    // Widened past the phone layout: the preset card docks open again.
+    window.addEventListener("resize", () => {
+      if (!isNarrowSetupViewport()) setSetupPresetsCollapsed(false, false);
+    });
   }
   setSetupTab(setupTab);
 }
@@ -5658,8 +5664,10 @@ function syncPresetEditorFromSelection() {
 const SETUP_PRESETS_COLLAPSED_KEY = "morkyn-setup-presets-collapsed";
 
 function setSetupPresetsCollapsed(collapsed, persist = true) {
-  // In its own tab the preset card is never folded.
-  if (document.body.classList.contains("setup-tabbed")) collapsed = false;
+  // Docked beside the tabs the preset card is never folded (a narrow window
+  // stacks it above the tabs, where it folds as before).
+  const docked = document.body.classList.contains("setup-tabbed") && !isNarrowSetupViewport();
+  if (docked) collapsed = false;
   const row = document.querySelector("#setupPresetRow");
   const card = document.querySelector("#setupPresetCard");
   const body = document.querySelector("#setupPresetBody");
@@ -5675,7 +5683,7 @@ function setSetupPresetsCollapsed(collapsed, persist = true) {
   }
   if (btn) {
     btn.setAttribute("aria-expanded", on ? "false" : "true");
-    if (document.body.classList.contains("setup-tabbed")) btn.removeAttribute("title");
+    if (docked) btn.removeAttribute("title");
     else btn.title = on ? "Show preset ideas" : "Hide preset ideas";
   }
   if (meta) {
@@ -8671,10 +8679,9 @@ function tourBlockHeading(id) {
 
 // Which tab each tour step stands on; the step opens it first.
 const SETUP_TOUR_TABS = {
-  presets: "presets",
   "steps-chip": "primary",
-  tabs: "presets",
-  search: "presets",
+  tabs: "primary",
+  search: "primary",
   "step-0": "identity",
   "step-1": "powers",
   "step-2": "world",
@@ -8766,7 +8773,7 @@ function setupTourStepList() {
       id: "tabs",
       title: "Tabs",
       text:
-        "Each tab is one part of the start: Presets, Primary, Identity, Powers, World, People, Rules, Checks & Dice, and Character art. " +
+        "Each tab is one part of the start: Primary, Identity, Powers, World, People, Rules, Checks & Dice, and Character art. " +
         "Go through them in order with Next at the bottom, or open only the tab you care about. " +
         "Confirm preset fills powers and the main start from a text idea; the rest stays as you left it.",
       shape: "rect",
