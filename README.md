@@ -4,7 +4,7 @@
   <img src="Media/morkyn-cover.png" alt="Mørkyn: the model narrates, the game decides what is true" width="72%" />
 </p>
 
-**Version `0.11.2`** · the 0.11 batch after the `0.10.0-dev` pre-releases; each push is the next patch, `0.11.3`, `0.11.4` (see [CHANGELOG](CHANGELOG.md)). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.11.3`** · the 0.11 batch after the `0.10.0-dev` pre-releases; each push is the next patch, `0.11.4`, `0.11.5` (see [CHANGELOG](CHANGELOG.md)). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
 ## This is not the usual AI RPG
 
@@ -374,6 +374,7 @@ Further reading: [docs/NarrationPipeline.md](docs/NarrationPipeline.md) · [docs
 
 ### Latest
 
+- **0.11.3:** the Windows NVIDIA engine pack works on a PC with only the graphics driver (it carries the CUDA runtime and cuBLAS); reinstall the pack from Updates, Local engine. Notes: [changelogs/0.11.md](changelogs/0.11.md).
 - **0.11.2:** money in copper, silver and gold (or a world's own coins) held as one number the engine owns and moved only by sums the scene states; jobs filed as said; creatures the story shows are filed and take the blow; the moves, trades, blows, powers and items a player could talk the game into are refused by the engine; setup boxes keep their spaces and a large character image no longer stops setup. Notes: [changelogs/0.11.md](changelogs/0.11.md).
 - **0.11.1:** the first 0.11 build on GitHub. Unnamed people and creatures are stored and numbered per kind (Ghoul 1, Ghoul 2), a group with no count is rolled and the number written into the story, the dead are a 0/1 state and leave a body, the narrator is told where the player is first, one roll decides an attack, Hermes 3's op shapes are read, and the Linux .deb playtest's window, terminal, map and rewind fixes. Notes: [changelogs/0.11.md](changelogs/0.11.md).
 - **0.11.0:** the save keeps the people, places and jobs the story makes without fixing them in place too soon (people are pencilled in until a later turn brings them back, places have insides, jobs are filed as said with an engine pay ledger), acts are read from grammar, API keys and settings save per user (encrypted on Windows), and Linux gets .deb, .rpm, AppImage and AUR packages and the game's own window. Notes: [changelogs/0.11.md](changelogs/0.11.md).
