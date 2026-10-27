@@ -23,6 +23,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. The next push is `0.11.3`.
 
+### Fixed
+- [CLAUDE] The Windows CUDA pack loads on a PC with only the NVIDIA driver (a player's 0.11.1 exe, 2026-10-28: "MLE could not import llama_cpp ... Failed to load shared library ... llama.dll"). ggml-cuda.dll links cudart64_12.dll and cublas64_12.dll, the pack did not carry them, and llama_cpp's loader finds a dependency by PATH only (winmode=0), so only a PC with the CUDA Toolkit could load it. The pack now carries NVIDIA's runtime and cuBLAS wheels as the Linux one does, and the app loads them by full path before llama.dll and puts their folders on PATH - packaging/build_packs.py, app/runtime_packs.py (_preload_cuda), tests/test_runtime_pack_cuda_windows.py.
+
 ## [0.11.2] - 2026-10-27
 
 > Money in copper, silver and gold (or any currency set a world picks), held as one number the engine owns, and moved only by the sums the scene states, never by the die. Jobs are filed as said, creatures the prose shows are filed and take the blow, and the holes an adversarial "cheat" run found are closed in the engine: declared moves, one-sided trades, declared blows, claimed powers and kills, codes as items, code travel. The engine budgets the context the model really loaded. Setup boxes keep their spaces and words, and a large character image no longer stops setup.
