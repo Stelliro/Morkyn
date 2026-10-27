@@ -107,7 +107,8 @@ Newest first. One line per release; the full record is CHANGELOG.md.
 - A short in-game tour; play-screen bookmarks (slide a handle out for the Character window) on
   narrow and touch screens; tours show the steps the device has.
 - A "JavaScript is required" screen that states the privacy facts and lists every script.
-- Fixes: setup boxes no longer lose spaces or letters while typing; a large character image no
+- Fixes: randomizing powers rolls the count between min and max every time (Lock Count keeps
+  it); setup boxes no longer lose spaces or letters while typing; a large character image no
   longer stops setup; section help text keeps a readable width.
 
 **0.11.3 (2026-10-28)** The Windows NVIDIA (CUDA) pack carries the CUDA runtime and cuBLAS and

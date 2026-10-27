@@ -2683,6 +2683,35 @@ let lastAbilityCountRoll = null;
  * Quantity locked → fixed. Otherwise pure RNG: uniform integer from min to max inclusive.
  * Not biased by existing card count or OP-MC intent.
  */
+/* How many abilities a randomize makes (Stell, 2026-10-28: "randomizing powers
+ * just does the minimum number, it doesnt seem to be rolling for the min-max").
+ * The first roll used to fix the count for every later randomize, which is the
+ * Lock Count box's job. Now: with Lock Count on, the cards on the page keep
+ * their number; otherwise the total is rolled from min-max every time, never
+ * below the locked cards, which stay and count toward it. The plan is made once
+ * per randomize and read by the model request, the local fallback and the merge. */
+let abilityRollPlan = null;
+
+// Every card locked stops a randomize only when it could add nothing: Lock Count
+// is on, or the locked cards already reach max. Otherwise the roll adds to them.
+function abilitiesAllLockedAndFull() {
+  const existing = readAbilityCards();
+  if (!existing.length || existing.some((ability) => !ability.keep)) return false;
+  return abilityQuantityLocked() || existing.length >= abilityCountRange().max;
+}
+
+function planAbilityRoll() {
+  const existing = readAbilityCards();
+  const kept = existing.filter((ability) => ability.keep);
+  if (abilityQuantityLocked() && existing.length) {
+    abilityRollPlan = { total: existing.length, fresh: existing.length - kept.length, kept: kept.length, keepSlots: true };
+  } else {
+    const total = Math.max(rollAbilityCountForRandomize(), kept.length);
+    abilityRollPlan = { total, fresh: total - kept.length, kept: kept.length, keepSlots: false };
+  }
+  return abilityRollPlan;
+}
+
 function rollAbilityCountForRandomize() {
   const { min, max } = abilityCountRange();
   if (abilityQuantityLocked()) {
@@ -3030,8 +3059,30 @@ function readAbilityCards() {
  * Min does not add. Max does not remove. An empty list still uses the min–max roll.
  */
 function mergeRandomizedAbilities(incoming, rolledTarget = null) {
+  const plan = abilityRollPlan;
+  abilityRollPlan = null;
   const existing = readAbilityCards();
   const pool = (Array.isArray(incoming) ? incoming : []).filter((ability) => ability && typeof ability === "object");
+  // A rolled total over cards already on the page: the locked ones stay, the
+  // rest of the total is new (more or fewer cards than before).
+  if (plan && !plan.keepSlots && existing.length) {
+    const kept = existing.filter((ability) => ability.keep).map((ability) => ({ ...ability, keep: true }));
+    const taken = (name) =>
+      kept.concat(fresh).some((item) => String(item.name || "").trim().toLowerCase() === name);
+    const fresh = [];
+    for (const cand of pool) {
+      if (fresh.length >= plan.fresh) break;
+      const name = String(cand?.name || "").trim().toLowerCase();
+      if (name && taken(name)) continue;
+      fresh.push(cand);
+    }
+    while (fresh.length < plan.fresh) fresh.push(randomAbilityPreset(kept.concat(fresh)));
+    const made = assignAbilityLocksAfterCreation(
+      fresh.map((ability) => applyOriginToAbility({ ...ability, keep: false })),
+      "both",
+    ).map((ability) => ({ ...ability, keep: false }));
+    return kept.concat(made);
+  }
   if (!existing.length) {
     const fitted = fitAbilitiesToCountPolicy(pool, rolledTarget).map((ability) => applyOriginToAbility(ability));
     return assignAbilityLocksAfterCreation(fitted, "both").map((ability) => ({ ...ability, keep: false }));
@@ -3614,17 +3665,18 @@ function fallbackRandomizeField(name, options = {}) {
   if (name === "special_abilities") {
     const existing = readAbilityCards();
     const free = existing.filter((ability) => !ability.keep).length;
-    if (existing.length && free === 0) {
+    if (abilitiesAllLockedAndFull()) {
       setSetupRandomizeStatus("Every ability is locked, so the list stayed as it is.");
     } else {
-      const count = existing.length ? free : rollAbilityCountForRandomize();
+      const plan = planAbilityRoll();
+      const count = plan.keepSlots ? free : plan.fresh;
       const seeds = existing.filter((ability) => ability.keep);
       const pool = [];
       for (let i = 0; i < count; i += 1) {
         const next = randomAbilityPreset(seeds.concat(pool));
         pool.push(next);
       }
-      writeAbilityCards(mergeRandomizedAbilities(pool, existing.length ? null : count));
+      writeAbilityCards(mergeRandomizedAbilities(pool, existing.length ? null : plan.total));
     }
   } else if (setupForm.querySelector(`[data-list-setting="${name}"]`)) {
     fallbackRandomizeListField(name);
@@ -3877,19 +3929,24 @@ function fieldContext(name) {
     const quantityLocked = abilityQuantityLocked();
     const existing = readAbilityCards();
     const free = existing.filter((ability) => !ability.keep).length;
-    // Cards already on the page set the count. Ask only for replacements of unlocked cards.
-    const rolledCount = existing.length ? free : rollAbilityCountForRandomize();
+    // One plan per randomize (planAbilityRoll): Lock Count keeps the cards' number;
+    // otherwise a fresh roll, the locked cards counted in. Ask only for the new ones.
+    const plan = planAbilityRoll();
+    const rolledCount = plan.keepSlots ? free : plan.fresh;
     const keptNames = existing.filter((ability) => ability.keep).map((ability) => ability.name).filter(Boolean);
     const originRule =
       "Invent distinct powers (name, description, cost, power_type, growth seed: pace/start/grows in words; the game computes all growth numbers). Mix inherent and trained-feeling fiction as fits the world. The app rolls quantity first, then after creation locks the stronger powers and sets prerequisites only on those. Focus on fiction quality, not forcing locked=true on every card.";
-    const countRule = existing.length
+    const countRule = plan.keepSlots
       ? `The page already has ${existing.length} abilities and that number must stay. Return exactly ${free} new abilities to replace the unlocked ones. Do not add or remove slots. Leave these locked abilities out of the result: ${keptNames.join(", ") || "(none)"}.`
-      : `Return exactly requested_count (${rolledCount}) ability slots (rolled from ${min}–${max}${quantityLocked ? ", quantity locked" : ", pure RNG"}). Do not pick a different count.`;
+      : keptNames.length
+        ? `Return exactly ${rolledCount} new abilities. The page keeps these locked abilities; leave them out of the result: ${keptNames.join(", ")}.`
+        : `Return exactly requested_count (${rolledCount}) ability slots (rolled from ${min}–${max}). Do not pick a different count.`;
     return {
       type: "special_abilities",
-      existing_count: existing.length,
-      kept_count: existing.length - free,
-      quantity_locked: quantityLocked || existing.length > 0,
+      existing_count: plan.keepSlots ? existing.length : plan.kept,
+      kept_count: plan.kept,
+      // The count is decided here, so the server fills exactly the new ones.
+      quantity_locked: quantityLocked || existing.length > 0 || plan.kept > 0,
       requested_count: rolledCount,
       target_count: rolledCount,
       count_rolled: true,
@@ -5214,8 +5271,7 @@ function randomizedFieldIsBlank(payload, name) {
 async function randomizeField(name, options = {}) {
   if (!options.ignoreLock && isSettingLocked(name)) return;
   if (name === "special_abilities") {
-    const existing = readAbilityCards();
-    if (existing.length && existing.every((ability) => ability.keep)) {
+    if (abilitiesAllLockedAndFull()) {
       setSetupRandomizeStatus("Every ability is locked, so the list stayed as it is.");
       return;
     }

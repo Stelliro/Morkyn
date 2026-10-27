@@ -1030,7 +1030,7 @@
                   <div class="powersDropdownBody">
                     <header class="subsectionHeader">
                       <div>
-                        <p class="empty">Add none, one, or several abilities. Lock an ability to keep it when you randomize; the others are rewritten, and the number of abilities stays. State on each card is whether it starts usable or needs a prerequisite. Growth type per card; Calculate level-up math fills numbers from world/difficulty. Final math also refreshes at Start.</p>
+                        <p class="empty">Add none, one, or several abilities. Lock an ability to keep it when you randomize; the others are rewritten. Each randomize rolls how many abilities there are between min and max, unless Lock Count is on. State on each card is whether it starts usable or needs a prerequisite. Growth type per card; Calculate level-up math fills numbers from world/difficulty. Final math also refreshes at Start.</p>
                       </div>
                       <div class="subsectionActions">
                         <button id="calcAllGrowthMathBtn" class="secondaryButton" type="button" title="Fill empty growth math from power type + setup context">Calculate all level-up math</button>
@@ -1052,7 +1052,7 @@
                         <span>Max</span>
                         <input id="abilityCountMax" type="number" min="1" max="4" value="4" step="1" inputmode="numeric" aria-label="Maximum abilities when randomizing" />
                       </label>
-                      <p class="empty abilityCountRangeHint">Min and max apply when the list is empty. Once abilities are here, randomize keeps that number: locked cards stay, the others are rewritten. Min does not add abilities. Max does not remove abilities you already have.</p>
+                      <p class="empty abilityCountRangeHint">Each randomize rolls a number between min and max. Locked abilities stay and count toward it; the rest are rewritten. Lock Count keeps the number you have now.</p>
                     </div>
                     <div id="abilityList" class="abilityList"></div>
                     <details class="powerTypeTips">
