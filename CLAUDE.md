@@ -59,6 +59,10 @@ belong to, with the date).
   is 0.11.x and the number only goes up. The full numbering, bump, tag and push procedure is the
   `release` skill (.claude/skills/release/SKILL.md): load it before touching CHANGELOG.md,
   APP_VERSION or a tag. Push, tag and release only on an explicit ask.
+- **docs/ai-content.md is the guide for LLMs** (2026-10-28): "make something so an llm can
+  understand the project better ... in addition to updating the changelogs, just add the
+  changelogs in that file". Every CHANGELOG.md entry also updates its condensed changelog
+  (same commit); a new module, folder, route or rule that changes the map updates the map too.
 - **Playtests: log only.** While Stell is playtesting, log each reported issue in
   docs/PLAYTEST_ISSUES.md (where, what, evidence, first guess at cause) and acknowledge. No fixes
   until Stell says testing is done (2026-10-05).
