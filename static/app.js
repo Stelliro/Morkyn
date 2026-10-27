@@ -3804,9 +3804,12 @@ function normalizeLookFieldsInForm() {
     face = ["hazel eyes, faint laugh lines, straight nose"];
   }
 
-  if (hairEl) hairEl.value = hair.slice(0, 2).join(", ");
-  if (faceEl) faceEl.value = face.join(", ");
-  if (appEl) {
+  // A box is rewritten only when a piece moved in or out; otherwise the
+  // player's own commas and spacing stay as typed.
+  const same = (el, list) => split(el?.value).join("\n") === list.join("\n");
+  if (hairEl && !same(hairEl, hair.slice(0, 2))) hairEl.value = hair.slice(0, 2).join(", ");
+  if (faceEl && !same(faceEl, face)) faceEl.value = face.join(", ");
+  if (appEl && !same(appEl, app)) {
     appEl.value = app.some((p) => p.includes(":")) ? app.join("; ") : app.join(", ");
   }
   // Mirror into Simple fields when present
