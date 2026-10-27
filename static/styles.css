@@ -14537,11 +14537,11 @@ body.setup-tabbed .setupSimpleLayout:has(#characterPortraitCard.isCollapsed) {
 }
 
 body.setup-tabbed.setup-presets-open .setupPresetWindow {
-  flex: 0 0 min(360px, 30vw);
+  flex: 0 0 min(432px, 36vw);
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-width: 280px;
+  min-width: 336px;
   overflow: auto;
   padding: 14px;
   border: 1px solid var(--line);
