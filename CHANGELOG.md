@@ -23,6 +23,14 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. The next push is `0.11.4`.
 
+### Added
+- [CLAUDE] New-game tabs (Stell, 2026-10-28: "make the new game settings tabs at the top the player can go through"): Primary, Identity, Powers, World, People, Rules and Checks & Dice, with Back/Next at the bottom and arrow keys on the tab bar. The section headings stop folding while tabbed (the tab is the fold, `data-no-fold` in static/ui/interact.js). The setup tour walks the page in order, opening each tab before its step, with new Tabs and Search steps (tutorial key v12, so it shows once more) - static/app.js (SETUP_TABS, setSetupTab, SETUP_TOUR_ORDER), static/index.html, static/styles.css.
+- [CLAUDE] Settings search on the new-game page (Stell, 2026-10-28): finds a setting by its label, by what a text field holds, or by a dropdown's options, never by placeholders, examples or tips. Live after three characters or on Enter, at most every 0.5 s while typing. Results stand where the settings are, each with its own control bound to the real field (the field's own input and change events fire, so syncs, locks and Start see the edit); the list is a snapshot until the search changes. "Localized tab search" (off by default) keeps it to the open tab; Show opens the field in its tab - static/app.js (runSetupSearch, setupSearchControl).
+- [CLAUDE] A short in-game tour (Stell, 2026-10-28: "we just need to show players were things are ... we dont want it long, but we do want it to be informative"): eleven spotlight steps over the story, the input, the turn buttons, Ask/Help, Talking to, History, the map, You, Who is here, the pack and the menu; once on the first game, skipped steps for hidden parts (seven on a phone); Settings, Tutorials, Replay game tour - static/ui/game_tour.js.
+
+### Fixed
+- [CLAUDE] A section's help text keeps a readable width and its buttons wrap below it (Stell, 2026-10-28: the Powers text "extends itself out ... dragging down the screen" for some players): on a 1024-wide or scaled window the button row would not shrink and squeezed the text to 144 px wide and 320 px tall - static/styles.css (.subsectionHeader).
+
 ## [0.11.3] - 2026-10-28
 
 > The Windows NVIDIA (CUDA) engine pack works on a PC with only the graphics driver: it carries the CUDA runtime and cuBLAS, and the game loads them before the model library. Players who installed the old pack reinstall it (Updates, Local engine).

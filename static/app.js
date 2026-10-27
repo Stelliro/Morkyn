@@ -30334,6 +30334,19 @@ document.querySelector("#settingsOpenLlm")?.addEventListener("click", () => {
 document.querySelector("#settingsResetTutorial")?.addEventListener("click", () => {
   resetSetupTutorialFromSettings();
 });
+document.querySelector("#settingsReplayGameTour")?.addEventListener("click", () => {
+  const tour = window.MorkynGameTour;
+  if (!tour) return;
+  closeAppSettings();
+  // In play the tour starts now; elsewhere it shows the next time the game opens.
+  const game = document.querySelector("#gameView");
+  if (game && !game.classList.contains("hidden")) tour.start();
+  else {
+    tour.reset();
+    const st = document.querySelector("#appSettingsStatus");
+    if (st) st.textContent = "The game tour shows the next time you open a game.";
+  }
+});
 document.querySelector("#settingsReloadUi")?.addEventListener("click", () => {
   window.location.reload();
 });

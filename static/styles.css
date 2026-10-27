@@ -14587,3 +14587,70 @@ body.setup-searching .setupTabStepper {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* The in-game tour (static/ui/game_tour.js): one lit part of the play screen,
+   the rest dimmed, and a small card beside it. */
+.gameTour {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+}
+
+.gameTour[hidden] {
+  display: none;
+}
+
+.gameTourSpot {
+  position: fixed;
+  border: 1px solid var(--thread);
+  border-radius: 6px;
+  box-shadow: 0 0 0 9999px color-mix(in srgb, var(--ink) 72%, transparent);
+  pointer-events: none;
+  transition: top 160ms ease, left 160ms ease, width 160ms ease, height 160ms ease;
+}
+
+.gameTourCard {
+  position: fixed;
+  width: min(360px, calc(100vw - 16px));
+  padding: 14px 16px 12px;
+  border: 1px solid var(--thread-dim, var(--line));
+  border-radius: 8px;
+  background: var(--surface-solid, var(--surface));
+  color: var(--text);
+}
+
+.gameTourMeta {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.gameTourTitle {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+}
+
+.gameTourText {
+  margin: 0 0 12px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.gameTourActions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.gameTourActions [data-game-tour="skip"] {
+  margin-right: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gameTourSpot {
+    transition: none;
+  }
+}
