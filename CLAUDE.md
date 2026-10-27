@@ -245,6 +245,14 @@ belong to, with the date).
   the engine's encounter state, never the prose. Not a future addition: it is the next job
   after the work in hand (the attack line, then the transaction parser and ask-to-move) is
   fixed; the theft and locked-places items in docs/TODO_NEXT.md come after it.
+- **New-game settings are tabs, with a search bar and two short tours** (2026-10-28). Tabs across
+  the top the player steps through (the setup tour follows them); a short in-game tour that only
+  shows where things are. The search bar at the top finds settings by label, by what a text field
+  holds and by a dropdown's options, never by placeholders, examples or tips. A "Localized tab
+  search" toggle, off by default, limits it to the open tab. Results show in place of the
+  settings, live after a few characters or on Enter, refreshed at most every 0.5 s while typing.
+  The list is a snapshot: editing a result does not drop it until the search text changes, and
+  Start saves the edits without refreshing the search.
 - **The Settlement map view is for the settlement you are in** (2026-10-23): "when the player is
   not in a town or settlemnet the player can still view the settlement tab". It was built for
   #19 as "the settlement you are in, or one you know"; outside a settlement it is not offered.

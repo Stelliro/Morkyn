@@ -3867,12 +3867,20 @@ fieldset.settingField > .settingControls {
   display: flex;
   align-items: start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 14px;
   margin-top: 16px;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-3);
+}
+
+/* The text keeps a readable width; the buttons wrap below it instead of
+   squeezing it to one word a line on a narrow or scaled window. */
+.subsectionHeader > :not(.subsectionActions) {
+  flex: 1 1 320px;
+  min-width: 0;
 }
 
 .subsectionHeader p {
@@ -3887,7 +3895,7 @@ fieldset.settingField > .settingControls {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
 }
 
 .abilityLock {
