@@ -56,6 +56,17 @@
       title: "Pack",
       text: "What you carry and wear.",
     },
+    // Device-specific: each shows only where its part is on screen.
+    {
+      sel: ".gameBookmarks .gameBookmark",
+      title: "Bookmarks",
+      text: "Slide this handle out from the edge to open your character. A tap does nothing, so it never opens by accident. To come back, slide the handle on the left edge.",
+    },
+    {
+      sel: ".popHint.popWindow",
+      title: "Pop out",
+      text: "Opens this panel in its own window, so you can keep it beside the game.",
+    },
     {
       sel: "#playMenuToggle",
       title: "Menu",

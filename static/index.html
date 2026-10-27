@@ -94,9 +94,14 @@
             <h2>No phone home</h2>
             <p>
               No analytics, no tracking, nothing about you or your games is sent anywhere. The one exception is
-              <strong>updates</strong>: Mørkyn contacts GitHub to check for and download new versions, and a packaged
-              build fetches the engine pack your hardware needs the first time it starts.
+              <strong>updates</strong>, always from GitHub and nothing about you sent with them:
             </p>
+            <ul>
+              <li>Checking for and downloading new versions when you open Updates.</li>
+              <li>A packaged build fetches the engine pack your hardware needs the first time it starts, without asking.</li>
+              <li>Started from a source folder with <code>start.sh</code>, each launch checks for a newer version
+                (it asks before applying one; <code>--no-update</code> skips the check).</li>
+            </ul>
             <p>
               Anything else reaches the internet only when you ask for it: downloading a model, a voice or an image
               add-on, or using a cloud model or voice service you set up yourself (your story text then goes to that service).
@@ -110,6 +115,7 @@
               <li><code>static/ui/death.js</code>: the "You died" screen.</li>
               <li><code>static/ui/frame.js</code>: colours the title bar of Mørkyn's own window; does nothing in a browser.</li>
               <li><code>static/ui/game_tour.js</code>: the short tour of the play screen.</li>
+              <li><code>static/ui/game_bookmarks.js</code>: the bookmark handles on the screen's edge that slide out a window on phones and touch screens.</li>
               <li>One small script inside this page (<code>static/index.html</code>): the loading screen you are looking at.</li>
             </ul>
             <h2>To play</h2>
@@ -2509,5 +2515,6 @@
     <script src="/static/ui/death.js?v=__BUNDLE__"></script>
     <script src="/static/ui/frame.js?v=__BUNDLE__"></script>
     <script src="/static/ui/game_tour.js?v=__BUNDLE__"></script>
+    <script src="/static/ui/game_bookmarks.js?v=__BUNDLE__"></script>
   </body>
 </html>

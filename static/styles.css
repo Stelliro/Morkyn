@@ -14864,3 +14864,84 @@ body.setup-searching .setupTabStepper {
     transition: none;
   }
 }
+
+/* Play-screen bookmarks (static/ui/game_bookmarks.js): a handle on the right
+   edge slides out a bookmarked window; while one is open, a handle on the left
+   edge slides back. Narrow windows and touch screens (desktop mode too). */
+.gameBookmarks,
+.gameBookmarkBack {
+  display: none;
+}
+
+@media (max-width: 899.98px), (any-pointer: coarse) {
+  .gameBookmarks {
+    position: fixed;
+    right: 0;
+    top: 58%;
+    z-index: 70;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .gameBookmarkBack {
+    position: fixed;
+    left: 0;
+    top: 58%;
+    z-index: 70;
+    display: flex;
+  }
+
+  .gameBookmarks[hidden],
+  .gameBookmarkBack[hidden] {
+    display: none;
+  }
+}
+
+.gameBookmark {
+  --pull: 0px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 26px;
+  min-height: 0;
+  padding: 8px 0;
+  border: 1px solid var(--thread-dim, var(--line));
+  background: var(--surface-solid, var(--surface));
+  color: var(--thread);
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.gameBookmarks .gameBookmark {
+  border-right: 0;
+  border-radius: 6px 0 0 6px;
+  transform: translateX(calc(var(--pull) * -1));
+}
+
+.gameBookmarkBack {
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+  transform: translateX(var(--pull));
+}
+
+.gameBookmark.isPulling {
+  border-color: var(--thread);
+  color: var(--thread-bright);
+  cursor: grabbing;
+}
+
+.gameBookmarkGlyph {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.gameBookmarkLabel {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
