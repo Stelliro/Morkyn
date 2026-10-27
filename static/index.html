@@ -383,6 +383,9 @@
       </div>
 
       <section id="setupView" class="setupView hidden">
+        <!-- Narrow windows: the presets are their own view, reached from the screen's edges. -->
+        <button type="button" class="setupEdgeHandle setupEdgeHandleLeft" id="setupPresetEdgeOpen" aria-controls="setupPresetDock" title="Presets and locked settings">&raquo;</button>
+        <button type="button" class="setupEdgeHandle setupEdgeHandleRight" id="setupPresetEdgeBack" title="Back to the settings">&laquo;</button>
         <!-- First-time setup tutorial + spotlight tour -->
         <div id="setupTutorial" class="setupTutorial hidden" role="dialog" aria-modal="true" aria-labelledby="setupTutorialTitle">
           <div id="setupTutorialIntro" class="setupTutorialCard">
@@ -621,7 +624,19 @@
                 </section>
                 <div id="setupIntentSummarySimple" class="setupIntentSummary setupIntentSummarySimple" hidden></div>
               </div>
-              <aside class="setupPresetDock" id="setupPresetDock" aria-label="Presets"></aside>
+              <aside class="setupPresetDock" id="setupPresetDock" aria-label="Presets">
+                <section class="setupLockedList" id="setupLockedList" aria-labelledby="setupLockedHeading">
+                  <h3 id="setupLockedHeading">Locked settings</h3>
+                  <p class="empty">Randomize and Confirm preset leave these as they are. Edit or unlock them here.</p>
+                  <div id="setupLockedRows" class="setupLockedRows"></div>
+                </section>
+              </aside>
+              <div class="setupPresetBookmarkCell">
+                <button type="button" class="setupPresetBookmark" id="setupPresetBookmark" aria-expanded="false" aria-controls="setupPresetDock">
+                  <span class="setupPresetBookmarkArrow" aria-hidden="true">&raquo;</span>
+                  <span class="setupPresetBookmarkLabel">Presets</span>
+                </button>
+              </div>
               <aside class="setupSimpleArtCol" aria-label="Character art">
                 <div id="setupSimpleArtMount" class="setupSimpleArtMount"></div>
               </aside>

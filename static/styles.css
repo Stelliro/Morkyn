@@ -14496,20 +14496,72 @@ body.setup-tabbed #setupOptionalGroup {
   margin: 0;
 }
 
-/* Tabbed: the open tab (or the search results) on the left, the presets docked
-   on the right, in view while the left scrolls, so a preset can be confirmed
-   and its changes watched without leaving the tab. The art card is a tab. */
+/* Tabbed: the presets are a drawer on the left, opened from a bookmark on its
+   edge; open, it pushes the tab (or the search results) to the right rather
+   than covering it, and stays in view while the tab scrolls. The art card is
+   a tab. Narrow windows: the presets are their own view (edge handles). */
 body.setup-tabbed .setupSimpleLayout,
 body.setup-tabbed .setupSimpleLayout:has(#characterPortraitCard.isCollapsed) {
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 30%);
+  grid-template-columns: 30px minmax(0, 1fr);
+  column-gap: 10px;
 }
 
-body.setup-tabbed .setupSimpleLayout > :not(.setupPresetDock) {
-  grid-column: 1;
+body.setup-tabbed.setup-presets-open .setupSimpleLayout,
+body.setup-tabbed.setup-presets-open .setupSimpleLayout:has(#characterPortraitCard.isCollapsed) {
+  grid-template-columns: minmax(300px, 34%) 30px minmax(0, 1fr);
+}
+
+body.setup-tabbed .setupSimpleLayout > :not(.setupPresetDock):not(.setupPresetBookmarkCell) {
+  grid-column: -2 / -1;
+}
+
+body.setup-tabbed .setupPresetBookmarkCell {
+  grid-column: -3 / -2;
+  grid-row: 1 / span 3;
+  align-self: stretch;
+}
+
+.setupPresetBookmark {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 30px;
+  min-height: 0;
+  padding: 10px 0;
+  border: 1px solid var(--thread-dim, var(--line));
+  border-left-width: 2px;
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-solid, var(--surface));
+  color: var(--thread);
+  cursor: pointer;
+}
+
+.setupPresetBookmark:hover,
+.setupPresetBookmark[aria-expanded="true"] {
+  border-color: var(--thread);
+  color: var(--thread-bright);
+}
+
+.setupPresetBookmarkLabel {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
 body.setup-tabbed .setupPresetDock {
-  grid-column: 2;
+  display: none;
+}
+
+body.setup-tabbed.setup-presets-open .setupPresetDock {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  grid-column: 1;
   grid-row: 1 / span 3;
   position: sticky;
   top: 8px;
@@ -14530,32 +14582,122 @@ body.setup-tabbed .setupSimpleArtCol {
   order: 0;
 }
 
-/* Docked, the preset card does not fold. */
-@media (min-width: 900px) {
-  body.setup-tabbed #setupPresetCollapseMeta,
-  body.setup-tabbed #setupPresetToggle .characterArtChevron {
-    display: none;
-  }
-
-  body.setup-tabbed #setupPresetToggle {
-    cursor: default;
-  }
+/* The preset card does not fold in the drawer or the narrow view. */
+body.setup-tabbed #setupPresetCollapseMeta,
+body.setup-tabbed #setupPresetToggle .characterArtChevron {
+  display: none;
 }
 
-/* Narrow: one column, the presets fold above the tab. */
+body.setup-tabbed #setupPresetToggle {
+  cursor: default;
+}
+
+.setupLockedList {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.setupLockedList h3 {
+  margin: 0 0 4px;
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--thread);
+}
+
+.setupLockedList > .empty {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+}
+
+.setupLockedRows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setupLockedRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.setupLockedRow:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* The edge handles are for narrow windows only. */
+.setupEdgeHandle {
+  display: none;
+}
+
 @media (max-width: 899.98px) {
   body.setup-tabbed .setupSimpleLayout,
-  body.setup-tabbed .setupSimpleLayout:has(#characterPortraitCard.isCollapsed) {
+  body.setup-tabbed .setupSimpleLayout:has(#characterPortraitCard.isCollapsed),
+  body.setup-tabbed.setup-presets-open .setupSimpleLayout,
+  body.setup-tabbed.setup-presets-open .setupSimpleLayout:has(#characterPortraitCard.isCollapsed) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body.setup-tabbed .setupPresetDock {
+  body.setup-tabbed .setupSimpleLayout > :not(.setupPresetDock):not(.setupPresetBookmarkCell) {
     grid-column: 1;
-    grid-row: auto;
-    position: static;
-    max-height: none;
-    overflow: visible;
-    order: -1;
+  }
+
+  body.setup-tabbed .setupPresetBookmarkCell,
+  body.setup-tabbed.setup-presets-open .setupPresetDock {
+    display: none;
+  }
+
+  body.setup-tabbed .setupEdgeHandle {
+    position: fixed;
+    top: 50%;
+    z-index: 60;
+    display: block;
+    width: 22px;
+    height: 64px;
+    margin-top: -32px;
+    padding: 0;
+    border: 1px solid var(--thread-dim, var(--line));
+    background: var(--surface-solid, var(--surface));
+    color: var(--thread);
+    font-size: 0.9rem;
+  }
+
+  .setupEdgeHandleLeft {
+    left: 0;
+    border-left: 0;
+    border-radius: 0 6px 6px 0;
+  }
+
+  .setupEdgeHandleRight {
+    right: 0;
+    border-right: 0;
+    border-radius: 6px 0 0 6px;
+  }
+
+  body.setup-tabbed:not(.setup-preset-view) #setupPresetEdgeBack,
+  body.setup-tabbed.setup-preset-view #setupPresetEdgeOpen {
+    display: none;
+  }
+
+  /* The presets view: the drawer's contents fill the page; the tabs wait. */
+  body.setup-preset-view .setupPresetDock {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+    grid-column: 1;
+  }
+
+  body.setup-preset-view .setupSimpleLayout > :not(.setupPresetDock),
+  body.setup-preset-view #setupTabs,
+  body.setup-preset-view .setupSimpleLead,
+  body.setup-preset-view .setupTabStepper,
+  body.setup-preset-view #setupSearchResults {
+    display: none !important;
   }
 }
 

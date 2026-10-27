@@ -4093,16 +4093,17 @@ function initSetupTabs() {
   const bar = document.querySelector("#setupTabs");
   if (!bar) return;
   document.body.classList.add("setup-tabbed");
-  // Presets dock beside the tabs (Stell, 2026-10-28: the open fold covered the
-  // page, but presets must stay in reach while editing, to randomize and watch
-  // the fields change). The search results stand in the tabs' column.
+  // Presets are a drawer on the left, opened from a bookmark on the edge, that
+  // pushes the tabs right instead of covering them (Stell, 2026-10-28); the
+  // locked settings sit under the preset. A narrow window shows them as their
+  // own view instead. The search results stand in the tabs' column.
   const layout = document.querySelector(".setupSimpleLayout");
   const dock = document.querySelector("#setupPresetDock");
   const presetRow = document.querySelector("#setupPresetRow");
   const results = document.querySelector("#setupSearchResults");
-  if (dock && presetRow && presetRow.parentElement !== dock) dock.appendChild(presetRow);
+  if (dock && presetRow && presetRow.parentElement !== dock) dock.prepend(presetRow);
   if (layout && results && results.parentElement !== layout) layout.prepend(results);
-  if (!isNarrowSetupViewport()) setSetupPresetsCollapsed(false, false);
+  setSetupPresetsCollapsed(false, false);
   SETUP_TABS.forEach((tab) =>
     setupTabPanels(tab.key).forEach((panel) => {
       panel.dataset.setupTab = tab.key;
@@ -4127,12 +4128,176 @@ function initSetupTabs() {
     document.querySelector("#setupTabBack")?.addEventListener("click", () => stepSetupTab(-1));
     document.querySelector("#setupTabNext")?.addEventListener("click", () => stepSetupTab(1));
     bindSetupSearch();
-    // Widened past the phone layout: the preset card docks open again.
-    window.addEventListener("resize", () => {
-      if (!isNarrowSetupViewport()) setSetupPresetsCollapsed(false, false);
-    });
+    bindPresetDrawer();
   }
   setSetupTab(setupTab);
+}
+
+/* ---- Presets drawer and locked settings (Stell, 2026-10-28) ---------------- */
+const PRESET_DRAWER_KEY = "morkyn-setup-presets-drawer";
+const presetViewReturn = { panel: 0, page: 0 };
+
+function presetDrawerOpen() {
+  return document.body.classList.contains("setup-presets-open");
+}
+
+function setPresetDrawer(open, { persist = true } = {}) {
+  document.body.classList.toggle("setup-presets-open", Boolean(open));
+  const btn = document.querySelector("#setupPresetBookmark");
+  if (btn) {
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.title = open ? "Close the presets" : "Presets and locked settings";
+    const arrow = btn.querySelector(".setupPresetBookmarkArrow");
+    if (arrow) arrow.textContent = open ? "\u00ab" : "\u00bb";
+  }
+  if (open) renderLockedSettings();
+  if (!persist) return;
+  try {
+    localStorage.setItem(PRESET_DRAWER_KEY, open ? "1" : "0");
+  } catch (_) {
+    /* the drawer simply starts closed next time */
+  }
+}
+
+// Narrow windows: the presets replace the settings, and coming back returns
+// to the very place the player was looking at.
+function presetViewOn() {
+  return document.body.classList.contains("setup-preset-view");
+}
+
+function setPresetView(on) {
+  const panel = document.querySelector("#setupSimplePanel");
+  if (on && !presetViewOn()) {
+    presetViewReturn.panel = panel?.scrollTop || 0;
+    presetViewReturn.page = window.scrollY || 0;
+    document.body.classList.add("setup-preset-view");
+    renderLockedSettings();
+    if (panel) panel.scrollTop = 0;
+    window.scrollTo(0, 0);
+  } else if (!on && presetViewOn()) {
+    document.body.classList.remove("setup-preset-view");
+    requestAnimationFrame(() => {
+      if (panel) panel.scrollTop = presetViewReturn.panel;
+      window.scrollTo(0, presetViewReturn.page);
+    });
+  }
+}
+
+// Show the presets the way this window can: the drawer, or the narrow view.
+function showPresets(on = true, options = {}) {
+  if (isNarrowSetupViewport()) setPresetView(on);
+  else setPresetDrawer(on, options);
+}
+
+function bindPresetDrawer() {
+  document.querySelector("#setupPresetBookmark")?.addEventListener("click", () => setPresetDrawer(!presetDrawerOpen()));
+  document.querySelector("#setupPresetEdgeOpen")?.addEventListener("click", () => setPresetView(true));
+  document.querySelector("#setupPresetEdgeBack")?.addEventListener("click", () => setPresetView(false));
+  let open = false;
+  try {
+    open = localStorage.getItem(PRESET_DRAWER_KEY) === "1";
+  } catch (_) {
+    open = false;
+  }
+  setPresetDrawer(open, { persist: false });
+  // Widened past the narrow layout while the presets view was up: the drawer takes over.
+  window.addEventListener("resize", () => {
+    if (!isNarrowSetupViewport() && presetViewOn()) {
+      setPresetView(false);
+      setPresetDrawer(true);
+    }
+  });
+  // A lock ticked or cleared anywhere on the page updates the list.
+  document.addEventListener("change", (event) => {
+    if (!event.target?.matches?.("[data-lock-setting]")) return;
+    if (presetDrawerOpen() || presetViewOn()) renderLockedSettings();
+  });
+}
+
+function renderLockedSettings() {
+  const rows = document.querySelector("#setupLockedRows");
+  if (!rows || !setupForm) return;
+  rows.innerHTML = "";
+  const names = lockedSettingNames();
+  if (!names.length) {
+    const none = document.createElement("p");
+    none.className = "empty";
+    none.textContent = "Nothing is locked. Tick Lock beside a setting to keep it through Randomize and Confirm preset.";
+    rows.appendChild(none);
+    return;
+  }
+  names.forEach((name) => rows.appendChild(lockedSettingRow(name)));
+}
+
+function lockedSettingRow(name) {
+  const row = document.createElement("div");
+  row.className = "setupLockedRow";
+  const head = document.createElement("div");
+  head.className = "setupSearchMeta";
+  const fields = Array.from(setupForm.querySelectorAll(`[name="${CSS.escape(name)}"]`)).filter(
+    (el) => !el.matches("[data-lock-setting], [type=hidden]"),
+  );
+  const label = document.createElement("span");
+  label.className = "setupSearchName";
+  // A set of ticks is named by its heading; one field by its own label.
+  const legend = fields[0]?.closest("fieldset")?.querySelector("legend")?.textContent?.trim();
+  label.textContent = (fields.length > 1 && legend) || (fields[0] && setupFieldLabel(fields[0])) || settingLabel(name);
+  head.appendChild(label);
+  const show = document.createElement("button");
+  show.type = "button";
+  show.className = "chipBtn";
+  show.textContent = "Show";
+  show.addEventListener("click", () => {
+    const target = fields[0] || setupForm.querySelector(`[data-lock-setting="${CSS.escape(name)}"]`);
+    if (presetViewOn()) setPresetView(false);
+    if (target) revealSetupField(target);
+  });
+  const unlock = document.createElement("button");
+  unlock.type = "button";
+  unlock.className = "chipBtn";
+  unlock.textContent = "Unlock";
+  unlock.addEventListener("click", () => {
+    const lock = setupForm.querySelector(`[data-lock-setting="${CSS.escape(name)}"]`);
+    if (!lock) return;
+    lock.checked = false;
+    lock.dispatchEvent(new Event("change", { bubbles: true }));
+    syncSettingLocks(name, false);
+    renderLockedSettings();
+  });
+  head.append(show, unlock);
+  row.appendChild(head);
+  if (!fields.length) {
+    const note = document.createElement("p");
+    note.className = "empty";
+    note.textContent = "Edited in its tab.";
+    row.appendChild(note);
+  } else if (fields.length > 1 && (fields[0].type === "checkbox" || fields[0].type === "radio")) {
+    row.appendChild(setupChoiceMirror(fields));
+  } else {
+    row.appendChild(setupSearchControl(fields[0], fields));
+  }
+  return row;
+}
+
+// A set of ticks or choices, each bound to its real box.
+function setupChoiceMirror(fields) {
+  const box = document.createElement("div");
+  box.className = "setupSearchChoices";
+  fields.forEach((real) => {
+    const label = document.createElement("label");
+    const mirror = document.createElement("input");
+    mirror.type = real.type;
+    if (real.type === "radio") mirror.name = `mirror-${real.name}`;
+    mirror.checked = real.checked;
+    mirror.addEventListener("change", () => {
+      real.checked = mirror.checked;
+      real.dispatchEvent(new Event("input", { bubbles: true }));
+      real.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    label.append(mirror, ` ${setupFieldLabel(real)}`);
+    box.appendChild(label);
+  });
+  return box;
 }
 
 function stepSetupTab(delta) {
@@ -5664,9 +5829,8 @@ function syncPresetEditorFromSelection() {
 const SETUP_PRESETS_COLLAPSED_KEY = "morkyn-setup-presets-collapsed";
 
 function setSetupPresetsCollapsed(collapsed, persist = true) {
-  // Docked beside the tabs the preset card is never folded (a narrow window
-  // stacks it above the tabs, where it folds as before).
-  const docked = document.body.classList.contains("setup-tabbed") && !isNarrowSetupViewport();
+  // In the presets drawer (or the narrow presets view) the card never folds.
+  const docked = document.body.classList.contains("setup-tabbed");
   if (docked) collapsed = false;
   const row = document.querySelector("#setupPresetRow");
   const card = document.querySelector("#setupPresetCard");
@@ -8699,7 +8863,7 @@ const SETUP_TOUR_TABS = {
 // The tour walks the page as it is read: Primary and its field controls, the
 // header buttons, search, then each tab in order, then Start.
 const SETUP_TOUR_ORDER = [
-  "llm", "save", "search", "tabs", "presets",
+  "llm", "save", "search", "tabs", "preset-bookmark", "presets", "locked",
   "steps-chip", "name-field", "name-random", "name-lock", "name-ai",
   "step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "art-card", "art-forge", "start",
 ];
@@ -8717,6 +8881,8 @@ function getSetupTourSteps() {
       ...step,
       before: () => {
         clearSetupSearch();
+        // A narrow window's presets view hides the tabs: leave it first.
+        if (isNarrowSetupViewport()) setPresetView(false);
         setSetupTab(tab);
         return before?.();
       },
@@ -8766,8 +8932,30 @@ function setupTourStepList() {
         "New makes a text preset. Confirm preset fills the page from that idea, including powers, " +
         "or loads a saved setup or a previous game’s opening. Save preset stores the page as it is now.",
       shape: "rect",
-      before: () => setSetupPresetsCollapsed(false, false),
+      before: () => showPresets(true, { persist: false }),
       select: () => document.querySelector("#presetSelect") || document.querySelector("#setupPresetCard"),
+    },
+    {
+      id: "preset-bookmark",
+      title: "Presets drawer",
+      // The words follow the window: a bookmark on a wide one, the edge handles on a narrow one.
+      text: isNarrowSetupViewport()
+        ? "Tap the » on the left edge to open the presets and locked settings. The « on the right edge brings you back to the exact spot you left."
+        : "This bookmark opens the presets beside your settings, so you can confirm a preset or randomize and watch the fields change. Click it again to close it.",
+      shape: "pill",
+      before: () => showPresets(false, { persist: false }),
+      select: () =>
+        isNarrowSetupViewport() ? document.querySelector("#setupPresetEdgeOpen") : document.querySelector("#setupPresetBookmark"),
+    },
+    {
+      id: "locked",
+      title: "Locked settings",
+      text:
+        "Every setting you lock is listed under the preset. Randomize and Confirm preset leave them as they are. " +
+        "Edit one here, Show it in its tab, or Unlock it.",
+      shape: "rect",
+      before: () => showPresets(true, { persist: false }),
+      select: () => document.querySelector("#setupLockedList"),
     },
     {
       id: "tabs",
@@ -8985,6 +9173,17 @@ function endSetupTour(remember = true) {
   document.querySelector("#setupTutorialIntro")?.classList.remove("hidden");
   clearSetupTourHighlight();
   closeSetupStepFlyout();
+  // The tour opened the presets to show them: put them back as the player had them.
+  if (document.body.classList.contains("setup-tabbed")) {
+    setPresetView(false);
+    let open = false;
+    try {
+      open = localStorage.getItem(PRESET_DRAWER_KEY) === "1";
+    } catch (_) {
+      open = false;
+    }
+    setPresetDrawer(open, { persist: false });
+  }
   const dontShow = document.querySelector("#setupTutorialDontShow");
   // Only remember dismissal when "Don't show again" is checked (default).
   if (remember && dontShow?.checked) markSetupTutorialSeen();
