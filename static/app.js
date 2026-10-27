@@ -4125,7 +4125,11 @@ function setFormFieldValue(name, value) {
     el.checked = Boolean(value);
     return;
   }
-  el.value = value == null ? "" : String(value);
+  const next = value == null ? "" : String(value);
+  // Several Simple inputs are the form field itself; a value that differs only
+  // by the trim is the player mid-word, and rewriting it would eat their space.
+  if (el.value !== next && String(el.value).trim() === next.trim()) return;
+  el.value = next;
 }
 
 function getFormFieldValue(name) {
@@ -4166,7 +4170,8 @@ function setWorldStyleSimple(text) {
     // Keep the Simple vibe in custom_style when it is still the prior seed (not a longer Advanced note).
     if (styleEl && styleIsSeed) {
       const cap = Number(styleEl.maxLength) > 0 ? Number(styleEl.maxLength) : 800;
-      styleEl.value = t.slice(0, cap);
+      // #simpleWorld is custom_style itself: rewriting it trimmed eats the space being typed.
+      if (styleCur !== t.slice(0, cap)) styleEl.value = t.slice(0, cap);
     }
   } else {
     if (customRadio) customRadio.checked = false;
@@ -21670,12 +21675,13 @@ document.querySelectorAll('input[name="simple_power_mode"]').forEach((r) => {
 ].forEach((sel) => {
   const el = document.querySelector(sel);
   if (!el) return;
-  const sync = () => {
+  const sync = (event) => {
     if (setupUiMode === "simple") {
       pushSimpleToForm();
       if (sel === "#simpleGameSystem") updateSimpleRulesVisibility();
-      // Look fields feed art — keep advanced names in sync for prompt rebuild
-      if (sel === "#simpleHair" || sel === "#simpleFace" || sel === "#simpleLook") {
+      // Look fields feed art — keep advanced names in sync for prompt rebuild.
+      // Only once the box is left: the tidy-up rewrites the box being typed in.
+      if (event?.type === "change" && (sel === "#simpleHair" || sel === "#simpleFace" || sel === "#simpleLook")) {
         normalizeLookFieldsInForm();
       }
     }
