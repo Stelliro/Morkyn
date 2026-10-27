@@ -14509,6 +14509,16 @@ body.setup-tabbed .setupSimpleArtCol {
   order: 0;
 }
 
+/* The preset card is a tab: no fold toggle, no fold note. */
+body.setup-tabbed #setupPresetCollapseMeta,
+body.setup-tabbed #setupPresetToggle .characterArtChevron {
+  display: none;
+}
+
+body.setup-tabbed #setupPresetToggle {
+  cursor: default;
+}
+
 /* The search sits under the page title, so it stays in reach while searching. */
 .setupHeader .setupSearchBar {
   margin: 10px 0 12px;
