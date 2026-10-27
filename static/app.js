@@ -4130,6 +4130,10 @@ function initSetupTabs() {
     document.querySelector("#setupTabNext")?.addEventListener("click", () => stepSetupTab(1));
     bindSetupSearch();
     bindPresetDrawer();
+    document.querySelector("#setupLockAllTab")?.addEventListener("click", lockAllInTab);
+    document.addEventListener("change", (event) => {
+      if (event.target?.matches?.("[data-lock-setting]")) syncLockAllButton();
+    });
   }
   setSetupTab(setupTab);
 }
@@ -4377,6 +4381,50 @@ function sizePresetIdea() {
   el.style.height = `${Math.max(min, el.scrollHeight + border)}px`;
 }
 
+// The settings a preset fills on one tab, in the composer's order.
+function setupTabFieldNames(tabKey) {
+  const panels = setupTabPanels(tabKey);
+  const names = [...new Set([...RANDOM_FIELD_ORDER, ...SIMPLE_RANDOM_FIELD_ORDER])];
+  return names.filter((name) => {
+    if (name === "special_abilities") return tabKey === "powers";
+    const field = setupForm?.elements?.[name] || setupForm?.querySelector(`[data-lock-setting="${CSS.escape(name)}"]`);
+    const node = typeof RadioNodeList !== "undefined" && field instanceof RadioNodeList ? field[0] : field;
+    return Boolean(node) && panels.some((panel) => panel.contains(node));
+  });
+}
+
+function setupTabLocks(tabKey = setupTab) {
+  return setupTabPanels(tabKey).flatMap((panel) => Array.from(panel.querySelectorAll("[data-lock-setting]")));
+}
+
+// "Lock all in tab" (Stell, 2026-10-28): lock everything on the open tab, then
+// unlock any one by hand. With all locked it offers the reverse.
+function syncLockAllButton() {
+  const btn = document.querySelector("#setupLockAllTab");
+  if (!btn) return;
+  const locks = setupTabLocks();
+  btn.disabled = !locks.length;
+  const allOn = locks.length > 0 && locks.every((lock) => lock.checked);
+  btn.textContent = allOn ? "Unlock all in tab" : "Lock all in tab";
+  btn.setAttribute("aria-pressed", allOn ? "true" : "false");
+}
+
+function lockAllInTab() {
+  const locks = setupTabLocks();
+  if (!locks.length) return;
+  const next = !locks.every((lock) => lock.checked);
+  const names = new Set();
+  locks.forEach((lock) => {
+    if (lock.checked === next) return;
+    lock.checked = next;
+    names.add(lock.dataset.lockSetting);
+    lock.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  names.forEach((name) => syncSettingLocks(name, next));
+  syncLockAllButton();
+  if (presetDrawerOpen() || presetViewOn()) renderLockedSettings();
+}
+
 function stepSetupTab(delta) {
   const index = setupTabIndex(setupTab) + delta;
   if (index < 0 || index >= SETUP_TABS.length) return;
@@ -4419,6 +4467,7 @@ function setSetupTab(key, { fromTabBar = false } = {}) {
   }
   window.MorkynInteract?.applyFolds?.();
   fillSetupGaps();
+  syncLockAllButton();
 }
 
 /* ---- Settings search (Stell, 2026-10-28) ----------------------------------
@@ -5033,6 +5082,8 @@ function closeRandomizePopover() {
 
 /** True once the player confirmed a preset or typed an idea; Start only then reads the preset idea. */
 let setupIdeaChosen = false;
+/** True once a preset filled every tab: Start then plays what the player saw instead of expanding it again. */
+let setupFullFillDone = false;
 
 function runConfirmedRandomize(event, options = {}) {
   setupIdeaChosen = true;
@@ -5052,13 +5103,28 @@ function runConfirmedRandomize(event, options = {}) {
   if (setupUiMode === "simple") pushSimpleToForm();
   closeRandomizePopover();
   const idea = setupRandomizeIdea();
-  const mode = "simple";
+  // Every tab by default (Stell, 2026-10-28: a preset filled only the Simple
+  // surface, so the other tabs looked untouched); "Only this tab" fills the open
+  // tab and reads the rest as context. The simple walk keeps the compose
+  // overrides to the fields it walks, so no other tab changes.
+  const tabOnly = Boolean(document.querySelector("#presetTabOnly")?.checked) && document.body.classList.contains("setup-tabbed");
+  const tabFields = tabOnly ? setupTabFieldNames(setupTab) : [];
+  if (tabOnly && !tabFields.length) {
+    setSetupRandomizeStatus(`Nothing on ${SETUP_TABS[setupTabIndex(setupTab)].label} is filled by a preset.`);
+    return;
+  }
+  const mode = tabOnly ? "simple" : "advanced";
   const fieldOrder = Array.isArray(options.fieldOrder) && options.fieldOrder.length
     ? options.fieldOrder
-    : SIMPLE_RANDOM_FIELD_ORDER.slice();
-  const label = idea
-    ? "Generating a start from your idea, including powers..."
-    : "Generating a start, including powers...";
+    : tabOnly
+      ? tabFields
+      : RANDOM_FIELD_ORDER.slice();
+  const tabName = SETUP_TABS[setupTabIndex(setupTab)].label;
+  const label = tabOnly
+    ? `Filling ${tabName} from your idea...`
+    : idea
+      ? "Generating a start from your idea, every tab, including powers..."
+      : "Generating a start, every tab, including powers...";
   setSetupRandomizeStatus(label);
   const promptInput = document.querySelector("#randomizeSetupPrompt");
   if (randomizeSetup) randomizeSetup.disabled = true;
@@ -5072,7 +5138,12 @@ function runConfirmedRandomize(event, options = {}) {
         usedFallback = true;
         fallbackRandomizeSequence(fieldOrder);
         if (fieldOrder.includes("special_abilities")) calculateAllAbilityGrowthMath({ force: false });
-        setSetupRandomizeStatus("Model unavailable. Filled the start from the local list, including powers.");
+        if (!tabOnly) setupFullFillDone = true;
+        setSetupRandomizeStatus(
+          tabOnly
+            ? `Model unavailable. Filled ${tabName} from the local list.`
+            : "Model unavailable. Filled every tab from the local list, including powers.",
+        );
         latestOutput.innerHTML = paragraphs(
           `Model randomizer unavailable; used local fallback. ${error.message || error}`,
         );
@@ -5084,8 +5155,15 @@ function runConfirmedRandomize(event, options = {}) {
       if (setupUiMode === "simple") pullFormToSimple();
       if (!usedFallback) {
         if (fieldOrder.includes("special_abilities")) calculateAllAbilityGrowthMath({ force: false });
-        setSetupRandomizeStatus("Start filled, including powers. Locked fields were left alone.");
+        if (!tabOnly) setupFullFillDone = true;
+        setSetupRandomizeStatus(
+          tabOnly
+            ? `${tabName} filled; the other tabs were read, not changed. Locked fields were left alone.`
+            : "Every tab filled, including powers. Locked fields were left alone.",
+        );
       }
+      if (typeof renderLockedSettings === "function" && (presetDrawerOpen() || presetViewOn())) renderLockedSettings();
+      fillSetupGaps();
     })
     .catch(() => {
       if (!usedFallback) setSetupRandomizeStatus("Could not generate a start. Press Confirm preset again.");
@@ -6316,6 +6394,8 @@ async function randomizeAllSetup(options = {}) {
   }
   if (mode === "simple") {
     for (const name of ["player_name", "custom_style", "hair", "facial_features", "appearance"]) {
+      // Only the fields this walk covers: a one-tab fill never touches another tab.
+      if (!walkOrder.includes(name)) continue;
       if (isSettingLocked(name) || appliedOverrideKeys.has(name)) continue;
       if (String(setupForm.elements[name]?.value || "").trim()) continue;
       fallbackRandomizeField(name);
@@ -9011,8 +9091,9 @@ function setupTourStepList() {
       text:
         "This menu has two sides. Saved presets are built-in ideas and setups you save from this page. " +
         "Game starts are how a previous game began — the opening setup, not the middle of that save. " +
-        "New makes a text preset. Confirm preset fills the page from that idea, including powers, " +
-        "or loads a saved setup or a previous game’s opening. Save preset stores the page as it is now.",
+        "New makes a text preset. Confirm preset fills every tab from that idea, including powers, " +
+        "or loads a saved setup or a previous game’s opening; tick Only this tab to fill just the open tab. " +
+        "Save preset stores the page as it is now.",
       shape: "rect",
       before: () => showPresets(true, { persist: false }),
       select: () => document.querySelector("#presetSelect") || document.querySelector("#setupPresetCard"),
@@ -9045,9 +9126,9 @@ function setupTourStepList() {
       text:
         "Each tab is one part of the start: Primary, Identity, Powers, World, People, Rules, Checks & Dice, and Character art. " +
         "Go through them in order with Next at the bottom, or open only the tab you care about. " +
-        "Confirm preset fills powers and the main start from a text idea; the rest stays as you left it.",
+        "Lock all in tab, at the right end, locks every setting on the open tab; unlock any one you want to change.",
       shape: "rect",
-      select: () => document.querySelector("#setupTabs"),
+      select: () => document.querySelector(".setupTabsRow") || document.querySelector("#setupTabs"),
     },
     {
       id: "search",
@@ -9622,6 +9703,7 @@ function bindSetupTutorialOnce() {
 }
 
 function showSetupWizard(options = {}) {
+  setupFullFillDone = false;
   mainMenuView?.classList.add("hidden");
   setupView?.classList.remove("hidden");
   gameView?.classList.add("hidden");
@@ -21213,7 +21295,8 @@ async function startGame(event) {
       throw new Error("Could not roll a new world map. The legacy map was left as-is.");
     }
     renderMapPreview(newGameMap);
-    if (setupUiMode === "simple") {
+    // A preset that filled every tab already set the depth the player looked at.
+    if (setupUiMode === "simple" && !setupFullFillDone) {
       latestOutput.innerHTML = paragraphs("Expanding Simple setup toward full playthrough depth...");
       addStartSplashLine?.("Expanding Simple setup to Advanced-depth fields…");
       try {

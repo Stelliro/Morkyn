@@ -100,6 +100,8 @@ Newest first. One line per release; the full record is CHANGELOG.md.
 - Presets are a window left of the settings window, opened from a bookmark on its edge; locked
   settings are listed and editable under the preset; narrow windows use » / « edge handles and
   return to the same spot.
+- Confirm preset fills every tab (Start then skips its expand pass); "Only this tab" fills the
+  open tab using the rest as context. "Lock all in tab" locks every setting on the open tab.
 - Text boxes grow to fill a tab's empty space; the preset Idea box is five lines and grows with
   its text.
 - A short in-game tour; play-screen bookmarks (slide a handle out for the Character window) on

@@ -581,6 +581,10 @@
                     </label>
                     <div class="presetConfirmRow">
                       <button type="button" class="chipBtn confirmRandomizeBtn" id="presetConfirmBtn" title="A text idea fills this page, including powers. A saved setup or a previous game start loads that opening.">Confirm preset</button>
+                      <label class="presetTabOnly" title="On: fill only the open tab, reading the other tabs as they are. Off: fill every tab.">
+                        <input type="checkbox" id="presetTabOnly" />
+                        Only this tab
+                      </label>
                     </div>
                     <p class="empty presetConfirmHint">A text idea fills this page, including powers. A saved setup or a previous game start loads that opening.</p>
                     <label class="wide" hidden>
@@ -616,6 +620,7 @@
           <!-- Simple mode: form left, character art right (reparented card) -->
           <section id="setupSimplePanel" class="setupSimplePanel" aria-label="New game">
             <p class="setupSimpleLead">Go through the tabs, or only the ones you care about. Nothing is required, including the name. Confirm preset fills the start from a text idea, including powers.</p>
+            <div class="setupTabsRow">
             <nav class="setupTabs" id="setupTabs" role="tablist" aria-label="New game settings">
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="primary">Primary</button>
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="identity">Identity</button>
@@ -626,6 +631,8 @@
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="checks">Checks &amp; Dice</button>
               <button type="button" class="chipBtn" role="tab" data-setup-tab-button="art">Character art</button>
             </nav>
+            <button type="button" class="chipBtn setupLockAllTab" id="setupLockAllTab" title="Lock every setting on the open tab; unlock any one you want to change.">Lock all in tab</button>
+            </div>
             <div class="setupSearchResults" id="setupSearchResults" hidden aria-live="polite"></div>
             <div class="setupSimpleLayout">
               <div class="setupSimpleMain">

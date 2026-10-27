@@ -14491,6 +14491,51 @@ body.compact-mode .indexContent {
   border-bottom: 1px solid var(--line);
 }
 
+/* The tab row: the tabs, and "Lock all in tab" at its right end. */
+.setupTabsRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px 12px;
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* The tabs wrap among themselves, so the button keeps the row's right end. */
+.setupTabsRow .setupTabs {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.setupLockAllTab {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.presetConfirmRow .presetTabOnly {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.presetConfirmRow .presetTabOnly input {
+  margin: 0;
+}
+
+@media (max-width: 899.98px) {
+  body.setup-preset-view .setupTabsRow {
+    display: none !important;
+  }
+}
+
 body.setup-tabbed [data-setup-tab]:not(.isSetupTabActive),
 body.setup-tabbed #setupOptionalGroup:not(.isSetupTabActive),
 body.setup-tabbed #setupOptionalGroup > .setupFactGroupHead {

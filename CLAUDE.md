@@ -262,6 +262,8 @@ belong to, with the date).
   bookmark that sticks out of the settings window's left edge (closed «, open »); open, the
   settings move right. Locked settings are listed, editable, under the preset. Narrow windows:
   » on the left wall opens the presets view, « on the right wall returns to the same spot.
+  Confirm preset fills every tab; an "Only this tab" toggle fills the open tab and reads the
+  rest as context. "Lock all in tab" sits at the right end of the tab row.
 - **Text boxes fill empty space** (2026-10-28): "Text Input fields for descriptive areas should
   automatically be larger ... to fill the vertical gap at the bottom ... the same thing for all
   tabs and windows where applicable." A window whose content is shorter than the window shares
