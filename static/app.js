@@ -4093,10 +4093,11 @@ function initSetupTabs() {
   const bar = document.querySelector("#setupTabs");
   if (!bar) return;
   document.body.classList.add("setup-tabbed");
-  // Presets are a drawer on the left, opened from a bookmark on the edge, that
-  // pushes the tabs right instead of covering them (Stell, 2026-10-28); the
-  // locked settings sit under the preset. A narrow window shows them as their
-  // own view instead. The search results stand in the tabs' column.
+  // Presets are a window of their own left of the settings, opened from a
+  // bookmark on the settings window's edge; open, the settings move right
+  // (Stell, 2026-10-28). The locked settings sit under the preset. A narrow
+  // window shows them as their own view instead. The search results stand in
+  // the tabs' column.
   const layout = document.querySelector(".setupSimpleLayout");
   const dock = document.querySelector("#setupPresetDock");
   const presetRow = document.querySelector("#setupPresetRow");
@@ -4148,9 +4149,11 @@ function setPresetDrawer(open, { persist = true } = {}) {
     btn.setAttribute("aria-expanded", open ? "true" : "false");
     btn.title = open ? "Close the presets" : "Presets and locked settings";
     const arrow = btn.querySelector(".setupPresetBookmarkArrow");
-    if (arrow) arrow.textContent = open ? "\u00ab" : "\u00bb";
+    // Closed, it points the way the presets come out (left); open, the way they go back.
+    if (arrow) arrow.textContent = open ? "\u00bb" : "\u00ab";
   }
   if (open) renderLockedSettings();
+  fillSetupGaps();
   if (!persist) return;
   try {
     localStorage.setItem(PRESET_DRAWER_KEY, open ? "1" : "0");
@@ -4200,6 +4203,11 @@ function bindPresetDrawer() {
     open = false;
   }
   setPresetDrawer(open, { persist: false });
+  let fillTimer = 0;
+  window.addEventListener("resize", () => {
+    clearTimeout(fillTimer);
+    fillTimer = setTimeout(fillSetupGaps, 150);
+  });
   // Widened past the narrow layout while the presets view was up: the drawer takes over.
   window.addEventListener("resize", () => {
     if (!isNarrowSetupViewport() && presetViewOn()) {
@@ -4300,6 +4308,58 @@ function setupChoiceMirror(fields) {
   return box;
 }
 
+/* ---- Text boxes fill the empty space (Stell, 2026-10-28: "Text Input fields
+ * for descriptive areas should automatically be larger, we can do this to fill
+ * the vertical gap at the bottom ... the same thing for all tabs and windows
+ * where applicable"). When a window's content is shorter than the window, the
+ * visible text areas share the free height (each capped); recomputed on a tab
+ * change, a resize and the presets window opening. */
+const FILL_GAP_MAX_PX = 320;
+
+function growTextAreasToFill(scroller, areas) {
+  if (!scroller || !areas.length) return;
+  areas.forEach((area) => {
+    area.style.minHeight = "";
+  });
+  // Two passes: boxes side by side in one row grow the row once, so the first
+  // pass can leave space that the second takes up.
+  for (let pass = 0; pass < 2; pass += 1) {
+    const cs = getComputedStyle(scroller);
+    let used = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    Array.from(scroller.children).forEach((child) => {
+      const style = getComputedStyle(child);
+      if (style.display === "none" || style.position === "absolute" || style.position === "fixed") return;
+      used += child.getBoundingClientRect().height + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+    });
+    const free = scroller.clientHeight - used - 4;
+    if (free <= 8) return;
+    const each = Math.floor(free / areas.length);
+    areas.forEach((area) => {
+      const now = area.getBoundingClientRect().height;
+      const base = Number(area.dataset.fillBase || now);
+      area.dataset.fillBase = String(base);
+      area.style.minHeight = `${Math.min(now + each, base + FILL_GAP_MAX_PX)}px`;
+    });
+  }
+}
+
+let fillGapFrame = 0;
+function fillSetupGaps() {
+  cancelAnimationFrame(fillGapFrame);
+  fillGapFrame = requestAnimationFrame(() => {
+    if (!document.body.classList.contains("setup-tabbed")) return;
+    const shown = (el) => el.offsetParent && !el.readOnly && !el.disabled;
+    const panel = document.querySelector("#setupSimplePanel");
+    const tabAreas = Array.from(document.querySelectorAll("[data-setup-tab].isSetupTabActive textarea")).filter(shown);
+    document.querySelectorAll("[data-setup-tab] textarea").forEach((area) => {
+      if (!tabAreas.includes(area)) area.style.minHeight = "";
+    });
+    if (!document.body.classList.contains("setup-searching")) growTextAreasToFill(panel, tabAreas);
+    const win = document.querySelector("#setupPresetDock");
+    growTextAreasToFill(win, Array.from(win?.querySelectorAll("textarea") || []).filter(shown));
+  });
+}
+
 function stepSetupTab(delta) {
   const index = setupTabIndex(setupTab) + delta;
   if (index < 0 || index >= SETUP_TABS.length) return;
@@ -4341,6 +4401,7 @@ function setSetupTab(key, { fromTabBar = false } = {}) {
     else clearSetupSearch();
   }
   window.MorkynInteract?.applyFolds?.();
+  fillSetupGaps();
 }
 
 /* ---- Settings search (Stell, 2026-10-28) ----------------------------------
@@ -8921,6 +8982,8 @@ function setupTourStepList() {
         "Use it when you’ve tuned a world you like and want to reuse it later via Load Settings. " +
         "It stores setup options — not a mid-play save slot (those are under Load / Save in the main menu).",
       shape: "pill",
+      // On a phone the save tools sit behind More.
+      before: () => setSetupMoreOpen(true),
       select: () => document.querySelector("#saveSetupSettings"),
     },
     {

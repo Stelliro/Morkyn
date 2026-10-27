@@ -253,6 +253,19 @@ belong to, with the date).
   settings, live after a few characters or on Enter, refreshed at most every 0.5 s while typing.
   The list is a snapshot: editing a result does not drop it until the search text changes, and
   Start saves the edits without refreshing the search.
+  Presets are a window of their own left of the settings window, with a gap, opened from a
+  bookmark that sticks out of the settings window's left edge (closed «, open »); open, the
+  settings move right. Locked settings are listed, editable, under the preset. Narrow windows:
+  » on the left wall opens the presets view, « on the right wall returns to the same spot.
+- **Text boxes fill empty space** (2026-10-28): "Text Input fields for descriptive areas should
+  automatically be larger ... to fill the vertical gap at the bottom ... the same thing for all
+  tabs and windows where applicable." A window whose content is shorter than the window shares
+  the free height among its visible text areas (app.js growTextAreasToFill). New windows and tabs
+  follow it.
+- **Play-screen bookmarks** (2026-10-28): on narrow windows and touch screens (desktop mode
+  too), a handle on the screen's edge is slid (never tapped) to open a bookmarked window,
+  Character first; pop-out windows stay where there is room, so no device loses a way in.
+  Tutorials show the steps the device has.
 - **The Settlement map view is for the settlement you are in** (2026-10-23): "when the player is
   not in a town or settlemnet the player can still view the settlement tab". It was built for
   #19 as "the settlement you are in, or one you know"; outside a settlement it is not offered.
