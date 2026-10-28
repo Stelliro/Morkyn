@@ -92,7 +92,9 @@ and never by shrinking what the model may write. See CLAUDE.md, "The guiding rul
 
 Newest first. One line per release; the full record is CHANGELOG.md.
 
-**Unreleased (next: 0.11.4)**
+**Unreleased (next: 0.11.5)**
+
+**0.11.4 (2026-10-28, stable)**
 - New-game settings are tabs (Primary, Identity, Powers, World, People, Rules, Checks & Dice,
   Character art) with Back/Next, and a settings search (labels, field values, dropdown options;
   live after three characters or on Enter, at most every 0.5 s; results editable in place; a

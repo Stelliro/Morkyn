@@ -21,7 +21,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
-> New entries go here. The next push is `0.11.4`.
+> New entries go here. The next push is `0.11.5`.
+
+## [0.11.4] - 2026-10-28
+
+> New-game settings as tabs with a search bar, presets in their own window beside the settings (fill every tab or only this one, Lock all in tab), text boxes that fill empty space, a short in-game tour, play-screen bookmarks for phones, a JavaScript-required screen, and fixes to the powers count roll and setup typing. The first 0.11 build marked stable.
 
 ### Added
 - [CLAUDE] New-game tabs (Stell, 2026-10-28: "make the new game settings tabs at the top the player can go through"): Primary, Identity, Powers, World, People, Rules, Checks & Dice and Character art, with Back/Next at the bottom. Presets dock in a column beside the tabs and stay in view while the tab scrolls, so a preset can be confirmed and its changes watched without leaving the tab (Stell: the open fold "covers some of the screen", but presets must stay "easily accessable while editing settings"); a narrow window stacks them as a fold above the tabs. The search sits under the page title and arrow keys on the tab bar. The section headings stop folding while tabbed (the tab is the fold, `data-no-fold` in static/ui/interact.js). The setup tour walks the page in order, opening each tab before its step, with new Tabs and Search steps (tutorial key v12, so it shows once more) - static/app.js (SETUP_TABS, setSetupTab, SETUP_TOUR_ORDER), static/index.html, static/styles.css.
